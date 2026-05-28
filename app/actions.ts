@@ -26,6 +26,31 @@ export async function createBoard(name: string, color: string) {
   return data
 }
 
+export async function createSubTab(parentBoardId: string, name: string, color: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data: existing } = await supabase
+    .from('boards')
+    .select('tab_position')
+    .eq('parent_id', parentBoardId)
+    .order('tab_position', { ascending: false })
+    .limit(1)
+
+  const tab_position = existing && existing.length > 0 ? existing[0].tab_position + 1 : 0
+
+  const { data, error } = await supabase
+    .from('boards')
+    .insert({ name, color, user_id: user.id, parent_id: parentBoardId, tab_position })
+    .select()
+    .single()
+
+  if (error) throw error
+  revalidatePath('/', 'layout')
+  return data
+}
+
 export async function deleteBoard(boardId: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

@@ -5,6 +5,8 @@ export type Board = {
   user_id: string
   deadline: string | null
   mode: 'classic' | 'free'
+  parent_id: string | null
+  tab_position: number
   created_at: string
 }
 

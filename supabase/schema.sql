@@ -9,6 +9,8 @@ create table boards (
   color text not null default '#0079bf',
   deadline timestamptz,
   mode text not null default 'classic',
+  parent_id uuid references boards(id) on delete cascade,
+  tab_position integer not null default 0,
   created_at timestamptz default now()
 );
 
@@ -169,7 +171,13 @@ create policy "admin view linked boards"
 
 -- Indexes
 create index on boards(user_id);
+create index on boards(parent_id);
 create index on account_links(owner_id);
 create index on account_links(member_id);
 create index on lists(board_id);
 create index on cards(list_id);
+
+-- Migration: run these if upgrading an existing database (skip if running schema fresh)
+-- alter table boards add column if not exists parent_id uuid references boards(id) on delete cascade;
+-- alter table boards add column if not exists tab_position integer not null default 0;
+-- create index if not exists boards_parent_id_idx on boards(parent_id);

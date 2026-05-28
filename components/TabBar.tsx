@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Plus, LayoutGrid, ChevronDown, Check } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { createBoard, updateBoard } from '@/app/actions'
+import { createBoard, updateBoard, createSubTab } from '@/app/actions'
 import NewBoardModal from './NewBoardModal'
 
 const COLORS = [
@@ -30,12 +30,16 @@ function BoardPropertiesPanel({
   onClose: () => void
   onUpdate: (updated: Board) => void
 }) {
+  const router = useRouter()
   const [name, setName] = useState(board.name)
   const [color, setColor] = useState(board.color)
   const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
   const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
   const [mode, setMode] = useState<'classic' | 'free'>(board.mode ?? 'classic')
   const [saving, setSaving] = useState(false)
+  const [addingSubTab, setAddingSubTab] = useState(false)
+  const [subTabName, setSubTabName] = useState('')
+  const [subTabCreating, setSubTabCreating] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
   const top = anchorRect.bottom + 6
@@ -62,6 +66,21 @@ function BoardPropertiesPanel({
     onUpdate(updated)
     setSaving(false)
     onClose()
+  }
+
+  async function handleAddSubTab() {
+    if (!subTabName.trim() || subTabCreating) return
+    setSubTabCreating(true)
+    try {
+      const sub = await createSubTab(board.id, subTabName.trim(), board.color)
+      onClose()
+      router.push(`/board/${sub.id}`)
+      router.refresh()
+    } finally {
+      setSubTabCreating(false)
+      setSubTabName('')
+      setAddingSubTab(false)
+    }
   }
 
   return createPortal(
@@ -143,6 +162,39 @@ function BoardPropertiesPanel({
       >
         {saving ? 'Saving…' : 'Save'}
       </button>
+
+      <div className="border-t border-gray-200 mt-3 pt-3">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Sub-tabs</p>
+        {addingSubTab ? (
+          <div className="flex gap-1.5">
+            <input
+              autoFocus
+              value={subTabName}
+              onChange={e => setSubTabName(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleAddSubTab()
+                if (e.key === 'Escape') { setAddingSubTab(false); setSubTabName('') }
+              }}
+              placeholder="Sub-tab name…"
+              className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
+            />
+            <button
+              onClick={handleAddSubTab}
+              disabled={subTabCreating}
+              className="bg-blue-500 hover:bg-blue-600 text-white text-xs px-2.5 rounded disabled:opacity-60"
+            >
+              {subTabCreating ? '…' : 'Add'}
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setAddingSubTab(true)}
+            className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+          >
+            <Plus size={12} /> Add sub-tab
+          </button>
+        )}
+      </div>
     </div>,
     document.body
   )
@@ -157,13 +209,14 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
   const [showNewBoard, setShowNewBoard] = useState(false)
   const [openPanel, setOpenPanel] = useState<OpenPanel>(null)
 
-  const activeBoardIndex = boards.findIndex(b => pathname === `/board/${b.id}`)
+  const rootBoards = boards.filter(b => !b.parent_id)
+  const activeBoardIndex = rootBoards.findIndex(b => pathname === `/board/${b.id}`)
 
   const goToTab = useCallback((index: number) => {
-    if (boards.length === 0) return
-    const clamped = (index + boards.length) % boards.length
-    router.push(`/board/${boards[clamped].id}`)
-  }, [boards, router])
+    if (rootBoards.length === 0) return
+    const clamped = (index + rootBoards.length) % rootBoards.length
+    router.push(`/board/${rootBoards[clamped].id}`)
+  }, [rootBoards, router])
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -195,7 +248,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
           All boards
         </Link>
 
-        {boards.map((board) => {
+        {rootBoards.map((board) => {
           const isActive = pathname === `/board/${board.id}`
           const expired = isExpired(board)
 
