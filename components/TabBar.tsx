@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useCallback, useState, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Plus, LayoutGrid, ChevronDown, Check } from 'lucide-react'
@@ -20,21 +21,24 @@ function isExpired(board: Board) {
 
 function BoardPropertiesPanel({
   board,
+  anchorRect,
   onClose,
   onUpdate,
 }: {
   board: Board
+  anchorRect: DOMRect
   onClose: () => void
   onUpdate: (updated: Board) => void
 }) {
   const [name, setName] = useState(board.name)
   const [color, setColor] = useState(board.color)
   const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
-  const [deadline, setDeadline] = useState(
-    board.deadline ? board.deadline.slice(0, 10) : ''
-  )
+  const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
   const [saving, setSaving] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
+
+  const top = anchorRect.bottom + 6
+  const left = Math.min(anchorRect.left, window.innerWidth - 272)
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -58,24 +62,24 @@ function BoardPropertiesPanel({
     onClose()
   }
 
-  return (
+  return createPortal(
     <div
       ref={panelRef}
-      className="absolute top-full left-0 mt-1 bg-white rounded-lg shadow-xl border border-gray-200 p-4 w-64 z-50"
+      style={{ position: 'fixed', top, left, zIndex: 9999 }}
+      className="bg-white rounded-lg shadow-xl border border-gray-200 p-4 w-64"
       onClick={e => e.stopPropagation()}
     >
       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Board properties</p>
 
-      {/* Name */}
       <label className="block text-xs text-gray-600 mb-1">Name</label>
       <input
         autoFocus
         value={name}
         onChange={e => setName(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') handleSave() }}
         className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm mb-3 focus:outline-none focus:border-blue-500"
       />
 
-      {/* Color */}
       <label className="block text-xs text-gray-600 mb-1.5">Color</label>
       <div className="grid grid-cols-5 gap-1.5 mb-3">
         {COLORS.map(c => (
@@ -92,7 +96,6 @@ function BoardPropertiesPanel({
         ))}
       </div>
 
-      {/* Deadline */}
       <div className="mb-4">
         <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none mb-1.5">
           <input
@@ -104,15 +107,15 @@ function BoardPropertiesPanel({
           Set expiry date (optional)
         </label>
         {hasDeadline && (
-          <input
-            type="date"
-            value={deadline}
-            onChange={e => setDeadline(e.target.value)}
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500"
-          />
-        )}
-        {hasDeadline && (
-          <p className="text-[10px] text-gray-400 mt-1">Board will be marked expired after this date.</p>
+          <>
+            <input
+              type="date"
+              value={deadline}
+              onChange={e => setDeadline(e.target.value)}
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500"
+            />
+            <p className="text-[10px] text-gray-400 mt-1">Board will be marked expired after this date.</p>
+          </>
         )}
       </div>
 
@@ -123,16 +126,19 @@ function BoardPropertiesPanel({
       >
         {saving ? 'Saving…' : 'Save'}
       </button>
-    </div>
+    </div>,
+    document.body
   )
 }
+
+type OpenPanel = { boardId: string; rect: DOMRect } | null
 
 export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
   const pathname = usePathname()
   const router = useRouter()
   const [boards, setBoards] = useState(initialBoards)
   const [showNewBoard, setShowNewBoard] = useState(false)
-  const [openPanel, setOpenPanel] = useState<string | null>(null)
+  const [openPanel, setOpenPanel] = useState<OpenPanel>(null)
 
   const activeBoardIndex = boards.findIndex(b => pathname === `/board/${b.id}`)
 
@@ -152,7 +158,6 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     return () => window.removeEventListener('keydown', onKey)
   }, [activeBoardIndex, goToTab])
 
-  // Keep boards in sync when layout re-renders with new data
   useEffect(() => { setBoards(initialBoards) }, [initialBoards])
 
   const isAllBoards = pathname === '/boards'
@@ -161,7 +166,6 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     <>
       <div className="flex items-end bg-[#1d2125] border-b border-white/10 overflow-x-auto shrink-0 px-1">
 
-        {/* Home / All Boards tab */}
         <Link
           href="/boards"
           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm whitespace-nowrap border-t-2 transition-colors select-none shrink-0 ${
@@ -174,7 +178,6 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
           All boards
         </Link>
 
-        {/* Board tabs */}
         {boards.map((board) => {
           const isActive = pathname === `/board/${board.id}`
           const expired = isExpired(board)
@@ -191,39 +194,26 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
                     : 'text-white/50 border-transparent hover:text-white/80 hover:bg-white/5'
                 }`}
               >
-                <span
-                  className="w-2.5 h-2.5 rounded-full shrink-0"
-                  style={{ backgroundColor: board.color }}
-                />
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: board.color }} />
                 {board.name}
                 {expired && <span className="text-[10px] text-red-400 ml-1">Expired</span>}
               </Link>
 
-              {/* Properties arrow — visible on hover */}
               <button
-                onClick={e => { e.preventDefault(); setOpenPanel(openPanel === board.id ? null : board.id) }}
+                onClick={e => {
+                  e.preventDefault()
+                  const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect()
+                  setOpenPanel(openPanel?.boardId === board.id ? null : { boardId: board.id, rect })
+                }}
                 className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-white/20 text-white/50 hover:text-white transition-opacity"
                 title="Edit board"
               >
                 <ChevronDown size={12} />
               </button>
-
-              {/* Properties panel */}
-              {openPanel === board.id && (
-                <BoardPropertiesPanel
-                  board={board}
-                  onClose={() => setOpenPanel(null)}
-                  onUpdate={updated => {
-                    setBoards(prev => prev.map(b => b.id === updated.id ? updated : b))
-                    setOpenPanel(null)
-                  }}
-                />
-              )}
             </div>
           )
         })}
 
-        {/* New board button */}
         <button
           onClick={() => setShowNewBoard(true)}
           className="flex items-center gap-1.5 px-3 py-2.5 text-white/40 hover:text-white/70 text-sm whitespace-nowrap border-t-2 border-transparent shrink-0"
@@ -232,6 +222,23 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
           <Plus size={14} />
         </button>
       </div>
+
+      {/* Properties panel rendered in a portal so overflow-x-auto doesn't clip it */}
+      {openPanel && (() => {
+        const board = boards.find(b => b.id === openPanel.boardId)
+        if (!board) return null
+        return (
+          <BoardPropertiesPanel
+            board={board}
+            anchorRect={openPanel.rect}
+            onClose={() => setOpenPanel(null)}
+            onUpdate={updated => {
+              setBoards(prev => prev.map(b => b.id === updated.id ? updated : b))
+              setOpenPanel(null)
+            }}
+          />
+        )
+      })()}
 
       {showNewBoard && (
         <NewBoardModal
