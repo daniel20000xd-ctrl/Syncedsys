@@ -3,6 +3,7 @@ export type Board = {
   name: string
   color: string
   user_id: string
+  deadline: string | null
   created_at: string
 }
 

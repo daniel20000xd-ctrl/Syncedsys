@@ -7,6 +7,7 @@ create table boards (
   user_id uuid references auth.users(id) on delete cascade not null,
   name text not null,
   color text not null default '#0079bf',
+  deadline timestamptz,
   created_at timestamptz default now()
 );
 

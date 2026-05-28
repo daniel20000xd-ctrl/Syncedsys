@@ -44,6 +44,24 @@ export async function renameBoard(boardId: string, name: string) {
   revalidatePath('/', 'layout')
 }
 
+export async function updateBoard(boardId: string, updates: { name?: string; color?: string; deadline?: string | null }) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data, error } = await supabase
+    .from('boards')
+    .update(updates)
+    .eq('id', boardId)
+    .eq('user_id', user.id)
+    .select()
+    .single()
+
+  if (error) throw error
+  revalidatePath('/', 'layout')
+  return data
+}
+
 // ── Lists ────────────────────────────────────────────────────────────────────
 
 export async function createList(boardId: string, name: string) {
