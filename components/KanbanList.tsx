@@ -58,7 +58,7 @@ export default function KanbanList({
   }
 
   return (
-    <div className="shrink-0 w-72 flex flex-col max-h-full">
+    <div id={`list-${list.id}`} className="shrink-0 w-72 flex flex-col max-h-full">
       <div
         className={`bg-[#ebecf0] rounded-xl flex flex-col max-h-full shadow transition-shadow ${isOver ? 'ring-2 ring-blue-400' : ''}`}
       >

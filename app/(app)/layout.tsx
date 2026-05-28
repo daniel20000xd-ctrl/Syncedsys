@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import Sidebar from '@/components/Sidebar'
+import TabBar from '@/components/TabBar'
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -17,7 +18,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex h-full min-h-screen">
       <Sidebar boards={boards ?? []} userId={user.id} />
-      <main className="flex-1 overflow-hidden">{children}</main>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <TabBar boards={boards ?? []} />
+        <main className="flex-1 overflow-hidden">{children}</main>
+      </div>
     </div>
   )
 }

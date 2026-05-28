@@ -141,11 +141,11 @@ export default function BoardView({
 
   return (
     <div
-      className="flex flex-col h-screen"
+      className="flex flex-col h-full"
       style={{ backgroundColor: board.color }}
     >
-      {/* Board header */}
-      <div className="flex items-center h-12 px-4 bg-black/20">
+      {/* Board title */}
+      <div className="px-4 pt-3 pb-1 bg-black/10">
         <h1 className="text-white font-bold text-lg">{board.name}</h1>
       </div>
 
