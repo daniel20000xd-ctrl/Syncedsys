@@ -31,7 +31,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-[#0079bf] flex items-center justify-center">
       <div className="bg-white rounded-lg p-8 w-full max-w-sm shadow-lg">
-        <h1 className="text-2xl font-bold text-center text-gray-800 mb-6">Log in to Kanban</h1>
+        <h1 className="text-2xl font-bold text-center text-gray-800 mb-6">Log in to Syncedsys</h1>
         <form onSubmit={handleSubmit} className="space-y-4">
           <input
             type="email"

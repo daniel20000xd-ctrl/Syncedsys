@@ -37,7 +37,7 @@ export default function Sidebar({ boards, userId }: { boards: Board[]; userId: s
         {/* Header */}
         <div className={`flex items-center h-14 px-3 border-b border-white/10 ${collapsed ? 'justify-center' : 'justify-between'}`}>
           {!collapsed && (
-            <span className="font-bold text-lg tracking-tight text-white">Kanban</span>
+            <span className="font-bold text-lg tracking-tight text-white">Syncedsys</span>
           )}
           <button
             onClick={() => setCollapsed(!collapsed)}
