@@ -9,16 +9,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   if (!user) redirect('/login')
 
-  const [{ data: boards }, { data: linkedAccounts }] = await Promise.all([
-    supabase.from('boards').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
-    supabase.from('account_links').select('id').eq('owner_id', user.id).eq('status', 'accepted'),
-  ])
+  const { data: boards } = await supabase
+    .from('boards').select('*').eq('user_id', user.id).order('created_at', { ascending: true })
 
-  const hasLinkedAccounts = (linkedAccounts?.length ?? 0) > 0
+  const isAdmin = user.email === process.env.ADMIN_EMAIL
 
   return (
     <div className="flex h-full min-h-screen">
-      <Sidebar boards={boards ?? []} userId={user.id} hasLinkedAccounts={hasLinkedAccounts} />
+      <Sidebar boards={boards ?? []} userId={user.id} isAdmin={isAdmin} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <TabBar boards={boards ?? []} />
         <main className="flex-1 overflow-hidden">{children}</main>

@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid } from 'lucide-react'
 import type { Board, List as ListType } from '@/lib/types'
 
-export default function Sidebar({ boards, userId, hasLinkedAccounts }: { boards: Board[]; userId: string; hasLinkedAccounts?: boolean }) {
+export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; userId: string; isAdmin?: boolean }) {
   const pathname = usePathname()
   const router = useRouter()
   const [collapsed, setCollapsed] = useState(false)
@@ -91,7 +91,7 @@ export default function Sidebar({ boards, userId, hasLinkedAccounts }: { boards:
 
       {/* Footer */}
       <div className="border-t border-white/10 p-2 space-y-0.5">
-        {hasLinkedAccounts && (
+        {isAdmin && (
           <button
             onClick={() => router.push('/overview')}
             className={`w-full flex items-center gap-2 px-2 py-2 rounded text-sm transition-colors ${pathname === '/overview' ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'} ${collapsed ? 'justify-center' : ''}`}
