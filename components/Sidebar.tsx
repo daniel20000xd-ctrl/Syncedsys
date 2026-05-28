@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useTransition } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, LogOut, List, Settings } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid } from 'lucide-react'
 import type { Board, List as ListType } from '@/lib/types'
 
-export default function Sidebar({ boards, userId }: { boards: Board[]; userId: string }) {
+export default function Sidebar({ boards, userId, hasLinkedAccounts }: { boards: Board[]; userId: string; hasLinkedAccounts?: boolean }) {
   const pathname = usePathname()
   const router = useRouter()
   const [collapsed, setCollapsed] = useState(false)
@@ -91,9 +91,19 @@ export default function Sidebar({ boards, userId }: { boards: Board[]; userId: s
 
       {/* Footer */}
       <div className="border-t border-white/10 p-2 space-y-0.5">
+        {hasLinkedAccounts && (
+          <button
+            onClick={() => router.push('/overview')}
+            className={`w-full flex items-center gap-2 px-2 py-2 rounded text-sm transition-colors ${pathname === '/overview' ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'} ${collapsed ? 'justify-center' : ''}`}
+            title={collapsed ? 'Overview' : undefined}
+          >
+            <LayoutGrid size={15} />
+            {!collapsed && <span>Overview</span>}
+          </button>
+        )}
         <button
           onClick={() => router.push('/settings')}
-          className={`w-full flex items-center gap-2 px-2 py-2 rounded text-sm text-white/60 hover:bg-white/10 hover:text-white transition-colors ${collapsed ? 'justify-center' : ''}`}
+          className={`w-full flex items-center gap-2 px-2 py-2 rounded text-sm transition-colors ${pathname === '/settings' ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'} ${collapsed ? 'justify-center' : ''}`}
         >
           <Settings size={15} />
           {!collapsed && <span>Settings</span>}

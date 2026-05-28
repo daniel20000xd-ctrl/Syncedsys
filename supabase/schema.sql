@@ -126,7 +126,50 @@ create policy "Users access cards through lists"
     )
   );
 
+-- Account links (cross-account overview)
+create table account_links (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid references auth.users(id) on delete cascade not null,
+  member_id uuid references auth.users(id) on delete cascade not null,
+  label text not null default 'Linked account',
+  status text not null default 'pending',
+  created_at timestamptz default now(),
+  unique(owner_id, member_id)
+);
+
+alter table account_links enable row level security;
+
+create policy "users see their own links"
+  on account_links for select
+  using (owner_id = auth.uid() or member_id = auth.uid());
+
+create policy "owners create links"
+  on account_links for insert
+  with check (owner_id = auth.uid());
+
+create policy "members accept links"
+  on account_links for update
+  using (member_id = auth.uid());
+
+create policy "either side can remove"
+  on account_links for delete
+  using (owner_id = auth.uid() or member_id = auth.uid());
+
+-- Allow admin accounts to read linked members' boards
+create policy "admin view linked boards"
+  on boards for select
+  using (
+    exists (
+      select 1 from account_links
+      where owner_id = auth.uid()
+        and member_id = boards.user_id
+        and status = 'accepted'
+    )
+  );
+
 -- Indexes
 create index on boards(user_id);
+create index on account_links(owner_id);
+create index on account_links(member_id);
 create index on lists(board_id);
 create index on cards(list_id);

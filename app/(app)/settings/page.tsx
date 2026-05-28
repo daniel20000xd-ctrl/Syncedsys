@@ -1,10 +1,30 @@
-export default function SettingsPage() {
+import { createClient } from '@/lib/supabase/server'
+import SettingsClient from './SettingsClient'
+
+export default async function SettingsPage() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  // Accounts this user is watching (owner)
+  const { data: outgoing } = await supabase
+    .from('account_links')
+    .select('*')
+    .eq('owner_id', user!.id)
+    .order('created_at', { ascending: true })
+
+  // Accounts watching this user (pending requests where I'm the member)
+  const { data: incoming } = await supabase
+    .from('account_links')
+    .select('*')
+    .eq('member_id', user!.id)
+    .order('created_at', { ascending: true })
+
   return (
-    <div className="p-8 bg-gray-100 min-h-screen">
-      <h1 className="text-xl font-bold text-gray-800 mb-6">Settings</h1>
-      <div className="bg-white rounded-lg p-6 max-w-lg shadow-sm">
-        <p className="text-sm text-gray-500">Settings coming soon.</p>
-      </div>
-    </div>
+    <SettingsClient
+      userId={user!.id}
+      userEmail={user!.email ?? ''}
+      outgoing={outgoing ?? []}
+      incoming={incoming ?? []}
+    />
   )
 }

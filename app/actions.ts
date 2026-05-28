@@ -228,3 +228,53 @@ export async function deleteElement(elementId: string) {
   const supabase = await createClient()
   await supabase.from('board_elements').delete().eq('id', elementId)
 }
+
+// ── Account links ─────────────────────────────────────────────────────────────
+
+export async function linkAccount(memberId: string, label: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  if (memberId === user.id) throw new Error('Cannot link to yourself')
+
+  const { data, error } = await supabase
+    .from('account_links')
+    .insert({ owner_id: user.id, member_id: memberId, label: label.trim() || 'Linked account' })
+    .select().single()
+
+  if (error) {
+    if (error.code === '23505') throw new Error('Already linked to this account')
+    throw error
+  }
+  revalidatePath('/settings')
+  return data
+}
+
+export async function acceptLink(linkId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  await supabase
+    .from('account_links')
+    .update({ status: 'accepted' })
+    .eq('id', linkId)
+    .eq('member_id', user.id)
+
+  revalidatePath('/settings')
+}
+
+export async function removeLink(linkId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  await supabase
+    .from('account_links')
+    .delete()
+    .eq('id', linkId)
+    .or(`owner_id.eq.${user.id},member_id.eq.${user.id}`)
+
+  revalidatePath('/settings')
+  revalidatePath('/overview')
+}
