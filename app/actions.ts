@@ -26,6 +26,13 @@ export async function createBoard(name: string, color: string) {
   return data
 }
 
+export async function updateBoardContent(boardId: string, content: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  await supabase.from('boards').update({ content }).eq('id', boardId).eq('user_id', user.id)
+}
+
 export async function createSubTab(parentBoardId: string, name: string, color: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import BoardView from '@/components/BoardView'
 import FreeBoardView from '@/components/free/FreeBoardView'
+import TextBoardView from '@/components/TextBoardView'
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -50,6 +51,10 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
         initialElements={elements ?? []}
       />
     )
+  }
+
+  if (board.mode === 'text') {
+    return <TextBoardView board={board} />
   }
 
   return <BoardView board={board} initialLists={lists ?? []} initialCards={cards ?? []} />
