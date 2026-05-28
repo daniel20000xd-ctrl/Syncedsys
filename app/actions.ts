@@ -44,7 +44,7 @@ export async function renameBoard(boardId: string, name: string) {
   revalidatePath('/', 'layout')
 }
 
-export async function updateBoard(boardId: string, updates: { name?: string; color?: string; deadline?: string | null }) {
+export async function updateBoard(boardId: string, updates: { name?: string; color?: string; deadline?: string | null; mode?: string }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
@@ -158,4 +158,73 @@ export async function reorderCards(
     )
   )
   revalidatePath(`/board/${boardId}`)
+}
+
+// ── Free mode: positions ──────────────────────────────────────────────────────
+
+export async function updateListPosition(listId: string, x: number, y: number) {
+  const supabase = await createClient()
+  await supabase.from('lists').update({ x, y }).eq('id', listId)
+}
+
+export async function updateCardPosition(cardId: string, x: number, y: number) {
+  const supabase = await createClient()
+  await supabase.from('cards').update({ x, y }).eq('id', cardId)
+}
+
+export async function createFreeCard(listId: string, title: string, boardId: string, x: number, y: number) {
+  const supabase = await createClient()
+  const { data: existing } = await supabase.from('cards').select('position').eq('list_id', listId).order('position', { ascending: false }).limit(1)
+  const position = existing && existing.length > 0 ? existing[0].position + 1 : 0
+  const { data, error } = await supabase.from('cards').insert({ list_id: listId, title, position, x, y }).select().single()
+  if (error) throw error
+  return data
+}
+
+// ── Free mode: edges ──────────────────────────────────────────────────────────
+
+export async function createEdge(boardId: string, source: string, target: string, sourceHandle?: string, targetHandle?: string) {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('board_edges')
+    .insert({ board_id: boardId, source, target, source_handle: sourceHandle ?? null, target_handle: targetHandle ?? null })
+    .select().single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteEdge(edgeId: string) {
+  const supabase = await createClient()
+  await supabase.from('board_edges').delete().eq('id', edgeId)
+}
+
+// ── Free mode: elements (shapes, images, drawings) ───────────────────────────
+
+export async function createElement(
+  boardId: string,
+  type: 'shape' | 'image' | 'drawing',
+  x: number, y: number,
+  data: Record<string, unknown>,
+  width?: number, height?: number
+) {
+  const supabase = await createClient()
+  const { data: el, error } = await supabase
+    .from('board_elements')
+    .insert({ board_id: boardId, type, x, y, data, width: width ?? null, height: height ?? null })
+    .select().single()
+  if (error) throw error
+  return el
+}
+
+export async function updateElement(
+  elementId: string,
+  updates: { x?: number; y?: number; data?: Record<string, unknown>; width?: number; height?: number }
+) {
+  const supabase = await createClient()
+  await supabase.from('board_elements').update(updates).eq('id', elementId)
+}
+
+export async function deleteElement(elementId: string) {
+  const supabase = await createClient()
+  await supabase.from('board_elements').delete().eq('id', elementId)
 }

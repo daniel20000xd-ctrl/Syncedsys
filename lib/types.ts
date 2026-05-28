@@ -4,6 +4,7 @@ export type Board = {
   color: string
   user_id: string
   deadline: string | null
+  mode: 'classic' | 'free'
   created_at: string
 }
 
@@ -12,6 +13,8 @@ export type List = {
   board_id: string
   name: string
   position: number
+  x: number
+  y: number
   created_at: string
 }
 
@@ -21,5 +24,29 @@ export type Card = {
   title: string
   description: string | null
   position: number
+  x: number
+  y: number
+  created_at: string
+}
+
+export type BoardEdge = {
+  id: string
+  board_id: string
+  source: string
+  target: string
+  source_handle: string | null
+  target_handle: string | null
+  created_at: string
+}
+
+export type BoardElement = {
+  id: string
+  board_id: string
+  type: 'shape' | 'image' | 'drawing'
+  x: number
+  y: number
+  width: number | null
+  height: number | null
+  data: Record<string, unknown>
   created_at: string
 }

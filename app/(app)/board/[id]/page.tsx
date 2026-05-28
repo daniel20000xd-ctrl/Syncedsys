@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import BoardView from '@/components/BoardView'
+import FreeBoardView from '@/components/free/FreeBoardView'
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -27,6 +28,29 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
     .select('*')
     .in('list_id', (lists ?? []).map(l => l.id))
     .order('position', { ascending: true })
+
+  if (board.mode === 'free') {
+    const { data: edges } = await supabase
+      .from('board_edges')
+      .select('*')
+      .eq('board_id', id)
+
+    const { data: elements } = await supabase
+      .from('board_elements')
+      .select('*')
+      .eq('board_id', id)
+      .order('created_at', { ascending: true })
+
+    return (
+      <FreeBoardView
+        board={board}
+        initialLists={lists ?? []}
+        initialCards={cards ?? []}
+        initialEdges={edges ?? []}
+        initialElements={elements ?? []}
+      />
+    )
+  }
 
   return <BoardView board={board} initialLists={lists ?? []} initialCards={cards ?? []} />
 }

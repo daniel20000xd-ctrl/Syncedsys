@@ -34,6 +34,7 @@ function BoardPropertiesPanel({
   const [color, setColor] = useState(board.color)
   const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
   const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
+  const [mode, setMode] = useState<'classic' | 'free'>(board.mode ?? 'classic')
   const [saving, setSaving] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -56,6 +57,7 @@ function BoardPropertiesPanel({
       name: name.trim() || board.name,
       color,
       deadline: hasDeadline && deadline ? new Date(deadline).toISOString() : null,
+      mode,
     })
     onUpdate(updated)
     setSaving(false)
@@ -118,6 +120,21 @@ function BoardPropertiesPanel({
           </>
         )}
       </div>
+
+      {/* Mode */}
+      <label className="block text-xs text-gray-600 mb-1.5">Board preset</label>
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        {(['classic', 'free'] as const).map(m => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className={`py-2 rounded text-xs font-medium border capitalize transition-colors ${mode === m ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+          >
+            {m === 'classic' ? '🗂 Classic' : '🎨 Free'}
+          </button>
+        ))}
+      </div>
+      {mode === 'free' && <p className="text-[10px] text-gray-400 mb-3">Freeform canvas — drag lists anywhere, draw connections.</p>}
 
       <button
         onClick={handleSave}
