@@ -1,10 +1,68 @@
 'use client'
 
-import { Handle, Position, NodeProps, useReactFlow, NodeResizer } from '@xyflow/react'
+import {
+  Handle, Position, NodeProps, useReactFlow, NodeResizer,
+  BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
+} from '@xyflow/react'
 import { useState, useEffect, useRef } from 'react'
 import { Plus, X, ExternalLink } from 'lucide-react'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
+
+// Handles on all four sides; in loose connection mode each can both start and
+// receive a connection, so you can link from whichever side you grab.
+function SideHandles({ color = '!bg-blue-400' }: { color?: string }) {
+  const cls = `${color} !w-3 !h-3`
+  return (
+    <>
+      <Handle id="top" type="source" position={Position.Top} className={cls} />
+      <Handle id="right" type="source" position={Position.Right} className={cls} />
+      <Handle id="bottom" type="source" position={Position.Bottom} className={cls} />
+      <Handle id="left" type="source" position={Position.Left} className={cls} />
+    </>
+  )
+}
+
+// Edge with a delete button that appears when you hover the link
+export function DeletableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, data }: EdgeProps) {
+  const [hover, setHover] = useState(false)
+  const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
+  const onDelete = data?.onDelete as ((id: string) => void) | undefined
+  const deletable = (data?.deletable as boolean) ?? true
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      {/* wide invisible hit area so hovering anywhere on the link counts */}
+      <path
+        d={edgePath}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={18}
+        style={{ pointerEvents: 'stroke', cursor: deletable ? 'pointer' : 'default' }}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+      />
+      {deletable && hover && (
+        <EdgeLabelRenderer>
+          <div
+            className="nodrag nopan"
+            style={{ position: 'absolute', transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`, pointerEvents: 'all' }}
+            onMouseEnter={() => setHover(true)}
+            onMouseLeave={() => setHover(false)}
+          >
+            <button
+              onClick={() => onDelete?.(id)}
+              title="Remove link"
+              className="bg-white rounded-full p-0.5 shadow border border-red-200 text-red-500 hover:bg-red-50"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  )
+}
 
 // ── List Node ────────────────────────────────────────────────────────────────
 
@@ -18,8 +76,7 @@ export function ListNode({ id, data }: NodeProps) {
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
       <div className="bg-[#ebecf0] rounded-xl shadow-lg w-52 select-none">
-        <Handle type="target" position={Position.Top} className="!bg-blue-400 !w-3 !h-3" />
-        <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-3 !h-3" />
+        <SideHandles />
         <div className="px-3 py-2 border-b border-black/10 flex items-center gap-1">
           {editing ? (
             <input
@@ -42,8 +99,6 @@ export function ListNode({ id, data }: NodeProps) {
         <div className="px-2 py-1.5 text-xs text-gray-400 italic">
           {(data.cardCount as number) === 0 ? 'No cards' : `${data.cardCount} card${(data.cardCount as number) !== 1 ? 's' : ''}`}
         </div>
-        <Handle type="source" position={Position.Bottom} className="!bg-blue-400 !w-3 !h-3" />
-        <Handle type="source" position={Position.Right} className="!bg-blue-400 !w-3 !h-3" />
       </div>
     </div>
   )
@@ -61,8 +116,7 @@ export function CardNode({ id, data }: NodeProps) {
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
       <div className="bg-white rounded-lg shadow border border-gray-200 w-44 group select-none">
-        <Handle type="target" position={Position.Top} className="!bg-blue-400 !w-3 !h-3" />
-        <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-3 !h-3" />
+        <SideHandles />
         <div className="p-2">
           {editing ? (
             <textarea
@@ -82,8 +136,6 @@ export function CardNode({ id, data }: NodeProps) {
         >
           <X size={11} />
         </button>
-        <Handle type="source" position={Position.Bottom} className="!bg-blue-400 !w-3 !h-3" />
-        <Handle type="source" position={Position.Right} className="!bg-blue-400 !w-3 !h-3" />
       </div>
     </div>
   )
@@ -133,8 +185,7 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
         handleClassName="!bg-white !border-2 !border-blue-400 !w-2.5 !h-2.5 !rounded-sm"
         onResizeEnd={(_, p) => onSave?.(id, { shape, fill, label: text }, p.width, p.height)}
       />
-      <Handle type="target" position={Position.Top} className="!bg-gray-500 !w-3 !h-3" />
-      <Handle type="target" position={Position.Left} className="!bg-gray-500 !w-3 !h-3" />
+      <SideHandles color="!bg-gray-500" />
       <div
         ref={innerRef}
         className={`w-full h-full flex items-center justify-center shadow ${shapeClass}`}
@@ -162,8 +213,6 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
       >
         <X size={11} />
       </button>
-      <Handle type="source" position={Position.Bottom} className="!bg-gray-500 !w-3 !h-3" />
-      <Handle type="source" position={Position.Right} className="!bg-gray-500 !w-3 !h-3" />
     </div>
   )
 }
@@ -186,7 +235,7 @@ export function TextNode({ id, data }: NodeProps) {
 
   return (
     <div className="relative group">
-      <Handle type="target" position={Position.Top} className="!bg-gray-400 !w-2.5 !h-2.5" />
+      <SideHandles color="!bg-gray-400" />
       {editing ? (
         <textarea
           autoFocus
@@ -215,7 +264,6 @@ export function TextNode({ id, data }: NodeProps) {
       >
         <X size={11} />
       </button>
-      <Handle type="source" position={Position.Bottom} className="!bg-gray-400 !w-2.5 !h-2.5" />
     </div>
   )
 }
@@ -229,8 +277,7 @@ export function ImageNode({ id, data }: NodeProps) {
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
       <div className="relative group select-none rounded-lg overflow-hidden shadow-lg border border-gray-200" style={{ width: 200 }}>
-        <Handle type="target" position={Position.Top} className="!bg-gray-500 !w-3 !h-3" />
-        <Handle type="target" position={Position.Left} className="!bg-gray-500 !w-3 !h-3" />
+        <SideHandles color="!bg-gray-500" />
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={data.url as string} alt={data.alt as string || 'image'} className="w-full object-cover max-h-48" draggable={false} />
         <button
@@ -239,8 +286,6 @@ export function ImageNode({ id, data }: NodeProps) {
         >
           <X size={11} />
         </button>
-        <Handle type="source" position={Position.Bottom} className="!bg-gray-500 !w-3 !h-3" />
-        <Handle type="source" position={Position.Right} className="!bg-gray-500 !w-3 !h-3" />
       </div>
     </div>
   )
@@ -289,8 +334,7 @@ export function SubTabNode({ id, data }: NodeProps) {
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
       <div className="relative group select-none bg-white rounded-xl shadow-lg border-l-4 w-44" style={{ borderLeftColor: color }}>
-        <Handle type="target" position={Position.Top} className="!bg-blue-400 !w-3 !h-3" />
-        <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-3 !h-3" />
+        <SideHandles />
 
         <div className="p-3">
           <div className="flex items-center gap-1.5 mb-2">
@@ -311,9 +355,6 @@ export function SubTabNode({ id, data }: NodeProps) {
         >
           <X size={11} />
         </button>
-
-        <Handle type="source" position={Position.Bottom} className="!bg-blue-400 !w-3 !h-3" />
-        <Handle type="source" position={Position.Right} className="!bg-blue-400 !w-3 !h-3" />
       </div>
     </div>
   )

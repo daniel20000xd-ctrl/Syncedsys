@@ -4,19 +4,19 @@ import { useCallback, useRef, useState, useEffect } from 'react'
 import {
   ReactFlow, Background, Controls, BackgroundVariant,
   useNodesState, useEdgesState, addEdge, ReactFlowProvider,
-  useReactFlow, type Connection, type Node, type Edge,
-  type NodeTypes,
+  useReactFlow, ConnectionMode, type Connection, type Node, type Edge,
+  type NodeTypes, type EdgeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
 import { MousePointer2, Pencil, Square, Type, Hand, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
-  createList, createFreeCard, createEdge, deleteEdge, deleteBoard,
+  createList, createFreeCard, deleteEdge, deleteBoard,
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
-  updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard,
+  updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
 } from '@/app/actions'
-import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode } from './nodes'
+import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, DeletableEdge } from './nodes'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -26,6 +26,10 @@ const nodeTypes: NodeTypes = {
   drawingNode: DrawingNode,
   subTabNode: SubTabNode,
   textNode: TextNode,
+}
+
+const edgeTypes: EdgeTypes = {
+  deletable: DeletableEdge,
 }
 
 type Tool = 'select' | 'hand' | 'draw' | 'shape' | 'text'
@@ -112,11 +116,15 @@ function buildNodes(
   return [...listNodes, ...cardNodes, ...elementNodes, ...subTabNodes]
 }
 
-function buildEdges(cards: Card[], boardEdges: BoardEdge[]): Edge[] {
+function buildEdges(cards: Card[], boardEdges: BoardEdge[], onDeleteEdge: (id: string) => void): Edge[] {
   const autoEdges: Edge[] = cards.map(c => ({
     id: `auto-${c.id}`,
     source: `list-${c.list_id}`,
     target: `card-${c.id}`,
+    sourceHandle: 'bottom',
+    targetHandle: 'top',
+    type: 'deletable',
+    data: { deletable: false },
     style: { stroke: '#94a3b8', strokeWidth: 1.5, strokeDasharray: '4 2' },
     animated: false,
   }))
@@ -127,6 +135,8 @@ function buildEdges(cards: Card[], boardEdges: BoardEdge[]): Edge[] {
     target: e.target,
     sourceHandle: e.source_handle ?? undefined,
     targetHandle: e.target_handle ?? undefined,
+    type: 'deletable',
+    data: { deletable: true, onDelete: onDeleteEdge },
     style: { stroke: '#3b82f6', strokeWidth: 2 },
     markerEnd: { type: 'arrowclosed' as const },
   }))
@@ -230,10 +240,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [nodes, setNodes, onNodesChange] = useNodesState(
     buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement)
   )
-  const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(cards, initialEdges))
+  const removeEdgeRef = useRef<(id: string) => void>(() => {})
+  const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(cards, initialEdges, (id) => removeEdgeRef.current(id)))
 
   // Keep ref in sync so the wheel handler (in effect) can always call latest setNodes
   setNodesRef.current = setNodes
+
+  const removeEdge = useCallback((id: string) => {
+    setEdges(prev => prev.filter(e => e.id !== id))
+    if (!id.startsWith('auto-')) deleteEdge(id).catch(() => {})
+  }, [setEdges])
+  removeEdgeRef.current = removeEdge
 
   // Live refs for history capture / persistence callbacks
   const nodesRef = useRef(nodes)
@@ -439,9 +456,18 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
   }
 
-  const onConnect = useCallback(async (connection: Connection) => {
-    setEdges(eds => addEdge({ ...connection, style: { stroke: '#3b82f6', strokeWidth: 2 }, markerEnd: { type: 'arrowclosed' as const } }, eds))
-    await createEdge(board.id, connection.source!, connection.target!, connection.sourceHandle ?? undefined, connection.targetHandle ?? undefined)
+  const onConnect = useCallback((connection: Connection) => {
+    // Client-generated id so the edge id matches the DB row (delete/undo work)
+    const id = crypto.randomUUID()
+    setEdges(eds => addEdge({
+      ...connection, id,
+      type: 'deletable',
+      data: { deletable: true, onDelete: (eid: string) => removeEdgeRef.current(eid) },
+      style: { stroke: '#3b82f6', strokeWidth: 2 },
+      markerEnd: { type: 'arrowclosed' as const },
+    }, eds))
+    upsertEdge(id, board.id, connection.source!, connection.target!, connection.sourceHandle ?? undefined, connection.targetHandle ?? undefined)
+      .catch(err => console.error('Failed to save link:', err))
   }, [board.id, setEdges])
 
   const onEdgesDelete = useCallback(async (deleted: Edge[]) => {
@@ -714,6 +740,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onNodesDelete={onNodesDelete}
         onNodeDragStop={onNodeDragStop}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        connectionMode={ConnectionMode.Loose}
         fitView
         minZoom={0.05}
         maxZoom={4}
