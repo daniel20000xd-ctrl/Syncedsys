@@ -9,7 +9,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, Type, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, Hand, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, createEdge, deleteEdge, deleteBoard,
@@ -28,10 +28,11 @@ const nodeTypes: NodeTypes = {
   textNode: TextNode,
 }
 
-type Tool = 'select' | 'draw' | 'shape' | 'text'
+type Tool = 'select' | 'hand' | 'draw' | 'shape' | 'text'
 
 const TOOL_ICONS: Record<Tool, LucideIcon> = {
   select: MousePointer2,
+  hand: Hand,
   draw: Pencil,
   shape: Square,
   text: Type,
@@ -486,8 +487,23 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool !== 'draw') { drawingRef.current = null; setCurrentPath('') }
   }, [tool])
 
-  // Overlay is present for any non-select tool
-  const overlayActive = tool !== 'select'
+  // 'h' toggles the hand (pan) tool — ignored while typing in a field
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const el = e.target as HTMLElement | null
+      const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === 'h' || e.key === 'H') {
+        e.preventDefault()
+        setTool(prev => (prev === 'hand' ? 'select' : 'hand'))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Overlay (draw/shape/text) intercepts pointer input; hand & select do not
+  const overlayActive = tool === 'draw' || tool === 'shape' || tool === 'text'
 
   // ── Navigation that works regardless of the active tool ──
   function onOverlayWheel(e: React.WheelEvent<SVGSVGElement>) {
@@ -554,12 +570,15 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         minZoom={0.05}
         maxZoom={4}
         deleteKeyCode="Delete"
-        nodesDraggable={!overlayActive}
-        panOnDrag={!overlayActive}
+        nodesDraggable={tool === 'select'}
+        selectionOnDrag={tool === 'select'}
+        panOnDrag={tool === 'hand' ? true : tool === 'select' ? [1, 2] : false}
         zoomOnScroll
         zoomOnPinch
         onPaneClick={e => {
-          if (overlayActive) return
+          if (tool !== 'select') return
+          // If a menu is already open, this click just closes it — don't reopen elsewhere
+          if (contextMenu) { setContextMenu(null); return }
           const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
           setContextMenu({ x: e.clientX, y: e.clientY, flowX: flowPos.x, flowY: flowPos.y })
         }}
@@ -606,13 +625,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       {/* Toolbar — rendered above the drawing overlay (z-20 > overlay z-10) so it stays clickable while drawing */}
       <div className="absolute top-3 right-3 z-20 bg-white rounded-xl shadow-lg p-2 flex flex-col gap-1.5">
         <div className="flex flex-col gap-1.5">
-          {(['select', 'draw', 'shape', 'text'] as Tool[]).map(t => {
+          {(['select', 'hand', 'draw', 'shape', 'text'] as Tool[]).map(t => {
             const Icon = TOOL_ICONS[t]
             return (
               <button
                 key={t}
                 onClick={() => setTool(t)}
-                title={t.charAt(0).toUpperCase() + t.slice(1)}
+                title={t === 'hand' ? 'Hand — pan (H)' : t.charAt(0).toUpperCase() + t.slice(1)}
                 className={`p-2 rounded-lg transition-colors ${tool === t ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
               >
                 <Icon size={16} />
@@ -622,6 +641,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         </div>
         {tool === 'text' && (
           <p className="text-[9px] text-gray-400 text-center w-16 leading-tight mt-1 pt-1 border-t border-gray-100">Click to place text</p>
+        )}
+        {tool === 'select' && (
+          <p className="text-[8px] text-gray-300 text-center w-16 leading-tight mt-1 pt-1 border-t border-gray-100">Drag = select box · H = hand</p>
         )}
         {tool !== 'select' && (
           <p className="text-[8px] text-gray-300 text-center w-16 leading-tight">Scroll = zoom · middle-drag = pan</p>
