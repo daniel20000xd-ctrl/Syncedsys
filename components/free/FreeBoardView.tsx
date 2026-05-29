@@ -370,15 +370,20 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const normalizedPath = pts.reduce((acc, p, i) =>
       i === 0 ? `M ${p.x - minX + 5} ${p.y - minY + 5}` : `${acc} L ${p.x - minX + 5} ${p.y - minY + 5}`, '')
     const flowPos = overlayToFlow(minX, minY)
-    const el = await createElement(board.id, 'drawing', flowPos.x, flowPos.y, {
-      path: normalizedPath, color: drawColor, strokeWidth: 2,
-      bbox: { width: maxX - minX, height: maxY - minY },
-    })
-    setElements(prev => [...prev, el])
+    const data = { path: normalizedPath, color: drawColor, strokeWidth: 2, bbox: { width: maxX - minX, height: maxY - minY } }
+    // Render immediately, then persist — node stays even if the DB write fails
+    const tempId = `el-tmp-${crypto.randomUUID()}`
     setNodes(prev => [...prev, {
-      id: `el-${el.id}`, type: 'drawingNode', position: { x: flowPos.x, y: flowPos.y },
-      data: { path: normalizedPath, color: drawColor, strokeWidth: 2, bbox: { width: maxX - minX, height: maxY - minY }, onDelete: (id: string) => handleDeleteNode(id, 'element') },
+      id: tempId, type: 'drawingNode', position: { x: flowPos.x, y: flowPos.y },
+      data: { ...data, onDelete: (id: string) => handleDeleteNode(id, 'element') },
     }])
+    try {
+      const el = await createElement(board.id, 'drawing', flowPos.x, flowPos.y, data)
+      setElements(prev => [...prev, el])
+      setNodes(prev => prev.map(n => n.id === tempId ? { ...n, id: `el-${el.id}` } : n))
+    } catch (err) {
+      console.error('Failed to save drawing (board_elements table may be missing):', err)
+    }
     // Stay in draw mode for further strokes; click Select to stop
   }
 
@@ -399,12 +404,20 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setShapeAnchor(null)
     setShapePreview(null)
     const flowPos = overlayToFlow(x, y)
-    const el = await createElement(board.id, 'shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h }, w, h)
-    setElements(prev => [...prev, el])
+    const data = { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h }
+    // Render immediately, then persist — node stays even if the DB write fails
+    const tempId = `el-tmp-${crypto.randomUUID()}`
     setNodes(prev => [...prev, {
-      id: `el-${el.id}`, type: 'shapeNode', position: { x: flowPos.x, y: flowPos.y },
-      data: { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h, onDelete: (id: string) => handleDeleteNode(id, 'element') },
+      id: tempId, type: 'shapeNode', position: { x: flowPos.x, y: flowPos.y },
+      data: { ...data, onDelete: (id: string) => handleDeleteNode(id, 'element') },
     }])
+    try {
+      const el = await createElement(board.id, 'shape', flowPos.x, flowPos.y, data, w, h)
+      setElements(prev => [...prev, el])
+      setNodes(prev => prev.map(n => n.id === tempId ? { ...n, id: `el-${el.id}` } : n))
+    } catch (err) {
+      console.error('Failed to save shape (board_elements table may be missing):', err)
+    }
     // Stay in shape mode for further shapes; click Select to stop
   }
 
