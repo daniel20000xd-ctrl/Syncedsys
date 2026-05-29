@@ -3,6 +3,40 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 
+// ── iOS sync / device links ──────────────────────────────────────────────────
+
+export async function setBoardSynced(boardId: string, synced: boolean) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  await supabase.from('boards').update({ synced }).eq('id', boardId).eq('user_id', user.id)
+  revalidatePath('/', 'layout')
+}
+
+// Create a pending device link; returns the short pairing code to enter in the iOS app
+export async function createDeviceLink(name = 'iOS device') {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  const code = Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
+  const token = crypto.randomUUID() + crypto.randomUUID().replace(/-/g, '')
+  const { data, error } = await supabase
+    .from('device_links')
+    .insert({ user_id: user.id, name, pairing_code: code, token })
+    .select().single()
+  if (error) throw error
+  revalidatePath('/', 'layout')
+  return { code, id: data.id as string }
+}
+
+export async function removeDeviceLink(id: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  await supabase.from('device_links').delete().eq('id', id).eq('user_id', user.id)
+  revalidatePath('/', 'layout')
+}
+
 // ── Boards ──────────────────────────────────────────────────────────────────
 
 export async function createBoard(name: string, color: string) {

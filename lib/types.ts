@@ -10,6 +10,18 @@ export type Board = {
   tab_position: number
   free_x: number
   free_y: number
+  synced: boolean
+  created_at: string
+}
+
+export type DeviceLink = {
+  id: string
+  user_id: string
+  name: string
+  pairing_code: string | null
+  token: string
+  paired: boolean
+  last_seen: string | null
   created_at: string
 }
 

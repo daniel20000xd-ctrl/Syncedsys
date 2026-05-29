@@ -14,8 +14,25 @@ create table boards (
   content text,
   free_x double precision not null default 100,
   free_y double precision not null default 100,
+  synced boolean not null default false,
   created_at timestamptz default now()
 );
+
+-- Connected iOS apps / devices that sync the user's synced boards
+create table if not exists device_links (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  name text not null default 'iOS device',
+  pairing_code text,                 -- short code the user enters in the app; cleared once paired
+  token text not null,               -- secret bearer token the device uses for the sync API
+  paired boolean not null default false,
+  last_seen timestamptz,
+  created_at timestamptz default now()
+);
+alter table device_links enable row level security;
+create policy "users manage their device links" on device_links for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create index if not exists device_links_user_idx on device_links(user_id);
 
 -- Add x/y to lists and cards for free mode positioning
 -- (run ALTER TABLE statements below if upgrading an existing db)
@@ -192,3 +209,5 @@ create index on cards(list_id);
 -- alter table boards add column if not exists free_x double precision not null default 100;
 -- alter table boards add column if not exists free_y double precision not null default 100;
 -- alter table board_edges add column if not exists data jsonb not null default '{}';
+-- alter table boards add column if not exists synced boolean not null default false;
+-- (device_links table: run the create table + policy block above on existing DBs)

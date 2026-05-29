@@ -1,22 +1,26 @@
 'use client'
 
-import { useState, useEffect, useTransition } from 'react'
+import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid } from 'lucide-react'
-import type { Board, List as ListType } from '@/lib/types'
+import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid, Smartphone, Plus, X, RefreshCw } from 'lucide-react'
+import type { Board, List as ListType, DeviceLink } from '@/lib/types'
 import { useUnits } from '@/lib/unitsStore'
+import { createDeviceLink, removeDeviceLink } from '@/app/actions'
 import UnitsPanel from './UnitsPanel'
 
-export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; userId: string; isAdmin?: boolean }) {
+export default function Sidebar({ boards, isAdmin, devices = [] }: { boards: Board[]; userId: string; isAdmin?: boolean; devices?: DeviceLink[] }) {
   const pathname = usePathname()
   const router = useRouter()
   const [collapsed, setCollapsed] = useState(false)
   const [lists, setLists] = useState<ListType[]>([])
+  const [pairing, setPairing] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
   const boardId = pathname.match(/\/board\/([^/]+)/)?.[1] ?? null
   const activeBoard = boards.find(b => b.id === boardId)
   const units = useUnits()
   const showUnits = units.length > 0
+  const syncedBoards = boards.filter(b => b.synced)
 
   useEffect(() => {
     if (!boardId) { setLists([]); return }
@@ -43,6 +47,23 @@ export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; 
     router.push('/login')
   }
 
+  async function handleConnectApp() {
+    if (busy) return
+    setBusy(true)
+    try {
+      const { code } = await createDeviceLink()
+      setPairing(code)
+      router.refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRemoveDevice(id: string) {
+    await removeDeviceLink(id)
+    router.refresh()
+  }
+
   return (
     <aside
       className={`relative flex flex-col bg-[#1d2125] text-white transition-all duration-200 ${
@@ -51,18 +72,13 @@ export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; 
     >
       {/* Header */}
       <div className={`flex items-center h-[42px] px-3 border-b border-white/10 ${collapsed ? 'justify-center' : 'justify-between'}`}>
-        {!collapsed && (
-          <span className="font-bold text-base tracking-tight text-white">Syncedsys</span>
-        )}
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          className="p-1.5 rounded hover:bg-white/10 text-white/60 hover:text-white"
-        >
+        {!collapsed && <span className="font-bold text-base tracking-tight text-white">Syncedsys</span>}
+        <button onClick={() => setCollapsed(!collapsed)} className="p-1.5 rounded hover:bg-white/10 text-white/60 hover:text-white">
           {collapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
         </button>
       </div>
 
-      {/* Current board's units (free mode) or lists (classic/trello) */}
+      {/* Dashboard: units (or lists) above — synced tabs below the divider */}
       <nav className="flex-1 overflow-y-auto py-2">
         {!collapsed && (
           <div className="px-3 py-1 mb-1">
@@ -77,11 +93,9 @@ export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; 
         {!collapsed && !showUnits && lists.length === 0 && boardId && (
           <p className="px-3 py-1 text-xs text-white/30">No lists yet</p>
         )}
-
         {!collapsed && !showUnits && lists.length === 0 && !boardId && (
           <p className="px-3 py-1 text-xs text-white/30">Open a board</p>
         )}
-
         {!collapsed && !showUnits && lists.map(list => (
           <button
             key={list.id}
@@ -93,10 +107,70 @@ export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; 
             <span className="truncate text-left">{list.name}</span>
           </button>
         ))}
+
+        {/* Break: synced tabs below */}
+        {!collapsed && (
+          <>
+            <div className="mx-3 my-2 border-t border-white/10" />
+            <div className="px-3 py-1 mb-1 flex items-center gap-1.5">
+              <RefreshCw size={11} className="text-white/40" />
+              <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">Synced tabs</span>
+            </div>
+            {syncedBoards.length === 0 ? (
+              <p className="px-3 py-1 text-[11px] text-white/25">None — enable “Sync to iOS” on a tab</p>
+            ) : (
+              syncedBoards.map(b => (
+                <button
+                  key={b.id}
+                  onClick={() => router.push(`/board/${b.id}`)}
+                  className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                  title={b.name}
+                >
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                  <span className="truncate text-left">{b.name}</span>
+                </button>
+              ))
+            )}
+          </>
+        )}
       </nav>
 
       {/* Footer */}
       <div className="border-t border-white/10 p-2 space-y-0.5">
+        {/* Connected iOS apps — list above Settings */}
+        {!collapsed && (
+          <div className="mb-1">
+            <div className="px-2 py-1 flex items-center justify-between">
+              <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">Connected apps</span>
+              <button onClick={handleConnectApp} disabled={busy} className="p-0.5 rounded hover:bg-white/10 text-white/50 hover:text-white disabled:opacity-40" title="Connect an iOS app">
+                <Plus size={13} />
+              </button>
+            </div>
+
+            {pairing && (
+              <div className="mx-1 mb-1 p-2 rounded bg-white/10 border border-white/10">
+                <p className="text-[10px] text-white/50 mb-1">Enter this code in the iOS app:</p>
+                <p className="font-mono text-base tracking-widest text-white text-center select-all">{pairing}</p>
+                <button onClick={() => setPairing(null)} className="mt-1 w-full text-[10px] text-white/40 hover:text-white/70">Done</button>
+              </div>
+            )}
+
+            {devices.length === 0 && !pairing && (
+              <p className="px-2 py-1 text-[11px] text-white/25">No apps connected</p>
+            )}
+            {devices.map(d => (
+              <div key={d.id} className="group flex items-center gap-2 px-2 py-1 rounded text-sm text-white/60 hover:bg-white/10">
+                <Smartphone size={14} className="shrink-0" />
+                <span className="truncate flex-1 text-[13px]">{d.name}{!d.paired && <span className="text-[10px] text-amber-400/80 ml-1">pending</span>}</span>
+                <button onClick={() => handleRemoveDevice(d.id)} className="opacity-0 group-hover:opacity-100 text-white/30 hover:text-red-400" title="Remove">
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+            <div className="my-1 border-t border-white/10" />
+          </div>
+        )}
+
         {isAdmin && (
           <button
             onClick={() => router.push('/overview')}
