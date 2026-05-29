@@ -4,6 +4,8 @@ import { useState, useEffect, useTransition } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid } from 'lucide-react'
 import type { Board, List as ListType } from '@/lib/types'
+import { useUnits } from '@/lib/unitsStore'
+import UnitsPanel from './UnitsPanel'
 
 export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; userId: string; isAdmin?: boolean }) {
   const pathname = usePathname()
@@ -13,6 +15,8 @@ export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; 
 
   const boardId = pathname.match(/\/board\/([^/]+)/)?.[1] ?? null
   const activeBoard = boards.find(b => b.id === boardId)
+  const units = useUnits()
+  const showUnits = units.length > 0
 
   useEffect(() => {
     if (!boardId) { setLists([]); return }
@@ -58,33 +62,35 @@ export default function Sidebar({ boards, userId, isAdmin }: { boards: Board[]; 
         </button>
       </div>
 
-      {/* Lists of current board */}
+      {/* Current board's units (free mode) or lists (classic/trello) */}
       <nav className="flex-1 overflow-y-auto py-2">
         {!collapsed && (
           <div className="px-3 py-1 mb-1">
             <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">
-              {activeBoard ? activeBoard.name : 'Lists'}
+              {showUnits ? `${activeBoard?.name ?? 'Board'} · units` : (activeBoard ? activeBoard.name : 'Lists')}
             </span>
           </div>
         )}
 
-        {lists.length === 0 && !collapsed && boardId && (
+        {!collapsed && showUnits && <UnitsPanel />}
+
+        {!collapsed && !showUnits && lists.length === 0 && boardId && (
           <p className="px-3 py-1 text-xs text-white/30">No lists yet</p>
         )}
 
-        {lists.length === 0 && !collapsed && !boardId && (
+        {!collapsed && !showUnits && lists.length === 0 && !boardId && (
           <p className="px-3 py-1 text-xs text-white/30">Open a board</p>
         )}
 
-        {lists.map(list => (
+        {!collapsed && !showUnits && lists.map(list => (
           <button
             key={list.id}
             onClick={() => scrollToList(list.id)}
-            className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-white/60 hover:text-white hover:bg-white/10 transition-colors ${collapsed ? 'justify-center' : ''}`}
-            title={collapsed ? list.name : undefined}
+            className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+            title={list.name}
           >
             <List size={14} className="shrink-0" />
-            {!collapsed && <span className="truncate text-left">{list.name}</span>}
+            <span className="truncate text-left">{list.name}</span>
           </button>
         ))}
       </nav>

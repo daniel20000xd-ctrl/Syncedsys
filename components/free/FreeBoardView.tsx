@@ -19,6 +19,7 @@ import {
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, DeletableEdge } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
+import { unitsStore, type Unit } from '@/lib/unitsStore'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -101,6 +102,9 @@ function buildNodes(
       },
     }
     if (el.type === 'shape') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
+    const opacity = typeof el.data.opacity === 'number' ? (el.data.opacity as number) : 1
+    base.style = { ...(base.style ?? {}), opacity }
+    if (typeof el.data.z === 'number') base.zIndex = el.data.z as number
     return base
   })
 
@@ -639,15 +643,18 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     drawingRef.current = null
     setCurrentPath('')
     if (pts.length < 2) return
-    const minX = Math.min(...pts.map(p => p.x))
-    const minY = Math.min(...pts.map(p => p.y))
-    const maxX = Math.max(...pts.map(p => p.x))
-    const maxY = Math.max(...pts.map(p => p.y))
-    const normalizedPath = pts.reduce((acc, p, i) =>
+    // Convert every point to FLOW coordinates so the stored stroke matches the
+    // on-screen preview at any zoom (avoids the post-release size jump/offset).
+    const flowPts = pts.map(p => overlayToFlow(p.x, p.y))
+    const minX = Math.min(...flowPts.map(p => p.x))
+    const minY = Math.min(...flowPts.map(p => p.y))
+    const maxX = Math.max(...flowPts.map(p => p.x))
+    const maxY = Math.max(...flowPts.map(p => p.y))
+    const normalizedPath = flowPts.reduce((acc, p, i) =>
       i === 0 ? `M ${p.x - minX + 5} ${p.y - minY + 5}` : `${acc} L ${p.x - minX + 5} ${p.y - minY + 5}`, '')
-    const flowPos = overlayToFlow(minX, minY)
     const data = { path: normalizedPath, color: drawColor, strokeWidth: 2, bbox: { width: maxX - minX, height: maxY - minY } }
-    addElement('drawing', flowPos.x, flowPos.y, data)
+    // -5 cancels the +5 inset so the stroke lands exactly where it was drawn
+    addElement('drawing', minX - 5, minY - 5, data)
     // Stay in draw mode for further strokes; click Select to stop
   }
 
@@ -734,6 +741,71 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     return () => window.removeEventListener('keydown', onKey)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Units dashboard (left sidebar) integration ──
+  const unitKind = (n: Node): Unit['kind'] => {
+    if (n.id.startsWith('list-')) return 'list'
+    if (n.id.startsWith('card-')) return 'card'
+    if (n.id.startsWith('sub-')) return 'subtab'
+    if (n.type === 'shapeNode') return 'shape'
+    if (n.type === 'drawingNode') return 'drawing'
+    if (n.type === 'textNode') return 'text'
+    if (n.type === 'imageNode') return 'image'
+    return 'unknown'
+  }
+  const unitLabel = (n: Node, kind: Unit['kind']): string => {
+    const d = n.data as Record<string, unknown>
+    if (kind === 'list' || kind === 'subtab') return (d.name as string) || kind
+    if (kind === 'card') return (d.title as string) || 'Card'
+    if (kind === 'shape') return (d.label as string) || `${(d.shape as string) || 'Shape'}`
+    if (kind === 'text') return (d.text as string) || 'Text'
+    if (kind === 'image') return 'Image'
+    if (kind === 'drawing') return 'Drawing'
+    return 'Unit'
+  }
+
+  // Publish the current units (top layer first) to the sidebar store
+  useEffect(() => {
+    const ordered = [...nodes].sort((a, b) => (b.zIndex ?? 0) - (a.zIndex ?? 0))
+    const list: Unit[] = ordered.map(n => {
+      const kind = unitKind(n)
+      return {
+        id: n.id,
+        kind,
+        label: unitLabel(n, kind),
+        opacity: typeof n.style?.opacity === 'number' ? (n.style.opacity as number) : 1,
+        selected: !!n.selected,
+      }
+    })
+    unitsStore.publish(list)
+  }, [nodes]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => unitsStore.clear(), [])
+
+  // Handlers the sidebar can call back into
+  useEffect(() => {
+    unitsStore.setHandlers({
+      select: (id) => {
+        setNodes(prev => prev.map(n => ({ ...n, selected: n.id === id })))
+      },
+      reorder: (orderedTopFirst) => {
+        // first in the list = highest layer
+        const total = orderedTopFirst.length
+        const zById = new Map(orderedTopFirst.map((id, i) => [id, total - i]))
+        setNodes(prev => prev.map(n => zById.has(n.id) ? { ...n, zIndex: zById.get(n.id) } : n))
+        for (const n of nodesRef.current) {
+          const z = zById.get(n.id)
+          if (z != null && n.id.startsWith('el-')) saveElement(n.id, { ...n.data, z }, n.data.width as number | undefined, n.data.height as number | undefined)
+        }
+      },
+      setOpacity: (id, opacity) => {
+        setNodes(prev => prev.map(n => n.id === id ? { ...n, style: { ...n.style, opacity } } : n))
+        const n = nodesRef.current.find(x => x.id === id)
+        if (n && id.startsWith('el-')) saveElement(id, { ...n.data, opacity }, n.data.width as number | undefined, n.data.height as number | undefined)
+      },
+    })
+    return () => unitsStore.setHandlers(null)
+  }, [setNodes, saveElement])
+
   // Overlay (draw/shape/text) intercepts pointer input; hand & select do not
   const overlayActive = tool === 'draw' || tool === 'shape' || tool === 'text'
 
@@ -801,6 +873,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         connectionMode={ConnectionMode.Loose}
+        elevateNodesOnSelect={false}
         fitView
         minZoom={0.05}
         maxZoom={4}
