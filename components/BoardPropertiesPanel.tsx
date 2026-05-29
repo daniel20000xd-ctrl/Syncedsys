@@ -26,7 +26,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   const [color, setColor] = useState(board.color)
   const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
   const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
-  const [mode, setMode] = useState<'classic' | 'free' | 'text'>(board.mode ?? 'classic')
+  const [mode, setMode] = useState<'classic' | 'trello' | 'text'>(board.mode ?? 'classic')
   const [saving, setSaving] = useState(false)
   const [subTabCreating, setSubTabCreating] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -110,15 +110,15 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
 
       <label className="block text-xs text-gray-600 mb-1.5">Board preset</label>
       <div className="grid grid-cols-3 gap-1.5 mb-2">
-        {(['classic', 'free', 'text'] as const).map(m => (
+        {(['classic', 'trello', 'text'] as const).map(m => (
           <button key={m} onClick={() => setMode(m)} className={`py-2 rounded text-xs font-medium border capitalize transition-colors ${mode === m ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
-            {m === 'classic' ? '🗂 Classic' : m === 'free' ? '🎨 Free' : '📝 Text'}
+            {m === 'classic' ? '🎨 Classic' : m === 'trello' ? '🗂 Trello' : '📝 Text'}
           </button>
         ))}
       </div>
-      {mode === 'free' && <p className="text-[10px] text-gray-400 mb-3">Freeform canvas — drag lists anywhere, draw connections.</p>}
+      {mode === 'classic' && <p className="text-[10px] text-gray-400 mb-3">Freeform canvas — drag anything, draw connections.</p>}
+      {mode === 'trello' && <p className="text-[10px] text-gray-400 mb-3">Kanban columns and cards.</p>}
       {mode === 'text' && <p className="text-[10px] text-gray-400 mb-3">Document — a plain writing space, auto-saved.</p>}
-      {!mode.includes('free') && !mode.includes('text') && <div className="mb-3" />}
 
       <button onClick={handleSave} disabled={saving} className="w-full bg-[#0079bf] hover:bg-[#026aa7] text-white text-sm py-1.5 rounded disabled:opacity-60">
         {saving ? 'Saving…' : 'Save'}

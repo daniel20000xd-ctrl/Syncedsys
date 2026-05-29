@@ -30,7 +30,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
     .in('list_id', (lists ?? []).map(l => l.id))
     .order('position', { ascending: true })
 
-  if (board.mode === 'free') {
+  if (board.mode === 'classic') {
     const { data: edges } = await supabase
       .from('board_edges')
       .select('*')

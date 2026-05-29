@@ -187,3 +187,6 @@ create index on cards(list_id);
 -- alter table boards add column if not exists content text;
 -- alter table boards add column if not exists free_x double precision not null default 100;
 -- alter table boards add column if not exists free_y double precision not null default 100;
+-- Rename modes: old 'classic' (kanban) → 'trello', old 'free' (canvas) → 'classic' (new default)
+-- UPDATE boards SET mode = 'trello' WHERE mode = 'classic';
+-- UPDATE boards SET mode = 'classic' WHERE mode = 'free';

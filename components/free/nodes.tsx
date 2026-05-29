@@ -196,7 +196,7 @@ export function SubTabNode({ id, data }: NodeProps) {
   const onDelete = data.onDelete as (id: string) => void
   const scale = (data.scale as number) ?? 1
   const onHold = data.onHold as ((id: string) => void) | undefined
-  const modeIcon = mode === 'free' ? '🎨' : mode === 'text' ? '📝' : '🗂'
+  const modeIcon = mode === 'classic' ? '🎨' : mode === 'text' ? '📝' : '🗂'
 
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
