@@ -44,15 +44,20 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
 
   async function handleSave() {
     setSaving(true)
-    const updated = await updateBoard(board.id, {
-      name: name.trim() || board.name,
-      color,
-      deadline: hasDeadline && deadline ? new Date(deadline).toISOString() : null,
-      mode,
-    })
-    onUpdate(updated)
-    setSaving(false)
-    onClose()
+    try {
+      const updated = await updateBoard(board.id, {
+        name: name.trim() || board.name,
+        color,
+        deadline: hasDeadline && deadline ? new Date(deadline).toISOString() : null,
+        mode,
+      })
+      onUpdate(updated)
+      onClose()
+    } catch (err) {
+      console.error('Failed to save board:', err)
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function handleAddSubTab() {
