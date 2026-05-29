@@ -5,7 +5,7 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef } from 'react'
-import { Plus, X, ExternalLink } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown } from 'lucide-react'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
@@ -112,6 +112,13 @@ export function CardNode({ id, data }: NodeProps) {
   const { updateNodeData } = useReactFlow()
   const scale = (data.scale as number) ?? 1
   const onHold = data.onHold as ((id: string) => void) | undefined
+  const onRename = data.onRename as ((id: string, title: string) => void) | undefined
+
+  function commitTitle() {
+    updateNodeData(id, { ...data, title })
+    setEditing(false)
+    onRename?.(id, title)
+  }
 
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
@@ -122,9 +129,9 @@ export function CardNode({ id, data }: NodeProps) {
             <textarea
               autoFocus rows={2} value={title}
               onChange={e => setTitle(e.target.value)}
-              onBlur={() => { updateNodeData(id, { ...data, title }); setEditing(false) }}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); updateNodeData(id, { ...data, title }); setEditing(false) } }}
-              className="w-full text-sm resize-none focus:outline-none"
+              onBlur={commitTitle}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commitTitle() } }}
+              className="nodrag w-full text-sm resize-none focus:outline-none"
             />
           ) : (
             <p className="text-sm text-gray-800 cursor-pointer" onDoubleClick={() => setEditing(true)}>{data.title as string}</p>
@@ -327,9 +334,19 @@ export function SubTabNode({ id, data }: NodeProps) {
   const boardId = data.boardId as string
   const onNavigate = data.onNavigate as (boardId: string) => void
   const onDelete = data.onDelete as (id: string) => void
+  const onRename = data.onRename as ((boardId: string, name: string) => void) | undefined
+  const onOpenPanel = data.onOpenPanel as ((boardId: string, rect: DOMRect) => void) | undefined
   const scale = (data.scale as number) ?? 1
   const onHold = data.onHold as ((id: string) => void) | undefined
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(name)
   const modeIcon = mode === 'classic' ? '🎨' : mode === 'text' ? '📝' : '🗂'
+
+  function commitName() {
+    setEditing(false)
+    const next = draft.trim()
+    if (next && next !== name) onRename?.(boardId, next)
+  }
 
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
@@ -337,9 +354,33 @@ export function SubTabNode({ id, data }: NodeProps) {
         <SideHandles />
 
         <div className="p-3">
-          <div className="flex items-center gap-1.5 mb-2">
+          <div className="flex items-center gap-1 mb-2">
             <span className="text-sm">{modeIcon}</span>
-            <span className="text-xs font-semibold text-gray-800 truncate flex-1">{name}</span>
+            {editing ? (
+              <input
+                autoFocus
+                value={draft}
+                onChange={e => setDraft(e.target.value)}
+                onBlur={commitName}
+                onKeyDown={e => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') { setDraft(name); setEditing(false) } }}
+                className="nodrag flex-1 min-w-0 text-xs font-semibold text-gray-800 border-b border-blue-400 focus:outline-none"
+              />
+            ) : (
+              <span
+                className="text-xs font-semibold text-gray-800 truncate flex-1 cursor-text"
+                onDoubleClick={() => { setDraft(name); setEditing(true) }}
+                title="Double-click to rename"
+              >
+                {name}
+              </span>
+            )}
+            <button
+              className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 shrink-0"
+              title="Tab options"
+              onClick={e => { e.stopPropagation(); onOpenPanel?.(boardId, (e.currentTarget as HTMLButtonElement).getBoundingClientRect()) }}
+            >
+              <ChevronDown size={12} />
+            </button>
           </div>
           <button
             className="flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-800 font-medium"

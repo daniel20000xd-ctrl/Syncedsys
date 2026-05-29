@@ -15,8 +15,10 @@ import {
   createList, createFreeCard, deleteEdge, deleteBoard,
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
+  updateBoard, updateCard,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, DeletableEdge } from './nodes'
+import BoardPropertiesPanel from '../BoardPropertiesPanel'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -52,6 +54,9 @@ function buildNodes(
   onNavigate: (boardId: string) => void,
   onHold: (id: string) => void,
   onSave: (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void,
+  onRenameCard: (id: string, title: string) => void,
+  onRenameSubTab: (boardId: string, name: string) => void,
+  onOpenSubPanel: (boardId: string, rect: DOMRect) => void,
 ): Node[] {
   const listNodes: Node[] = lists.map((l, i) => ({
     id: `list-${l.id}`,
@@ -74,6 +79,7 @@ function buildNodes(
       title: c.title,
       listId: c.list_id,
       onDelete: (nodeId: string) => onDeleteNode(nodeId, 'card'),
+      onRename: onRenameCard,
       onHold,
     },
   }))
@@ -109,6 +115,8 @@ function buildNodes(
       mode: sb.mode,
       onNavigate,
       onDelete: (nodeId: string) => onDeleteNode(nodeId, 'subtab'),
+      onRename: onRenameSubTab,
+      onOpenPanel: onOpenSubPanel,
       onHold,
     },
   }))
@@ -165,6 +173,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [drawColor, setDrawColor] = useState('#1d4ed8')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null)
   const [shapeColorPicker, setShapeColorPicker] = useState<string>(SHAPE_COLORS[0])
+  const [subPanel, setSubPanel] = useState<{ boardId: string; rect: DOMRect } | null>(null)
 
   // Drawing state
   const drawingRef = useRef<{ points: { x: number; y: number }[] } | null>(null)
@@ -237,8 +246,24 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   const holdNode = useCallback((id: string) => { heldNodeRef.current = id }, [])
 
+  function renameCard(nodeId: string, title: string) {
+    const rawId = nodeId.replace('card-', '')
+    setCards(prev => prev.map(c => c.id === rawId ? { ...c, title } : c))
+    updateCard(rawId, { title }, board.id).catch(err => console.error('Failed to rename card:', err))
+  }
+
+  function renameSubTab(boardId: string, name: string) {
+    setSubBoards(prev => prev.map(b => b.id === boardId ? { ...b, name } : b))
+    setNodesRef.current?.(prev => prev.map(n => n.id === `sub-${boardId}` ? { ...n, data: { ...n.data, name } } : n))
+    updateBoard(boardId, { name }).catch(err => console.error('Failed to rename tab:', err))
+  }
+
+  function openSubPanel(boardId: string, rect: DOMRect) {
+    setSubPanel(prev => prev?.boardId === boardId ? null : { boardId, rect })
+  }
+
   const [nodes, setNodes, onNodesChange] = useNodesState(
-    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement)
+    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel)
   )
   const removeEdgeRef = useRef<(id: string) => void>(() => {})
   const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(cards, initialEdges, (id) => removeEdgeRef.current(id)))
@@ -496,11 +521,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       {
         id: `card-${card.id}`, type: 'cardNode',
         position: { x, y },
-        data: { title: card.title, listId, onDelete: (id: string) => handleDeleteNode(id, 'card') },
+        data: { title: card.title, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onHold: holdNode },
       },
     ])
     setEdges(prev => [...prev, {
       id: `auto-${card.id}`, source: `list-${listId}`, target: `card-${card.id}`,
+      sourceHandle: 'bottom', targetHandle: 'top', type: 'deletable', data: { deletable: false },
       style: { stroke: '#94a3b8', strokeWidth: 1.5, strokeDasharray: '4 2' },
     }])
   }
@@ -516,18 +542,33 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       setLists(prev => [...prev, newList])
       setNodes(prev => [...prev, {
         id: `list-${list.id}`, type: 'listNode', position: { x, y },
-        data: { name: list.name, cardCount: 0, onAddCard: handleAddCard, onDelete: (id: string) => handleDeleteNode(id, 'list') },
+        data: { name: list.name, cardCount: 0, onAddCard: handleAddCard, onDelete: (id: string) => handleDeleteNode(id, 'list'), onHold: holdNode },
       }])
     }
 
     if (action === 'card') {
-      const firstList = lists[0]
-      if (!firstList) return
-      const card = await createFreeCard(firstList.id, 'New card', board.id, x, y)
+      // A card must belong to a list — create one automatically if there are none
+      let targetList = lists[0]
+      if (!targetList) {
+        const list = await createList(board.id, 'List')
+        targetList = { ...list, x: x - 30, y: y - 110 }
+        setLists(prev => [...prev, targetList])
+        setNodes(prev => [...prev, {
+          id: `list-${list.id}`, type: 'listNode', position: { x: x - 30, y: y - 110 },
+          data: { name: list.name, cardCount: 0, onAddCard: handleAddCard, onDelete: (id: string) => handleDeleteNode(id, 'list'), onHold: holdNode },
+        }])
+      }
+      const listId = targetList.id
+      const card = await createFreeCard(listId, 'New card', board.id, x, y)
       setCards(prev => [...prev, card])
       setNodes(prev => [...prev, {
         id: `card-${card.id}`, type: 'cardNode', position: { x, y },
-        data: { title: card.title, listId: firstList.id, onDelete: (id: string) => handleDeleteNode(id, 'card') },
+        data: { title: card.title, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onHold: holdNode },
+      }])
+      setEdges(prev => [...prev, {
+        id: `auto-${card.id}`, source: `list-${listId}`, target: `card-${card.id}`,
+        sourceHandle: 'bottom', targetHandle: 'top', type: 'deletable', data: { deletable: false },
+        style: { stroke: '#94a3b8', strokeWidth: 1.5, strokeDasharray: '4 2' },
       }])
     }
 
@@ -555,7 +596,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       setSubBoards(prev => [...prev, newSub])
       setNodes(prev => [...prev, {
         id: `sub-${sub.id}`, type: 'subTabNode', position: { x, y },
-        data: { boardId: sub.id, name: sub.name, color: sub.color, mode: sub.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab') },
+        data: { boardId: sub.id, name: sub.name, color: sub.color, mode: sub.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
       }])
     }
 
@@ -656,6 +697,24 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool !== 'shape') { setShapeAnchor(null); setShapePreview(null) }
     if (tool !== 'draw') { drawingRef.current = null; setCurrentPath('') }
   }, [tool])
+
+  // Dismiss the context menu if the pointer leaves the window/tab or it loses focus
+  useEffect(() => {
+    if (!contextMenu) return
+    const close = () => setContextMenu(null)
+    const onVis = () => { if (document.hidden) close() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    window.addEventListener('blur', close)
+    document.addEventListener('mouseleave', close)
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('blur', close)
+      document.removeEventListener('mouseleave', close)
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [contextMenu])
 
   // Keyboard: Ctrl+Z undo, Ctrl+X redo, H = hand tool — all ignored while typing
   useEffect(() => {
@@ -875,6 +934,27 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           ))}
         </div>
       )}
+
+      {subPanel && (() => {
+        const sb = subBoards.find(b => b.id === subPanel.boardId)
+        if (!sb) return null
+        return (
+          <BoardPropertiesPanel
+            board={sb}
+            anchorRect={subPanel.rect}
+            showAddSubTab={false}
+            onClose={() => setSubPanel(null)}
+            onUpdate={updated => {
+              setSubBoards(prev => prev.map(b => b.id === updated.id ? updated : b))
+              setNodes(prev => prev.map(n => n.id === `sub-${updated.id}`
+                ? { ...n, data: { ...n.data, name: updated.name, color: updated.color, mode: updated.mode } }
+                : n))
+              setSubPanel(null)
+            }}
+            onRemove={() => handleDeleteNode(`sub-${sb.id}`, 'subtab')}
+          />
+        )
+      })()}
     </div>
   )
 }

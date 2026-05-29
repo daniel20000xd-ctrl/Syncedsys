@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Check, Plus } from 'lucide-react'
+import { Check, Plus, Trash2 } from 'lucide-react'
 import type { Board } from '@/lib/types'
 import { updateBoard, createSubTab } from '@/app/actions'
 
@@ -18,9 +18,11 @@ interface Props {
   anchorRect: DOMRect
   onClose: () => void
   onUpdate: (updated: Board) => void
+  showAddSubTab?: boolean
+  onRemove?: () => void
 }
 
-export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpdate }: Props) {
+export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpdate, showAddSubTab = true, onRemove }: Props) {
   const router = useRouter()
   const [name, setName] = useState(board.name)
   const [color, setColor] = useState(board.color)
@@ -129,17 +131,30 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
         {saving ? 'Saving…' : 'Save'}
       </button>
 
-      <div className="border-t border-gray-200 mt-3 pt-3">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Sub-tabs</p>
-        <button
-          onClick={handleAddSubTab}
-          disabled={subTabCreating}
-          className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50"
-        >
-          <Plus size={12} />
-          {subTabCreating ? 'Creating…' : 'Add sub-tab'}
-        </button>
-      </div>
+      {showAddSubTab && (
+        <div className="border-t border-gray-200 mt-3 pt-3">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Sub-tabs</p>
+          <button
+            onClick={handleAddSubTab}
+            disabled={subTabCreating}
+            className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50"
+          >
+            <Plus size={12} />
+            {subTabCreating ? 'Creating…' : 'Add sub-tab'}
+          </button>
+        </div>
+      )}
+
+      {onRemove && (
+        <div className="border-t border-gray-200 mt-3 pt-3">
+          <button
+            onClick={() => { onRemove(); onClose() }}
+            className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
+          >
+            <Trash2 size={12} /> Remove tab
+          </button>
+        </div>
+      )}
     </div>,
     document.body
   )
