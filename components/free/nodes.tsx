@@ -1,7 +1,7 @@
 'use client'
 
 import { Handle, Position, NodeProps, useReactFlow, NodeResizer } from '@xyflow/react'
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, X, ExternalLink } from 'lucide-react'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
@@ -98,6 +98,21 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
   const [text, setText] = useState((data.label as string) || '')
   const { updateNodeData } = useReactFlow()
   const onSave = data.onSave as SaveFn | undefined
+  const onHold = data.onHold as ((id: string) => void) | undefined
+
+  // Font size tracks the shape's actual rendered size (scroll-resize or drag-resize)
+  const innerRef = useRef<HTMLDivElement>(null)
+  const [fontSize, setFontSize] = useState(14)
+  useEffect(() => {
+    const el = innerRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => {
+      const side = Math.min(el.clientWidth, el.clientHeight)
+      setFontSize(Math.max(9, Math.min(64, Math.round(side * 0.22))))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   const shapeClass = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : 'rounded-lg'
 
@@ -108,7 +123,7 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
   }
 
   return (
-    <div className="relative group select-none w-full h-full">
+    <div className="relative group select-none w-full h-full" onMouseDown={() => onHold?.(id)}>
       {/* Drag the edges/corners to transform freely (shown when selected) */}
       <NodeResizer
         minWidth={40}
@@ -121,6 +136,7 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
       <Handle type="target" position={Position.Top} className="!bg-gray-500 !w-3 !h-3" />
       <Handle type="target" position={Position.Left} className="!bg-gray-500 !w-3 !h-3" />
       <div
+        ref={innerRef}
         className={`w-full h-full flex items-center justify-center shadow ${shapeClass}`}
         style={{ backgroundColor: fill }}
         onClick={() => setEditing(true)}
@@ -133,10 +149,11 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
             onChange={e => setText(e.target.value)}
             onBlur={commit}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
-            className={`nodrag w-4/5 h-3/5 resize-none text-center text-xs bg-white/20 rounded focus:outline-none text-white font-medium ${shape === 'diamond' ? '-rotate-45' : ''}`}
+            style={{ fontSize }}
+            className={`nodrag w-4/5 h-3/5 resize-none text-center bg-white/20 rounded focus:outline-none text-white font-medium leading-tight ${shape === 'diamond' ? '-rotate-45' : ''}`}
           />
         ) : (
-          <span className={`text-xs font-medium text-white text-center px-1 break-words ${shape === 'diamond' ? '-rotate-45' : ''}`}>{text || '…'}</span>
+          <span style={{ fontSize }} className={`font-medium text-white text-center px-1 break-words leading-tight ${shape === 'diamond' ? '-rotate-45' : ''}`}>{text || '…'}</span>
         )}
       </div>
       <button

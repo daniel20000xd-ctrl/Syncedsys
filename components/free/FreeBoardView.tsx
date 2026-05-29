@@ -86,8 +86,8 @@ function buildNodes(
         height: el.height ?? undefined,
         onDelete: (nodeId: string) => onDeleteNode(nodeId, 'element'),
         onSave,
-        // Shapes/text manage their own scaling/sizing, so no hold-to-scale on them
-        ...(el.type === 'shape' || el.type === 'text' ? {} : { onHold }),
+        // Text has its own font size; everything else (incl. shapes) scales on hold+scroll
+        ...(el.type === 'text' ? {} : { onHold }),
       },
     }
     if (el.type === 'shape') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
@@ -275,6 +275,14 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       const factor = e.deltaY > 0 ? 0.9 : 1.1
       setNodesRef.current!(prev => prev.map(n => {
         if (n.id !== heldNodeRef.current) return n
+        if (n.type === 'shapeNode') {
+          // Resize the shape itself; the text inside auto-scales to fit
+          const curW = Number(n.style?.width) || n.measured?.width || (n.data.width as number) || 120
+          const curH = Number(n.style?.height) || n.measured?.height || (n.data.height as number) || 80
+          const w = Math.max(30, Math.min(3000, curW * factor))
+          const h = Math.max(20, Math.min(3000, curH * factor))
+          return { ...n, style: { ...n.style, width: w, height: h }, data: { ...n.data, width: w, height: h } }
+        }
         const curr = (n.data.scale as number) ?? 1
         return { ...n, data: { ...n.data, scale: Math.max(0.2, Math.min(5, curr * factor)) } }
       }))
@@ -287,15 +295,18 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (!heldNodeRef.current) return
     const heldId = heldNodeRef.current
     heldNodeRef.current = null
-    // Persist scale for element nodes
-    if (heldId.startsWith('el-')) {
-      const rawId = heldId.replace('el-', '')
-      const node = nodes.find(n => n.id === heldId)
-      const el = elements.find(e => e.id === rawId)
-      if (node && el) {
-        const scale = (node.data.scale as number) ?? 1
-        updateElement(rawId, { data: { ...el.data, scale } })
-      }
+    if (!heldId.startsWith('el-')) return
+    const rawId = heldId.replace('el-', '')
+    const node = nodes.find(n => n.id === heldId)
+    if (!node) return
+    if (node.type === 'shapeNode') {
+      // Persist the new shape size (text size is derived from it)
+      const w = Number(node.style?.width) || node.measured?.width || (node.data.width as number) || 120
+      const h = Number(node.style?.height) || node.measured?.height || (node.data.height as number) || 80
+      saveElement(heldId, { shape: node.data.shape, fill: node.data.fill, label: node.data.label, width: w, height: h }, w, h)
+    } else {
+      const el = elementsRef.current.find(e => e.id === rawId)
+      if (el) updateElement(rawId, { data: { ...el.data, scale: (node.data.scale as number) ?? 1 } })
     }
   }
 
@@ -483,7 +494,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const tempId = `el-tmp-${crypto.randomUUID()}`
     setNodes(prev => [...prev, {
       id: tempId, type: 'shapeNode', position: { x: flowPos.x, y: flowPos.y }, style: { width: w, height: h },
-      data: { ...data, onDelete: (id: string) => handleDeleteNode(id, 'element'), onSave: saveElement },
+      data: { ...data, onDelete: (id: string) => handleDeleteNode(id, 'element'), onSave: saveElement, onHold: holdNode },
     }])
     try {
       const el = await createElement(board.id, 'shape', flowPos.x, flowPos.y, data, w, h)
