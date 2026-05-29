@@ -42,6 +42,12 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
       .eq('board_id', id)
       .order('created_at', { ascending: true })
 
+    const { data: subBoards } = await supabase
+      .from('boards')
+      .select('*')
+      .eq('parent_id', id)
+      .order('tab_position', { ascending: true })
+
     return (
       <FreeBoardView
         board={board}
@@ -49,6 +55,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
         initialCards={cards ?? []}
         initialEdges={edges ?? []}
         initialElements={elements ?? []}
+        initialSubBoards={subBoards ?? []}
       />
     )
   }

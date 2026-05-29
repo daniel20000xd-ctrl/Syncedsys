@@ -8,6 +8,8 @@ export type Board = {
   content: string | null
   parent_id: string | null
   tab_position: number
+  free_x: number
+  free_y: number
   created_at: string
 }
 

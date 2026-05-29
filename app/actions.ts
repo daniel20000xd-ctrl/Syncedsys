@@ -26,6 +26,13 @@ export async function createBoard(name: string, color: string) {
   return data
 }
 
+export async function updateBoardFreePosition(boardId: string, x: number, y: number) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  await supabase.from('boards').update({ free_x: x, free_y: y }).eq('id', boardId).eq('user_id', user.id)
+}
+
 export async function updateBoardContent(boardId: string, content: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

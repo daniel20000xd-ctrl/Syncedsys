@@ -1,0 +1,141 @@
+'use client'
+
+import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import { useRouter } from 'next/navigation'
+import { Check, Plus } from 'lucide-react'
+import type { Board } from '@/lib/types'
+import { updateBoard, createSubTab } from '@/app/actions'
+
+const COLORS = [
+  '#0079bf', '#d29034', '#519839', '#b04632',
+  '#89609e', '#cd5a91', '#4bbf6b', '#00aecc',
+  '#344563', '#f2d600',
+]
+
+interface Props {
+  board: Board
+  anchorRect: DOMRect
+  onClose: () => void
+  onUpdate: (updated: Board) => void
+}
+
+export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpdate }: Props) {
+  const router = useRouter()
+  const [name, setName] = useState(board.name)
+  const [color, setColor] = useState(board.color)
+  const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
+  const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
+  const [mode, setMode] = useState<'classic' | 'free' | 'text'>(board.mode ?? 'classic')
+  const [saving, setSaving] = useState(false)
+  const [subTabCreating, setSubTabCreating] = useState(false)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  const top = anchorRect.bottom + 6
+  const left = Math.min(anchorRect.left, window.innerWidth - 272)
+
+  useEffect(() => {
+    function onClickOutside(e: MouseEvent) {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) onClose()
+    }
+    setTimeout(() => document.addEventListener('mousedown', onClickOutside), 0)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [onClose])
+
+  async function handleSave() {
+    setSaving(true)
+    const updated = await updateBoard(board.id, {
+      name: name.trim() || board.name,
+      color,
+      deadline: hasDeadline && deadline ? new Date(deadline).toISOString() : null,
+      mode,
+    })
+    onUpdate(updated)
+    setSaving(false)
+    onClose()
+  }
+
+  async function handleAddSubTab() {
+    if (subTabCreating) return
+    setSubTabCreating(true)
+    try {
+      const sub = await createSubTab(board.id, 'New tab', board.color)
+      onClose()
+      router.push(`/board/${sub.id}`)
+      router.refresh()
+    } finally {
+      setSubTabCreating(false)
+    }
+  }
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      style={{ position: 'fixed', top, left, zIndex: 9999 }}
+      className="bg-white rounded-lg shadow-xl border border-gray-200 p-4 w-64"
+      onClick={e => e.stopPropagation()}
+    >
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Board properties</p>
+
+      <label className="block text-xs text-gray-600 mb-1">Name</label>
+      <input
+        autoFocus
+        value={name}
+        onChange={e => setName(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') handleSave() }}
+        className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm mb-3 focus:outline-none focus:border-blue-500"
+      />
+
+      <label className="block text-xs text-gray-600 mb-1.5">Color</label>
+      <div className="grid grid-cols-5 gap-1.5 mb-3">
+        {COLORS.map(c => (
+          <button key={c} onClick={() => setColor(c)} className="h-7 rounded transition-transform hover:scale-105 relative" style={{ backgroundColor: c }}>
+            {color === c && <Check size={12} className="absolute inset-0 m-auto text-white drop-shadow" />}
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-4">
+        <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none mb-1.5">
+          <input type="checkbox" checked={hasDeadline} onChange={e => setHasDeadline(e.target.checked)} className="rounded" />
+          Set expiry date (optional)
+        </label>
+        {hasDeadline && (
+          <>
+            <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)} className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:border-blue-500" />
+            <p className="text-[10px] text-gray-400 mt-1">Board will be marked expired after this date.</p>
+          </>
+        )}
+      </div>
+
+      <label className="block text-xs text-gray-600 mb-1.5">Board preset</label>
+      <div className="grid grid-cols-3 gap-1.5 mb-2">
+        {(['classic', 'free', 'text'] as const).map(m => (
+          <button key={m} onClick={() => setMode(m)} className={`py-2 rounded text-xs font-medium border capitalize transition-colors ${mode === m ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+            {m === 'classic' ? '🗂 Classic' : m === 'free' ? '🎨 Free' : '📝 Text'}
+          </button>
+        ))}
+      </div>
+      {mode === 'free' && <p className="text-[10px] text-gray-400 mb-3">Freeform canvas — drag lists anywhere, draw connections.</p>}
+      {mode === 'text' && <p className="text-[10px] text-gray-400 mb-3">Document — a plain writing space, auto-saved.</p>}
+      {!mode.includes('free') && !mode.includes('text') && <div className="mb-3" />}
+
+      <button onClick={handleSave} disabled={saving} className="w-full bg-[#0079bf] hover:bg-[#026aa7] text-white text-sm py-1.5 rounded disabled:opacity-60">
+        {saving ? 'Saving…' : 'Save'}
+      </button>
+
+      <div className="border-t border-gray-200 mt-3 pt-3">
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Sub-tabs</p>
+        <button
+          onClick={handleAddSubTab}
+          disabled={subTabCreating}
+          className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50"
+        >
+          <Plus size={12} />
+          {subTabCreating ? 'Creating…' : 'Add sub-tab'}
+        </button>
+      </div>
+    </div>,
+    document.body
+  )
+}

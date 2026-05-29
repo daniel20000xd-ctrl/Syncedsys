@@ -12,6 +12,8 @@ create table boards (
   parent_id uuid references boards(id) on delete cascade,
   tab_position integer not null default 0,
   content text,
+  free_x double precision not null default 100,
+  free_y double precision not null default 100,
   created_at timestamptz default now()
 );
 
@@ -183,3 +185,5 @@ create index on cards(list_id);
 -- alter table boards add column if not exists tab_position integer not null default 0;
 -- create index if not exists boards_parent_id_idx on boards(parent_id);
 -- alter table boards add column if not exists content text;
+-- alter table boards add column if not exists free_x double precision not null default 100;
+-- alter table boards add column if not exists free_y double precision not null default 100;
