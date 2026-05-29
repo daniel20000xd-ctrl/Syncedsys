@@ -700,7 +700,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setShapeAnchor(null)
     setShapePreview(null)
     const flowPos = overlayToFlow(x, y)
-    addElement('portal', flowPos.x, flowPos.y, { targetBoardId: null, vx: 20, vy: 20, zoom: 0.4, width: w, height: h }, w, h, { onOpenFully: navigate })
+    addElement('portal', flowPos.x, flowPos.y, { targetBoardId: null, home: board.id, vx: 20, vy: 20, zoom: 0.4, width: w, height: h }, w, h, { onOpenFully: navigate })
     setTool('select')
   }
 

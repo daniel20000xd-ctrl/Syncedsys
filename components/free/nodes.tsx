@@ -6,6 +6,7 @@ import {
 } from '@xyflow/react'
 import { useState, useEffect, useRef } from 'react'
 import { Plus, X, ExternalLink, ChevronDown, Maximize2 } from 'lucide-react'
+import { updateBoardContent, ensureMirrorPortal } from '@/app/actions'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
@@ -437,7 +438,7 @@ function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
 
 export function PortalNode({ id, data, selected }: NodeProps) {
   const targetBoardId = (data.targetBoardId as string | null) ?? null
-  const zoom = (data.zoom as number) ?? 0.4
+  const home = (data.home as string | null) ?? null
   const onSave = data.onSave as SaveFn | undefined
   const onOpenFully = data.onOpenFully as ((boardId: string) => void) | undefined
   const onHold = data.onHold as ((id: string) => void) | undefined
@@ -446,12 +447,18 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const [choosing, setChoosing] = useState(false)
   const [boards, setBoards] = useState<{ id: string; name: string; color: string }[]>([])
   const [content, setContent] = useState<PortalContent | null>(null)
+  const [targetMode, setTargetMode] = useState<string>('classic')
+  const [text, setText] = useState('')
   const [pan, setPan] = useState({ x: (data.vx as number) ?? 20, y: (data.vy as number) ?? 20 })
+  const [zoom, setZoom] = useState((data.zoom as number) ?? 0.4)
   const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
+  const fittedRef = useRef<string | null>(null)
+  const textTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const contentElRef = useRef<HTMLDivElement>(null)
 
   function persist(patch: Record<string, unknown>) {
-    const next = { targetBoardId, vx: pan.x, vy: pan.y, zoom, width: data.width, height: data.height, ...patch }
-    updateNodeData(id, next) // update the live node so the portal reacts immediately
+    const next = { targetBoardId, home, vx: pan.x, vy: pan.y, zoom, width: data.width, height: data.height, ...patch }
+    updateNodeData(id, next)
     onSave?.(id, next, data.width as number | undefined, data.height as number | undefined)
   }
 
@@ -468,20 +475,55 @@ export function PortalNode({ id, data, selected }: NodeProps) {
     let cancel = false
     import('@/lib/supabase/client').then(async ({ createClient }) => {
       const s = createClient()
+      const { data: bd } = await s.from('boards').select('mode,content').eq('id', targetBoardId).single()
+      if (!cancel) { setTargetMode((bd?.mode as string) ?? 'classic'); setText((bd?.content as string) ?? '') }
+      if ((bd?.mode as string) === 'text') { if (!cancel) setContent({ lists: [], cards: [], elements: [] }); return }
       const [{ data: lists }, { data: elements }] = await Promise.all([
         s.from('lists').select('id,name,x,y').eq('board_id', targetBoardId),
         s.from('board_elements').select('id,type,x,y,width,height,data').eq('board_id', targetBoardId),
       ])
       const listIds = (lists ?? []).map(l => l.id)
       const cardsRes = listIds.length ? await s.from('cards').select('id,list_id,title,x,y').in('list_id', listIds) : { data: [] }
-      if (!cancel) setContent({ lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [] })
+      if (cancel) return
+      const c: PortalContent = { lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [] }
+      setContent(c)
+      // Auto-fit the view to the content the first time this target loads
+      if (fittedRef.current !== targetBoardId) {
+        fittedRef.current = targetBoardId
+        const xs: number[] = [], ys: number[] = [], xe: number[] = [], ye: number[] = []
+        c.lists.forEach(l => { xs.push(l.x); ys.push(l.y); xe.push(l.x + 208); ye.push(l.y + 60) })
+        c.cards.forEach(cd => { xs.push(cd.x); ys.push(cd.y); xe.push(cd.x + 176); ye.push(cd.y + 50) })
+        c.elements.forEach(el => { xs.push(el.x); ys.push(el.y); xe.push(el.x + (el.width ?? 140)); ye.push(el.y + (el.height ?? 100)) })
+        if (xs.length) {
+          const minX = Math.min(...xs), minY = Math.min(...ys), maxX = Math.max(...xe), maxY = Math.max(...ye)
+          const pw = (data.width as number) || 320, ph = ((data.height as number) || 220) - 24
+          const fit = Math.max(0.08, Math.min(1, Math.min(pw / (maxX - minX + 80), ph / (maxY - minY + 80))))
+          const nx = (pw - (maxX - minX) * fit) / 2 - minX * fit
+          const ny = (ph - (maxY - minY) * fit) / 2 - minY * fit + 24
+          setZoom(fit); setPan({ x: nx, y: ny })
+        }
+      }
     })
     return () => { cancel = true }
-  }, [targetBoardId])
+  }, [targetBoardId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const target = boards.find(b => b.id === targetBoardId)
+  const isText = targetMode === 'text'
+
+  // Scroll to zoom inside a (non-text) portal without zooming the main board
+  useEffect(() => {
+    const el = contentElRef.current
+    if (!el || isText) return
+    function onWheel(e: WheelEvent) {
+      e.preventDefault(); e.stopPropagation()
+      setZoom(z => Math.max(0.05, Math.min(3, z * (e.deltaY > 0 ? 0.9 : 1.1))))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [targetBoardId, isText])
 
   function onContentPointerDown(e: React.PointerEvent) {
+    if (isText) return
     e.stopPropagation()
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
     panRef.current = { sx: e.clientX, sy: e.clientY, vx: pan.x, vy: pan.y }
@@ -495,7 +537,14 @@ export function PortalNode({ id, data, selected }: NodeProps) {
     if (!panRef.current) return
     e.stopPropagation()
     panRef.current = null
-    persist({ vx: pan.x, vy: pan.y })
+    persist({ vx: pan.x, vy: pan.y, zoom })
+  }
+
+  function onTextChange(value: string) {
+    setText(value)
+    if (!targetBoardId) return
+    if (textTimer.current) clearTimeout(textTimer.current)
+    textTimer.current = setTimeout(() => { updateBoardContent(targetBoardId, value).catch(() => {}) }, 600)
   }
 
   return (
@@ -511,9 +560,21 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       <SideHandles color="!bg-fuchsia-500" />
 
       <div className="w-full h-full rounded-lg overflow-hidden shadow-lg ring-1 ring-fuchsia-400/40 bg-[#1d2125] relative">
-        {targetBoardId && (
+        {targetBoardId && isText && (
+          <textarea
+            value={text}
+            onChange={e => onTextChange(e.target.value)}
+            onPointerDown={e => e.stopPropagation()}
+            placeholder="Start writing…"
+            className="nodrag nowheel absolute inset-0 pt-7 px-4 pb-3 w-full h-full resize-none focus:outline-none bg-white text-gray-800 text-sm leading-6"
+            style={{ fontFamily: 'Georgia, serif' }}
+          />
+        )}
+
+        {targetBoardId && !isText && (
           <div
-            className="nodrag absolute inset-0 cursor-grab active:cursor-grabbing"
+            ref={contentElRef}
+            className="nodrag nowheel absolute inset-0 cursor-grab active:cursor-grabbing"
             style={{ backgroundColor: target?.color ?? '#0079bf' }}
             onPointerDown={onContentPointerDown}
             onPointerMove={onContentPointerMove}
@@ -559,10 +620,17 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         {choosing && (
           <div className="nodrag absolute top-7 right-1.5 z-10 bg-white rounded-lg shadow-xl border border-gray-200 py-1 w-40 max-h-44 overflow-y-auto">
             {boards.length === 0 && <p className="px-3 py-1.5 text-xs text-gray-400">Loading…</p>}
-            {boards.map(b => (
+            {boards.filter(b => b.id !== home).map(b => (
               <button
                 key={b.id}
-                onClick={e => { e.stopPropagation(); setChoosing(false); persist({ targetBoardId: b.id }) }}
+                onClick={e => {
+                  e.stopPropagation()
+                  setChoosing(false)
+                  fittedRef.current = null // re-fit to the new target
+                  persist({ targetBoardId: b.id })
+                  // Mirror a portal back on the target tab
+                  if (home) ensureMirrorPortal(b.id, home).catch(() => {})
+                }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 text-left"
               >
                 <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: b.color }} />

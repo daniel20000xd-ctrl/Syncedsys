@@ -277,6 +277,24 @@ export async function deleteElement(elementId: string) {
   await supabase.from('board_elements').delete().eq('id', elementId)
 }
 
+// Ensure the target board has a portal pointing back to the source board (mirror)
+export async function ensureMirrorPortal(targetBoardId: string, backBoardId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  // Only mirror into boards the user owns
+  const { data: tgt } = await supabase.from('boards').select('id').eq('id', targetBoardId).eq('user_id', user.id).single()
+  if (!tgt) return
+  const { data: existing } = await supabase
+    .from('board_elements').select('id, data').eq('board_id', targetBoardId).eq('type', 'portal')
+  const already = (existing ?? []).some(e => (e.data as { targetBoardId?: string } | null)?.targetBoardId === backBoardId)
+  if (already) return
+  await supabase.from('board_elements').insert({
+    board_id: targetBoardId, type: 'portal', x: 80, y: 80, width: 320, height: 220,
+    data: { targetBoardId: backBoardId, home: targetBoardId, vx: 20, vy: 20, zoom: 0.4 },
+  })
+}
+
 // Insert-or-update an element by id (used by undo/redo to restore by original id)
 export async function upsertElement(
   id: string,
