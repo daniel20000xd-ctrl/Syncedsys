@@ -409,6 +409,7 @@ type PortalContent = {
   lists: { id: string; name: string; x: number; y: number }[]
   cards: { id: string; list_id: string; title: string; x: number; y: number }[]
   elements: { id: string; type: string; x: number; y: number; width: number | null; height: number | null; data: Record<string, unknown> }[]
+  edges: { id: string; source: string; target: string }[]
 }
 
 function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
@@ -416,7 +417,16 @@ function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
   if (el.type === 'shape') {
     const shape = d.shape as string
     const cls = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : 'rounded-lg'
-    return <div style={{ position: 'absolute', left: el.x, top: el.y, width: el.width ?? 120, height: el.height ?? 80, backgroundColor: (d.fill as string) || '#93c5fd' }} className={`shadow ${cls}`} />
+    const w = el.width ?? 120, h = el.height ?? 80
+    const label = (d.label as string) || ''
+    const fontSize = Math.max(9, Math.min(64, Math.round(Math.min(w, h) * 0.22)))
+    return (
+      <div style={{ position: 'absolute', left: el.x, top: el.y, width: w, height: h }}>
+        <div className={`w-full h-full flex items-center justify-center shadow ${cls}`} style={{ backgroundColor: (d.fill as string) || '#93c5fd' }}>
+          {label && <span className={`text-white font-medium text-center px-1 break-words ${shape === 'diamond' ? '-rotate-45' : ''}`} style={{ fontSize }}>{label}</span>}
+        </div>
+      </div>
+    )
   }
   if (el.type === 'text') {
     return <div style={{ position: 'absolute', left: el.x, top: el.y, color: (d.color as string) || '#1f2937', fontSize: (d.fontSize as number) || 18, fontWeight: 500 }} className="whitespace-pre-wrap">{(d.text as string) || 'Text'}</div>
@@ -434,6 +444,35 @@ function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
     )
   }
   return null
+}
+
+function PortalEdges({ content }: { content: PortalContent }) {
+  // center point (flow coords) of a node referenced by an edge endpoint id
+  const center = (nodeId: string): { x: number; y: number } | null => {
+    if (nodeId.startsWith('list-')) {
+      const l = content.lists.find(x => `list-${x.id}` === nodeId)
+      return l ? { x: l.x + 104, y: l.y + 30 } : null
+    }
+    if (nodeId.startsWith('card-')) {
+      const c = content.cards.find(x => `card-${x.id}` === nodeId)
+      return c ? { x: c.x + 88, y: c.y + 25 } : null
+    }
+    if (nodeId.startsWith('el-')) {
+      const e = content.elements.find(x => `el-${x.id}` === nodeId)
+      return e ? { x: e.x + (e.width ?? 140) / 2, y: e.y + (e.height ?? 100) / 2 } : null
+    }
+    return null
+  }
+  const manual = content.edges.map(e => ({ a: center(e.source), b: center(e.target), key: e.id, color: '#3b82f6', dash: undefined as string | undefined }))
+  const auto = content.cards.map(c => ({ a: center(`list-${c.list_id}`), b: center(`card-${c.id}`), key: `auto-${c.id}`, color: '#94a3b8', dash: '4 3' }))
+  const lines = [...auto, ...manual].filter(l => l.a && l.b)
+  return (
+    <svg style={{ position: 'absolute', left: 0, top: 0, width: 1, height: 1, overflow: 'visible', pointerEvents: 'none' }}>
+      {lines.map(l => (
+        <line key={l.key} x1={l.a!.x} y1={l.a!.y} x2={l.b!.x} y2={l.b!.y} stroke={l.color} strokeWidth={2} strokeDasharray={l.dash} vectorEffect="non-scaling-stroke" />
+      ))}
+    </svg>
+  )
 }
 
 export function PortalNode({ id, data, selected }: NodeProps) {
@@ -479,15 +518,16 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       const s = createClient()
       const { data: bd } = await s.from('boards').select('mode,content').eq('id', targetBoardId).single()
       if (!cancel) { setTargetMode((bd?.mode as string) ?? 'classic'); setText((bd?.content as string) ?? '') }
-      if ((bd?.mode as string) === 'text') { if (!cancel) setContent({ lists: [], cards: [], elements: [] }); return }
-      const [{ data: lists }, { data: elements }] = await Promise.all([
+      if ((bd?.mode as string) === 'text') { if (!cancel) setContent({ lists: [], cards: [], elements: [], edges: [] }); return }
+      const [{ data: lists }, { data: elements }, { data: edges }] = await Promise.all([
         s.from('lists').select('id,name,x,y').eq('board_id', targetBoardId),
         s.from('board_elements').select('id,type,x,y,width,height,data').eq('board_id', targetBoardId),
+        s.from('board_edges').select('id,source,target').eq('board_id', targetBoardId),
       ])
       const listIds = (lists ?? []).map(l => l.id)
       const cardsRes = listIds.length ? await s.from('cards').select('id,list_id,title,x,y').in('list_id', listIds) : { data: [] }
       if (cancel) return
-      const c: PortalContent = { lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [] }
+      const c: PortalContent = { lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [], edges: edges ?? [] }
       setContent(c)
       // Auto-fit once to frame the content — never when locked or already fitted/saved
       if (!locked && !fitted && fittedRef.current !== targetBoardId) {
@@ -589,6 +629,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             onPointerUp={onContentPointerUp}
           >
             <div style={{ position: 'absolute', transformOrigin: '0 0', transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+              {content && <PortalEdges content={content} />}
               {content?.lists.map(l => (
                 <div key={l.id} style={{ position: 'absolute', left: l.x, top: l.y }} className="bg-[#ebecf0] rounded-xl shadow px-3 py-2 w-52 text-sm font-semibold text-gray-800">{l.name}</div>
               ))}
