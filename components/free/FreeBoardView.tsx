@@ -14,7 +14,7 @@ import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, createEdge, deleteEdge, deleteBoard,
   createElement, deleteElement, updateListPosition, updateCardPosition,
-  updateElement, createSubTab, updateBoardFreePosition,
+  updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode } from './nodes'
 
@@ -190,22 +190,39 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const navigate = useCallback((bid: string) => router.push(`/board/${bid}`), [router])
 
   function handleDeleteNode(nodeId: string, type: string) {
+    const removeNodes = (pred: (n: Node) => boolean) => setNodesRef.current?.(prev => prev.filter(pred))
     if (type === 'list') {
       const rawId = nodeId.replace('list-', '')
       setLists(prev => prev.filter(l => l.id !== rawId))
       setCards(prev => prev.filter(c => c.list_id !== rawId))
+      // remove the list node and any of its card nodes
+      removeNodes(n => n.id !== `list-${rawId}` && !(n.type === 'cardNode' && (n.data as { listId?: string }).listId === rawId))
+      deleteList(rawId, board.id)
     } else if (type === 'card') {
       const rawId = nodeId.replace('card-', '')
       setCards(prev => prev.filter(c => c.id !== rawId))
+      removeNodes(n => n.id !== `card-${rawId}`)
+      deleteCard(rawId, board.id)
     } else if (type === 'element') {
       const rawId = nodeId.replace('el-', '')
       setElements(prev => prev.filter(e => e.id !== rawId))
+      removeNodes(n => n.id !== nodeId)
       deleteElement(rawId)
     } else if (type === 'subtab') {
       const rawId = nodeId.replace('sub-', '')
       setSubBoards(prev => prev.filter(sb => sb.id !== rawId))
+      removeNodes(n => n.id !== `sub-${rawId}`)
       deleteBoard(rawId)
     }
+  }
+
+  // Map a node id to the type used by handleDeleteNode
+  function nodeKind(id: string): string | null {
+    if (id.startsWith('list-')) return 'list'
+    if (id.startsWith('card-')) return 'card'
+    if (id.startsWith('el-')) return 'element'
+    if (id.startsWith('sub-')) return 'subtab'
+    return null
   }
 
   const holdNode = useCallback((id: string) => { heldNodeRef.current = id }, [])
@@ -217,6 +234,35 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // Keep ref in sync so the wheel handler (in effect) can always call latest setNodes
   setNodesRef.current = setNodes
+
+  // Delete key on a marquee/multi-selection — persist every removed node
+  const onNodesDelete = useCallback((deleted: Node[]) => {
+    for (const node of deleted) {
+      const kind = nodeKind(node.id)
+      if (kind) handleDeleteNode(node.id, kind)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Recolor every selected shape/drawing/text via a toolbar swatch
+  const COLORABLE = new Set(['shapeNode', 'drawingNode', 'textNode'])
+  const selectedColorable = nodes.filter(n => n.selected && COLORABLE.has(n.type ?? ''))
+
+  function recolorSelected(color: string) {
+    const targets = selectedColorable
+    if (targets.length === 0) return
+    setNodes(prev => prev.map(n => {
+      if (!n.selected || !COLORABLE.has(n.type ?? '')) return n
+      const key = n.type === 'shapeNode' ? 'fill' : 'color'
+      return { ...n, data: { ...n.data, [key]: color } }
+    }))
+    for (const n of targets) {
+      const key = n.type === 'shapeNode' ? 'fill' : 'color'
+      const newData = { ...n.data, [key]: color }
+      if (n.type === 'shapeNode') saveElement(n.id, newData, n.data.width as number, n.data.height as number)
+      else saveElement(n.id, newData)
+    }
+  }
 
   // Hold + scroll to scale
   useEffect(() => {
@@ -564,6 +610,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         onEdgesDelete={onEdgesDelete}
+        onNodesDelete={onNodesDelete}
         onNodeDragStop={onNodeDragStop}
         nodeTypes={nodeTypes}
         fitView
@@ -642,7 +689,15 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         {tool === 'text' && (
           <p className="text-[9px] text-gray-400 text-center w-16 leading-tight mt-1 pt-1 border-t border-gray-100">Click to place text</p>
         )}
-        {tool === 'select' && (
+        {tool === 'select' && selectedColorable.length > 0 && (
+          <div className="flex flex-col items-center gap-1 mt-1 pt-1 border-t border-gray-100">
+            <p className="text-[8px] text-gray-400 text-center leading-tight">Recolor {selectedColorable.length} selected</p>
+            {SHAPE_COLORS.map(c => (
+              <button key={c} onClick={() => recolorSelected(c)} className="w-5 h-5 rounded border-2 border-transparent hover:border-gray-800" style={{ backgroundColor: c }} />
+            ))}
+          </div>
+        )}
+        {tool === 'select' && selectedColorable.length === 0 && (
           <p className="text-[8px] text-gray-300 text-center w-16 leading-tight mt-1 pt-1 border-t border-gray-100">Drag = select box · H = hand</p>
         )}
         {tool !== 'select' && (
