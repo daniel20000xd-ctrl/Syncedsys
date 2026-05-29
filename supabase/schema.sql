@@ -77,6 +77,7 @@ create table board_edges (
   target text not null,
   source_handle text,
   target_handle text,
+  data jsonb not null default '{}',
   created_at timestamptz default now()
 );
 
@@ -190,3 +191,4 @@ create index on cards(list_id);
 -- alter table boards add column if not exists content text;
 -- alter table boards add column if not exists free_x double precision not null default 100;
 -- alter table boards add column if not exists free_y double precision not null default 100;
+-- alter table board_edges add column if not exists data jsonb not null default '{}';

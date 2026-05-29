@@ -24,40 +24,94 @@ function SideHandles({ color = '!bg-blue-400' }: { color?: string }) {
   )
 }
 
-// Edge with a delete button that appears when you hover the link
+// Edge you can grab and pull to bend, with a hover delete button
 export function DeletableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, data }: EdgeProps) {
+  const { screenToFlowPosition } = useReactFlow()
   const [hover, setHover] = useState(false)
-  const [edgePath, labelX, labelY] = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })
+  const [drag, setDrag] = useState<{ x: number; y: number } | null>(null)
   const onDelete = data?.onDelete as ((id: string) => void) | undefined
+  const onReshape = data?.onReshape as ((id: string, offset: { cx: number; cy: number }) => void) | undefined
   const deletable = (data?.deletable as boolean) ?? true
+
+  const mx = (sourceX + targetX) / 2
+  const my = (sourceY + targetY) / 2
+  const saved = { x: (data?.cx as number) ?? 0, y: (data?.cy as number) ?? 0 }
+  const off = drag ?? saved
+  const bent = off.x !== 0 || off.y !== 0
+
+  // control point so the curve passes through (mx+off, my+off)
+  const cpx = mx + 2 * off.x
+  const cpy = my + 2 * off.y
+  // straight (with no bend) keeps a small natural bezier; with bend, quadratic through the grab point
+  const straight = getBezierPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition })[0]
+  const edgePath = bent ? `M ${sourceX},${sourceY} Q ${cpx},${cpy} ${targetX},${targetY}` : straight
+  const handleX = mx + off.x
+  const handleY = my + off.y
+
+  function onPointerDown(e: React.PointerEvent<SVGPathElement>) {
+    if (!deletable) return
+    e.stopPropagation()
+    ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+    const f = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    setDrag({ x: f.x - mx, y: f.y - my })
+  }
+  function onPointerMove(e: React.PointerEvent<SVGPathElement>) {
+    if (!drag) return
+    e.stopPropagation()
+    const f = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    setDrag({ x: f.x - mx, y: f.y - my })
+  }
+  function onPointerUp(e: React.PointerEvent<SVGPathElement>) {
+    if (!drag) return
+    e.stopPropagation()
+    ;(e.currentTarget as Element).releasePointerCapture?.(e.pointerId)
+    onReshape?.(id, { cx: drag.x, cy: drag.y })
+    setDrag(null)
+  }
+
   return (
     <>
       <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
-      {/* wide invisible hit area so hovering anywhere on the link counts */}
+      {/* wide invisible hit area: hover to reveal controls, drag to bend the link */}
       <path
         d={edgePath}
         fill="none"
         stroke="transparent"
         strokeWidth={18}
-        style={{ pointerEvents: 'stroke', cursor: deletable ? 'pointer' : 'default' }}
+        style={{ pointerEvents: 'stroke', cursor: deletable ? 'grab' : 'default' }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
       />
-      {deletable && hover && (
+      {deletable && (hover || drag) && (
         <EdgeLabelRenderer>
           <div
             className="nodrag nopan"
-            style={{ position: 'absolute', transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`, pointerEvents: 'all' }}
+            style={{ position: 'absolute', transform: `translate(-50%, -50%) translate(${handleX}px, ${handleY}px)`, pointerEvents: 'all' }}
             onMouseEnter={() => setHover(true)}
             onMouseLeave={() => setHover(false)}
           >
-            <button
-              onClick={() => onDelete?.(id)}
-              title="Remove link"
-              className="bg-white rounded-full p-0.5 shadow border border-red-200 text-red-500 hover:bg-red-50"
-            >
-              <X size={11} />
-            </button>
+            <div className="flex items-center gap-1">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-500 border-2 border-white shadow" title="Drag the link to bend it" />
+              <button
+                onClick={() => onDelete?.(id)}
+                title="Remove link"
+                className="bg-white rounded-full p-0.5 shadow border border-red-200 text-red-500 hover:bg-red-50"
+              >
+                <X size={11} />
+              </button>
+              {bent && (
+                <button
+                  onClick={() => onReshape?.(id, { cx: 0, cy: 0 })}
+                  title="Straighten link"
+                  className="bg-white rounded-full px-1 shadow border border-gray-200 text-gray-500 hover:bg-gray-50 text-[9px]"
+                >
+                  ⟲
+                </button>
+              )}
+            </div>
           </div>
         </EdgeLabelRenderer>
       )}

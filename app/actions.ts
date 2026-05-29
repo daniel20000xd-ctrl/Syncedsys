@@ -237,6 +237,11 @@ export async function deleteEdge(edgeId: string) {
   await supabase.from('board_edges').delete().eq('id', edgeId)
 }
 
+export async function updateEdgeShape(edgeId: string, data: Record<string, unknown>) {
+  const supabase = await createClient()
+  await supabase.from('board_edges').update({ data }).eq('id', edgeId)
+}
+
 // Insert-or-update an edge by id (used by undo/redo to restore by original id)
 export async function upsertEdge(id: string, boardId: string, source: string, target: string, sourceHandle?: string | null, targetHandle?: string | null) {
   const supabase = await createClient()

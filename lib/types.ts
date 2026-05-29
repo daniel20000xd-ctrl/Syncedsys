@@ -41,6 +41,7 @@ export type BoardEdge = {
   target: string
   source_handle: string | null
   target_handle: string | null
+  data: Record<string, unknown>
   created_at: string
 }
 

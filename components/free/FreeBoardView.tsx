@@ -15,7 +15,7 @@ import {
   createList, createFreeCard, deleteEdge, deleteBoard,
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
-  updateBoard, updateCard,
+  updateBoard, updateCard, updateEdgeShape,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, DeletableEdge, PortalNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
@@ -131,7 +131,7 @@ function buildNodes(
   return [...listNodes, ...cardNodes, ...elementNodes, ...subTabNodes]
 }
 
-function buildEdges(cards: Card[], boardEdges: BoardEdge[], onDeleteEdge: (id: string) => void): Edge[] {
+function buildEdges(cards: Card[], boardEdges: BoardEdge[], onDeleteEdge: (id: string) => void, onReshapeEdge: (id: string, offset: { cx: number; cy: number }) => void): Edge[] {
   const autoEdges: Edge[] = cards.map(c => ({
     id: `auto-${c.id}`,
     source: `list-${c.list_id}`,
@@ -151,7 +151,7 @@ function buildEdges(cards: Card[], boardEdges: BoardEdge[], onDeleteEdge: (id: s
     sourceHandle: e.source_handle ?? undefined,
     targetHandle: e.target_handle ?? undefined,
     type: 'deletable',
-    data: { deletable: true, onDelete: onDeleteEdge },
+    data: { deletable: true, onDelete: onDeleteEdge, onReshape: onReshapeEdge, cx: (e.data?.cx as number) ?? 0, cy: (e.data?.cy as number) ?? 0 },
     style: { stroke: '#3b82f6', strokeWidth: 2 },
     markerEnd: { type: 'arrowclosed' as const },
   }))
@@ -273,7 +273,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel)
   )
   const removeEdgeRef = useRef<(id: string) => void>(() => {})
-  const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(cards, initialEdges, (id) => removeEdgeRef.current(id)))
+  const reshapeEdgeRef = useRef<(id: string, offset: { cx: number; cy: number }) => void>(() => {})
+  const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(cards, initialEdges, (id) => removeEdgeRef.current(id), (id, off) => reshapeEdgeRef.current(id, off)))
 
   // Keep ref in sync so the wheel handler (in effect) can always call latest setNodes
   setNodesRef.current = setNodes
@@ -283,6 +284,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (!id.startsWith('auto-')) deleteEdge(id).catch(() => {})
   }, [setEdges])
   removeEdgeRef.current = removeEdge
+
+  const reshapeEdge = useCallback((id: string, offset: { cx: number; cy: number }) => {
+    setEdges(prev => prev.map(e => e.id === id ? { ...e, data: { ...e.data, cx: offset.cx, cy: offset.cy } } : e))
+    if (!id.startsWith('auto-')) updateEdgeShape(id, { cx: offset.cx, cy: offset.cy }).catch(() => {})
+  }, [setEdges])
+  reshapeEdgeRef.current = reshapeEdge
 
   // Live refs for history capture / persistence callbacks
   const nodesRef = useRef(nodes)
@@ -496,7 +503,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setEdges(eds => addEdge({
       ...connection, id,
       type: 'deletable',
-      data: { deletable: true, onDelete: (eid: string) => removeEdgeRef.current(eid) },
+      data: { deletable: true, cx: 0, cy: 0, onDelete: (eid: string) => removeEdgeRef.current(eid), onReshape: (eid: string, off: { cx: number; cy: number }) => reshapeEdgeRef.current(eid, off) },
       style: { stroke: '#3b82f6', strokeWidth: 2 },
       markerEnd: { type: 'arrowclosed' as const },
     }, eds))
