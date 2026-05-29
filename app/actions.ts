@@ -237,6 +237,15 @@ export async function deleteEdge(edgeId: string) {
   await supabase.from('board_edges').delete().eq('id', edgeId)
 }
 
+// Insert-or-update an edge by id (used by undo/redo to restore by original id)
+export async function upsertEdge(id: string, boardId: string, source: string, target: string, sourceHandle?: string | null, targetHandle?: string | null) {
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('board_edges')
+    .upsert({ id, board_id: boardId, source, target, source_handle: sourceHandle ?? null, target_handle: targetHandle ?? null })
+  if (error) throw error
+}
+
 // ── Free mode: elements (shapes, images, drawings) ───────────────────────────
 
 export async function createElement(
@@ -266,6 +275,22 @@ export async function updateElement(
 export async function deleteElement(elementId: string) {
   const supabase = await createClient()
   await supabase.from('board_elements').delete().eq('id', elementId)
+}
+
+// Insert-or-update an element by id (used by undo/redo to restore by original id)
+export async function upsertElement(
+  id: string,
+  boardId: string,
+  type: 'shape' | 'image' | 'drawing' | 'text',
+  x: number, y: number,
+  data: Record<string, unknown>,
+  width?: number | null, height?: number | null
+) {
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('board_elements')
+    .upsert({ id, board_id: boardId, type, x, y, data, width: width ?? null, height: height ?? null })
+  if (error) throw error
 }
 
 // ── Account links ─────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@ import { MousePointer2, Pencil, Square, Type, Hand, type LucideIcon } from 'luci
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, createEdge, deleteEdge, deleteBoard,
-  createElement, deleteElement, updateListPosition, updateCardPosition,
+  upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode } from './nodes'
@@ -235,6 +235,40 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // Keep ref in sync so the wheel handler (in effect) can always call latest setNodes
   setNodesRef.current = setNodes
 
+  // Live refs for history capture / persistence callbacks
+  const nodesRef = useRef(nodes)
+  const edgesRef = useRef(edges)
+  useEffect(() => { nodesRef.current = nodes }, [nodes])
+  useEffect(() => { edgesRef.current = edges }, [edges])
+
+  // ── Create a free-mode element (client-controlled id so undo can restore it) ──
+  function addElement(
+    type: 'shape' | 'drawing' | 'text' | 'image',
+    x: number, y: number,
+    data: Record<string, unknown>,
+    w?: number, h?: number,
+    extraNodeData?: Record<string, unknown>,
+  ) {
+    const id = crypto.randomUUID()
+    const nodeId = `el-${id}`
+    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : 'imageNode'
+    const node: Node = {
+      id: nodeId, type: nodeType, position: { x, y },
+      ...(type === 'shape' ? { style: { width: w, height: h } } : {}),
+      data: {
+        ...data,
+        onDelete: (i: string) => handleDeleteNode(i, 'element'),
+        onSave: saveElement,
+        ...(type === 'text' ? {} : { onHold: holdNode }),
+        ...extraNodeData,
+      },
+    }
+    setNodes(prev => [...prev, node])
+    setElements(prev => [...prev, { id, board_id: board.id, type, x, y, width: w ?? null, height: h ?? null, data, created_at: new Date().toISOString() } as BoardElement])
+    upsertElement(id, board.id, type, x, y, data, w ?? null, h ?? null).catch(err => console.error('Failed to save element:', err))
+    return nodeId
+  }
+
   // Delete key on a marquee/multi-selection — persist every removed node
   const onNodesDelete = useCallback((deleted: Node[]) => {
     for (const node of deleted) {
@@ -243,6 +277,101 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // ── Undo (Ctrl+Z) / Redo (Ctrl+X) ──
+  type Snapshot = { nodes: Node[]; edges: Edge[] }
+  const pastRef = useRef<Snapshot[]>([])
+  const futureRef = useRef<Snapshot[]>([])
+  const lastSnapRef = useRef<Snapshot | null>(null)
+  const lastSigRef = useRef<string>('')
+  const restoringRef = useRef(false)
+  const HISTORY_LIMIT = 80
+
+  const sigOf = (ns: Node[], es: Edge[]) =>
+    JSON.stringify(
+      {
+        n: ns.map(n => ({ id: n.id, p: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, s: n.style, d: n.data })),
+        e: es.filter(e => !e.id.startsWith('auto-')).map(e => ({ id: e.id, s: e.source, t: e.target })),
+      },
+      (k, v) => (typeof v === 'function' ? undefined : v),
+    )
+
+  // Snapshot settled changes (debounced so a drag/draw becomes one undo step)
+  useEffect(() => {
+    if (restoringRef.current) return
+    const sig = sigOf(nodes, edges)
+    if (sig === lastSigRef.current) return
+    const t = setTimeout(() => {
+      if (lastSnapRef.current && lastSigRef.current !== '') {
+        pastRef.current.push(lastSnapRef.current)
+        if (pastRef.current.length > HISTORY_LIMIT) pastRef.current.shift()
+        futureRef.current = []
+      }
+      lastSnapRef.current = { nodes: nodesRef.current, edges: edgesRef.current }
+      lastSigRef.current = sig
+    }, 350)
+    return () => clearTimeout(t)
+  }, [nodes, edges]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function reconcileDb(s: Snapshot) {
+    const elTypeOf = (t?: string) => t === 'shapeNode' ? 'shape' : t === 'drawingNode' ? 'drawing' : t === 'textNode' ? 'text' : 'image'
+    const clean = (d: Record<string, unknown>) => Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v !== 'function'))
+    const targetEls = s.nodes.filter(n => n.id.startsWith('el-'))
+    const targetIds = new Set(targetEls.map(n => n.id.replace('el-', '')))
+    // upsert everything in the target snapshot
+    for (const n of targetEls) {
+      const id = n.id.replace('el-', '')
+      const type = elTypeOf(n.type) as 'shape' | 'drawing' | 'text' | 'image'
+      const w = type === 'shape' ? (Number(n.style?.width) || (n.data.width as number) || null) : null
+      const h = type === 'shape' ? (Number(n.style?.height) || (n.data.height as number) || null) : null
+      upsertElement(id, board.id, type, n.position.x, n.position.y, clean(n.data), w, h).catch(err => console.error('undo upsert failed:', err))
+    }
+    // delete elements that exist now but are gone in the target
+    for (const el of elementsRef.current) {
+      if (!targetIds.has(el.id)) deleteElement(el.id).catch(() => {})
+    }
+    setElements(targetEls.map(n => {
+      const id = n.id.replace('el-', '')
+      const existing = elementsRef.current.find(e => e.id === id)
+      const type = elTypeOf(n.type) as BoardElement['type']
+      return {
+        id, board_id: board.id, type, x: n.position.x, y: n.position.y,
+        width: type === 'shape' ? (Number(n.style?.width) || (n.data.width as number) || null) : (existing?.width ?? null),
+        height: type === 'shape' ? (Number(n.style?.height) || (n.data.height as number) || null) : (existing?.height ?? null),
+        data: clean(n.data), created_at: existing?.created_at ?? new Date().toISOString(),
+      } as BoardElement
+    }))
+    // restore positions of lists / cards / sub-tabs
+    for (const n of s.nodes) {
+      if (n.id.startsWith('list-')) updateListPosition(n.id.replace('list-', ''), n.position.x, n.position.y)
+      else if (n.id.startsWith('card-')) updateCardPosition(n.id.replace('card-', ''), n.position.x, n.position.y)
+      else if (n.id.startsWith('sub-')) updateBoardFreePosition(n.id.replace('sub-', ''), n.position.x, n.position.y)
+    }
+  }
+
+  function applySnapshot(s: Snapshot) {
+    restoringRef.current = true
+    setNodes(s.nodes)
+    setEdges(s.edges)
+    lastSnapRef.current = s
+    lastSigRef.current = sigOf(s.nodes, s.edges)
+    reconcileDb(s)
+    setTimeout(() => { restoringRef.current = false }, 0)
+  }
+
+  function undo() {
+    const prev = pastRef.current.pop()
+    if (!prev) return
+    futureRef.current.push({ nodes: nodesRef.current, edges: edgesRef.current })
+    applySnapshot(prev)
+  }
+
+  function redo() {
+    const next = futureRef.current.pop()
+    if (!next) return
+    pastRef.current.push({ nodes: nodesRef.current, edges: edgesRef.current })
+    applySnapshot(next)
+  }
 
   // Recolor every selected shape/drawing/text via a toolbar swatch
   const COLORABLE = new Set(['shapeNode', 'drawingNode', 'textNode'])
@@ -383,14 +512,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         const file = (e.target as HTMLInputElement).files?.[0]
         if (!file) return
         const reader = new FileReader()
-        reader.onload = async ev => {
+        reader.onload = ev => {
           const url = ev.target?.result as string
-          const el = await createElement(board.id, 'image', x, y, { url, alt: file.name })
-          setElements(prev => [...prev, el])
-          setNodes(prev => [...prev, {
-            id: `el-${el.id}`, type: 'imageNode', position: { x, y },
-            data: { url, alt: file.name, onDelete: (id: string) => handleDeleteNode(id, 'element') },
-          }])
+          addElement('image', x, y, { url, alt: file.name })
         }
         reader.readAsDataURL(file)
       }
@@ -441,7 +565,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setCurrentPath(pts.reduce((acc, p, i) => i === 0 ? `M ${p.x} ${p.y}` : `${acc} L ${p.x} ${p.y}`, ''))
   }
 
-  async function onDrawPointerUp(e: React.PointerEvent<SVGSVGElement>) {
+  function onDrawPointerUp(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'draw' || !drawingRef.current) return
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
     const pts = drawingRef.current.points
@@ -456,24 +580,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       i === 0 ? `M ${p.x - minX + 5} ${p.y - minY + 5}` : `${acc} L ${p.x - minX + 5} ${p.y - minY + 5}`, '')
     const flowPos = overlayToFlow(minX, minY)
     const data = { path: normalizedPath, color: drawColor, strokeWidth: 2, bbox: { width: maxX - minX, height: maxY - minY } }
-    // Render immediately, then persist — node stays even if the DB write fails
-    const tempId = `el-tmp-${crypto.randomUUID()}`
-    setNodes(prev => [...prev, {
-      id: tempId, type: 'drawingNode', position: { x: flowPos.x, y: flowPos.y },
-      data: { ...data, onDelete: (id: string) => handleDeleteNode(id, 'element') },
-    }])
-    try {
-      const el = await createElement(board.id, 'drawing', flowPos.x, flowPos.y, data)
-      setElements(prev => [...prev, el])
-      setNodes(prev => prev.map(n => n.id === tempId ? { ...n, id: `el-${el.id}` } : n))
-    } catch (err) {
-      console.error('Failed to save drawing (board_elements table may be missing):', err)
-    }
+    addElement('drawing', flowPos.x, flowPos.y, data)
     // Stay in draw mode for further strokes; click Select to stop
   }
 
   // ── Shape: click to anchor, move to size (live preview), click again to commit ──
-  async function onShapePointerDown(e: React.PointerEvent<SVGSVGElement>) {
+  function onShapePointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'shape') return
     const pt = getOverlayPoint(e.clientX, e.clientY)
     if (!shapeAnchor) {
@@ -489,42 +601,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setShapeAnchor(null)
     setShapePreview(null)
     const flowPos = overlayToFlow(x, y)
-    const data = { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h }
-    // Render immediately, then persist — node stays even if the DB write fails
-    const tempId = `el-tmp-${crypto.randomUUID()}`
-    setNodes(prev => [...prev, {
-      id: tempId, type: 'shapeNode', position: { x: flowPos.x, y: flowPos.y }, style: { width: w, height: h },
-      data: { ...data, onDelete: (id: string) => handleDeleteNode(id, 'element'), onSave: saveElement, onHold: holdNode },
-    }])
-    try {
-      const el = await createElement(board.id, 'shape', flowPos.x, flowPos.y, data, w, h)
-      setElements(prev => [...prev, el])
-      setNodes(prev => prev.map(n => n.id === tempId ? { ...n, id: `el-${el.id}` } : n))
-    } catch (err) {
-      console.error('Failed to save shape (board_elements table may be missing):', err)
-    }
+    addElement('shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h }, w, h)
     // Stay in shape mode for further shapes; click Select to stop
   }
 
   // ── Text: click to drop a text box where you want, then type ──
-  async function onTextPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+  function onTextPointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'text') return
     const op = getOverlayPoint(e.clientX, e.clientY)
     const flowPos = overlayToFlow(op.x, op.y)
-    const data = { text: '', color: '#1f2937', fontSize: 18 }
-    const tempId = `el-tmp-${crypto.randomUUID()}`
-    setNodes(prev => [...prev, {
-      id: tempId, type: 'textNode', position: { x: flowPos.x, y: flowPos.y },
-      data: { ...data, autoEdit: true, onDelete: (id: string) => handleDeleteNode(id, 'element'), onSave: saveElement },
-    }])
+    addElement('text', flowPos.x, flowPos.y, { text: '', color: '#1f2937', fontSize: 18 }, undefined, undefined, { autoEdit: true })
     setTool('select') // drop the overlay so you can immediately type
-    try {
-      const el = await createElement(board.id, 'text', flowPos.x, flowPos.y, data)
-      setElements(prev => [...prev, el])
-      setNodes(prev => prev.map(n => n.id === tempId ? { ...n, id: `el-${el.id}` } : n))
-    } catch (err) {
-      console.error('Failed to save text (board_elements table may be missing):', err)
-    }
   }
 
   function onShapePointerMove(e: React.PointerEvent<SVGSVGElement>) {
@@ -544,20 +631,23 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool !== 'draw') { drawingRef.current = null; setCurrentPath('') }
   }, [tool])
 
-  // 'h' toggles the hand (pan) tool — ignored while typing in a field
+  // Keyboard: Ctrl+Z undo, Ctrl+X redo, H = hand tool — all ignored while typing
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const el = e.target as HTMLElement | null
       const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
-      if (typing || e.metaKey || e.ctrlKey || e.altKey) return
-      if (e.key === 'h' || e.key === 'H') {
+      if (typing) return
+      const mod = e.ctrlKey || e.metaKey
+      if (mod && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); return }
+      if (mod && (e.key === 'x' || e.key === 'X')) { e.preventDefault(); redo(); return }
+      if (!mod && !e.altKey && (e.key === 'h' || e.key === 'H')) {
         e.preventDefault()
         setTool(prev => (prev === 'hand' ? 'select' : 'hand'))
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Overlay (draw/shape/text) intercepts pointer input; hand & select do not
   const overlayActive = tool === 'draw' || tool === 'shape' || tool === 'text'
