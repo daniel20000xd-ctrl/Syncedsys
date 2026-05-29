@@ -9,14 +9,14 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, createEdge, deleteEdge, deleteBoard,
   createElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition,
 } from '@/app/actions'
-import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode } from './nodes'
+import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode } from './nodes'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -25,14 +25,16 @@ const nodeTypes: NodeTypes = {
   imageNode: ImageNode,
   drawingNode: DrawingNode,
   subTabNode: SubTabNode,
+  textNode: TextNode,
 }
 
-type Tool = 'select' | 'draw' | 'shape'
+type Tool = 'select' | 'draw' | 'shape' | 'text'
 
 const TOOL_ICONS: Record<Tool, LucideIcon> = {
   select: MousePointer2,
   draw: Pencil,
   shape: Square,
+  text: Type,
 }
 type ShapeType = 'rect' | 'circle' | 'diamond'
 
@@ -44,6 +46,7 @@ function buildNodes(
   onDeleteNode: (id: string, type: string) => void,
   onNavigate: (boardId: string) => void,
   onHold: (id: string) => void,
+  onSave: (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void,
 ): Node[] {
   const listNodes: Node[] = lists.map((l, i) => ({
     id: `list-${l.id}`,
@@ -70,18 +73,25 @@ function buildNodes(
     },
   }))
 
-  const elementNodes: Node[] = elements.map(el => ({
-    id: `el-${el.id}`,
-    type: el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : 'drawingNode',
-    position: { x: el.x, y: el.y },
-    data: {
-      ...el.data,
-      width: el.width ?? undefined,
-      height: el.height ?? undefined,
-      onDelete: (nodeId: string) => onDeleteNode(nodeId, 'element'),
-      onHold,
-    },
-  }))
+  const elementNodes: Node[] = elements.map(el => {
+    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : 'drawingNode'
+    const base: Node = {
+      id: `el-${el.id}`,
+      type,
+      position: { x: el.x, y: el.y },
+      data: {
+        ...el.data,
+        width: el.width ?? undefined,
+        height: el.height ?? undefined,
+        onDelete: (nodeId: string) => onDeleteNode(nodeId, 'element'),
+        onSave,
+        // Shapes/text manage their own scaling/sizing, so no hold-to-scale on them
+        ...(el.type === 'shape' || el.type === 'text' ? {} : { onHold }),
+      },
+    }
+    if (el.type === 'shape') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
+    return base
+  })
 
   const subTabNodes: Node[] = subBoards.map((sb, i) => ({
     id: `sub-${sb.id}`,
@@ -134,7 +144,7 @@ interface Props {
 
 function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [] }: Props) {
   const router = useRouter()
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, getViewport, setViewport } = useReactFlow()
   const [lists, setLists] = useState(initialLists)
   const [cards, setCards] = useState(initialCards)
   const [elements, setElements] = useState(initialElements)
@@ -158,6 +168,23 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const heldNodeRef = useRef<string | null>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const setNodesRef = useRef<typeof setNodes | null>(null)
+
+  // Middle-mouse panning while a tool overlay is active
+  const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
+
+  // Latest elements for persistence callbacks
+  const elementsRef = useRef(elements)
+  useEffect(() => { elementsRef.current = elements }, [elements])
+
+  const saveElement = useCallback((nodeId: string, dataObj: Record<string, unknown>, w?: number, h?: number) => {
+    const rawId = nodeId.replace('el-', '')
+    const clean = Object.fromEntries(Object.entries(dataObj).filter(([, v]) => typeof v !== 'function'))
+    setElements(prev => prev.map(e => e.id === rawId
+      ? { ...e, data: clean, ...(w != null ? { width: w } : {}), ...(h != null ? { height: h } : {}) }
+      : e))
+    updateElement(rawId, { data: clean, ...(w != null ? { width: w } : {}), ...(h != null ? { height: h } : {}) })
+      .catch(err => console.error('Failed to persist element:', err))
+  }, [])
 
   const navigate = useCallback((bid: string) => router.push(`/board/${bid}`), [router])
 
@@ -183,7 +210,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const holdNode = useCallback((id: string) => { heldNodeRef.current = id }, [])
 
   const [nodes, setNodes, onNodesChange] = useNodesState(
-    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode)
+    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement)
   )
   const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(cards, initialEdges))
 
@@ -408,8 +435,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     // Render immediately, then persist — node stays even if the DB write fails
     const tempId = `el-tmp-${crypto.randomUUID()}`
     setNodes(prev => [...prev, {
-      id: tempId, type: 'shapeNode', position: { x: flowPos.x, y: flowPos.y },
-      data: { ...data, onDelete: (id: string) => handleDeleteNode(id, 'element') },
+      id: tempId, type: 'shapeNode', position: { x: flowPos.x, y: flowPos.y }, style: { width: w, height: h },
+      data: { ...data, onDelete: (id: string) => handleDeleteNode(id, 'element'), onSave: saveElement },
     }])
     try {
       const el = await createElement(board.id, 'shape', flowPos.x, flowPos.y, data, w, h)
@@ -419,6 +446,27 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       console.error('Failed to save shape (board_elements table may be missing):', err)
     }
     // Stay in shape mode for further shapes; click Select to stop
+  }
+
+  // ── Text: click to drop a text box where you want, then type ──
+  async function onTextPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    if (tool !== 'text') return
+    const op = getOverlayPoint(e.clientX, e.clientY)
+    const flowPos = overlayToFlow(op.x, op.y)
+    const data = { text: '', color: '#1f2937', fontSize: 18 }
+    const tempId = `el-tmp-${crypto.randomUUID()}`
+    setNodes(prev => [...prev, {
+      id: tempId, type: 'textNode', position: { x: flowPos.x, y: flowPos.y },
+      data: { ...data, autoEdit: true, onDelete: (id: string) => handleDeleteNode(id, 'element'), onSave: saveElement },
+    }])
+    setTool('select') // drop the overlay so you can immediately type
+    try {
+      const el = await createElement(board.id, 'text', flowPos.x, flowPos.y, data)
+      setElements(prev => [...prev, el])
+      setNodes(prev => prev.map(n => n.id === tempId ? { ...n, id: `el-${el.id}` } : n))
+    } catch (err) {
+      console.error('Failed to save text (board_elements table may be missing):', err)
+    }
   }
 
   function onShapePointerMove(e: React.PointerEvent<SVGSVGElement>) {
@@ -438,7 +486,53 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool !== 'draw') { drawingRef.current = null; setCurrentPath('') }
   }, [tool])
 
-  const isDrawingMode = tool === 'draw' || tool === 'shape'
+  // Overlay is present for any non-select tool
+  const overlayActive = tool !== 'select'
+
+  // ── Navigation that works regardless of the active tool ──
+  function onOverlayWheel(e: React.WheelEvent<SVGSVGElement>) {
+    if (heldNodeRef.current) return // node scaling handled by the window wheel listener
+    e.preventDefault()
+    const vp = getViewport()
+    const factor = e.deltaY > 0 ? 0.9 : 1.1
+    const newZoom = Math.max(0.05, Math.min(4, vp.zoom * factor))
+    const f = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    setViewport({ zoom: newZoom, x: vp.x + f.x * (vp.zoom - newZoom), y: vp.y + f.y * (vp.zoom - newZoom) })
+  }
+
+  function onOverlayPointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    if (e.button === 1 || e.button === 2) {
+      // Middle/right mouse → pan
+      e.preventDefault()
+      try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
+      const vp = getViewport()
+      panRef.current = { sx: e.clientX, sy: e.clientY, vx: vp.x, vy: vp.y }
+      return
+    }
+    if (e.button !== 0) return
+    if (tool === 'draw') onDrawPointerDown(e)
+    else if (tool === 'shape') onShapePointerDown(e)
+    else if (tool === 'text') onTextPointerDown(e)
+  }
+
+  function onOverlayPointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    if (panRef.current) {
+      const { sx, sy, vx, vy } = panRef.current
+      setViewport({ zoom: getViewport().zoom, x: vx + (e.clientX - sx), y: vy + (e.clientY - sy) })
+      return
+    }
+    if (tool === 'draw') onDrawPointerMove(e)
+    else if (tool === 'shape') onShapePointerMove(e)
+  }
+
+  function onOverlayPointerUp(e: React.PointerEvent<SVGSVGElement>) {
+    if (panRef.current) {
+      panRef.current = null
+      try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+      return
+    }
+    if (tool === 'draw') onDrawPointerUp(e)
+  }
 
   return (
     <div
@@ -460,11 +554,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         minZoom={0.05}
         maxZoom={4}
         deleteKeyCode="Delete"
-        nodesDraggable={!isDrawingMode}
-        panOnDrag={!isDrawingMode}
-        zoomOnScroll={!isDrawingMode}
+        nodesDraggable={!overlayActive}
+        panOnDrag={!overlayActive}
+        zoomOnScroll
+        zoomOnPinch
         onPaneClick={e => {
-          if (isDrawingMode) return
+          if (overlayActive) return
           const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
           setContextMenu({ x: e.clientX, y: e.clientY, flowX: flowPos.x, flowY: flowPos.y })
         }}
@@ -474,14 +569,16 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         <Controls />
       </ReactFlow>
 
-      {isDrawingMode && (
+      {overlayActive && (
         <svg
           ref={svgOverlayRef}
           className="absolute inset-0 w-full h-full"
-          style={{ cursor: 'crosshair', zIndex: 10, pointerEvents: 'all', touchAction: 'none' }}
-          onPointerDown={tool === 'draw' ? onDrawPointerDown : onShapePointerDown}
-          onPointerMove={tool === 'draw' ? onDrawPointerMove : onShapePointerMove}
-          onPointerUp={tool === 'draw' ? onDrawPointerUp : undefined}
+          style={{ cursor: tool === 'text' ? 'text' : 'crosshair', zIndex: 10, pointerEvents: 'all', touchAction: 'none' }}
+          onPointerDown={onOverlayPointerDown}
+          onPointerMove={onOverlayPointerMove}
+          onPointerUp={onOverlayPointerUp}
+          onWheel={onOverlayWheel}
+          onContextMenu={e => e.preventDefault()}
         >
           {currentPath && <path d={currentPath} fill="none" stroke={drawColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
           {shapePreview && (
@@ -509,7 +606,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       {/* Toolbar — rendered above the drawing overlay (z-20 > overlay z-10) so it stays clickable while drawing */}
       <div className="absolute top-3 right-3 z-20 bg-white rounded-xl shadow-lg p-2 flex flex-col gap-1.5">
         <div className="flex flex-col gap-1.5">
-          {(['select', 'draw', 'shape'] as Tool[]).map(t => {
+          {(['select', 'draw', 'shape', 'text'] as Tool[]).map(t => {
             const Icon = TOOL_ICONS[t]
             return (
               <button
@@ -523,6 +620,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
             )
           })}
         </div>
+        {tool === 'text' && (
+          <p className="text-[9px] text-gray-400 text-center w-16 leading-tight mt-1 pt-1 border-t border-gray-100">Click to place text</p>
+        )}
+        {tool !== 'select' && (
+          <p className="text-[8px] text-gray-300 text-center w-16 leading-tight">Scroll = zoom · middle-drag = pan</p>
+        )}
         {tool === 'draw' && (
           <div className="flex flex-col items-center gap-1 mt-1 pt-1 border-t border-gray-100">
             {SHAPE_COLORS.map(c => (

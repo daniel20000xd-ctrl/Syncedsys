@@ -1,9 +1,10 @@
 'use client'
 
-import { Handle, Position, NodeProps, useReactFlow } from '@xyflow/react'
+import { Handle, Position, NodeProps, useReactFlow, NodeResizer } from '@xyflow/react'
 import { useState } from 'react'
 import { Plus, X, ExternalLink } from 'lucide-react'
-import { deleteElement } from '@/app/actions'
+
+type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
 // ── List Node ────────────────────────────────────────────────────────────────
 
@@ -90,46 +91,114 @@ export function CardNode({ id, data }: NodeProps) {
 
 // ── Shape Node ───────────────────────────────────────────────────────────────
 
-export function ShapeNode({ id, data }: NodeProps) {
+export function ShapeNode({ id, data, selected }: NodeProps) {
   const shape = data.shape as string
   const fill = (data.fill as string) || '#93c5fd'
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState((data.label as string) || '')
   const { updateNodeData } = useReactFlow()
-  const scale = (data.scale as number) ?? 1
-  const onHold = data.onHold as ((id: string) => void) | undefined
-  const width = (data.width as number) || 120
-  const height = (data.height as number) || 80
+  const onSave = data.onSave as SaveFn | undefined
 
   const shapeClass = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : 'rounded-lg'
 
+  function commit() {
+    updateNodeData(id, { ...data, label: text })
+    setEditing(false)
+    onSave?.(id, { shape, fill, label: text })
+  }
+
   return (
-    <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
-      <div className="relative group select-none" style={{ width, height }}>
-        <Handle type="target" position={Position.Top} className="!bg-gray-500 !w-3 !h-3" />
-        <Handle type="target" position={Position.Left} className="!bg-gray-500 !w-3 !h-3" />
-        <div className={`w-full h-full flex items-center justify-center shadow ${shapeClass}`} style={{ backgroundColor: fill }} onDoubleClick={() => setEditing(true)}>
-          {editing ? (
-            <input
-              autoFocus value={text}
-              onChange={e => setText(e.target.value)}
-              onBlur={() => { updateNodeData(id, { ...data, label: text }); setEditing(false) }}
-              onKeyDown={e => { if (e.key === 'Enter') { updateNodeData(id, { ...data, label: text }); setEditing(false) } }}
-              className={`w-3/4 text-center text-xs bg-transparent border-b border-white focus:outline-none text-white font-medium ${shape === 'diamond' ? '-rotate-45' : ''}`}
-            />
-          ) : (
-            <span className={`text-xs font-medium text-white text-center px-1 ${shape === 'diamond' ? '-rotate-45' : ''}`}>{text || '…'}</span>
-          )}
-        </div>
-        <button
-          className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500"
-          onClick={() => (data.onDelete as (id: string) => void)(id)}
-        >
-          <X size={11} />
-        </button>
-        <Handle type="source" position={Position.Bottom} className="!bg-gray-500 !w-3 !h-3" />
-        <Handle type="source" position={Position.Right} className="!bg-gray-500 !w-3 !h-3" />
+    <div className="relative group select-none w-full h-full">
+      {/* Drag the edges/corners to transform freely (shown when selected) */}
+      <NodeResizer
+        minWidth={40}
+        minHeight={30}
+        isVisible={!!selected}
+        lineClassName="!border-blue-400"
+        handleClassName="!bg-white !border-2 !border-blue-400 !w-2.5 !h-2.5 !rounded-sm"
+        onResizeEnd={(_, p) => onSave?.(id, { shape, fill, label: text }, p.width, p.height)}
+      />
+      <Handle type="target" position={Position.Top} className="!bg-gray-500 !w-3 !h-3" />
+      <Handle type="target" position={Position.Left} className="!bg-gray-500 !w-3 !h-3" />
+      <div
+        className={`w-full h-full flex items-center justify-center shadow ${shapeClass}`}
+        style={{ backgroundColor: fill }}
+        onClick={() => setEditing(true)}
+        title="Click to edit text"
+      >
+        {editing ? (
+          <textarea
+            autoFocus
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
+            className={`nodrag w-4/5 h-3/5 resize-none text-center text-xs bg-white/20 rounded focus:outline-none text-white font-medium ${shape === 'diamond' ? '-rotate-45' : ''}`}
+          />
+        ) : (
+          <span className={`text-xs font-medium text-white text-center px-1 break-words ${shape === 'diamond' ? '-rotate-45' : ''}`}>{text || '…'}</span>
+        )}
       </div>
+      <button
+        className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500 z-10"
+        onClick={() => (data.onDelete as (id: string) => void)(id)}
+      >
+        <X size={11} />
+      </button>
+      <Handle type="source" position={Position.Bottom} className="!bg-gray-500 !w-3 !h-3" />
+      <Handle type="source" position={Position.Right} className="!bg-gray-500 !w-3 !h-3" />
+    </div>
+  )
+}
+
+// ── Text Node ────────────────────────────────────────────────────────────────
+
+export function TextNode({ id, data }: NodeProps) {
+  const { updateNodeData } = useReactFlow()
+  const [editing, setEditing] = useState(!!data.autoEdit)
+  const [text, setText] = useState((data.text as string) || '')
+  const color = (data.color as string) || '#1f2937'
+  const fontSize = (data.fontSize as number) || 18
+  const onSave = data.onSave as SaveFn | undefined
+
+  function commit() {
+    updateNodeData(id, { ...data, text, autoEdit: false })
+    setEditing(false)
+    onSave?.(id, { text, color, fontSize })
+  }
+
+  return (
+    <div className="relative group">
+      <Handle type="target" position={Position.Top} className="!bg-gray-400 !w-2.5 !h-2.5" />
+      {editing ? (
+        <textarea
+          autoFocus
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
+          placeholder="Type…"
+          className="nodrag min-w-[120px] bg-white/90 rounded px-1.5 py-1 resize-none focus:outline-none shadow-sm"
+          style={{ color, fontSize, fontWeight: 500 }}
+          rows={2}
+        />
+      ) : (
+        <div
+          onClick={() => setEditing(true)}
+          className="whitespace-pre-wrap px-1.5 py-1 cursor-text min-w-[40px]"
+          style={{ color, fontSize, fontWeight: 500 }}
+          title="Click to edit"
+        >
+          {text || 'Text'}
+        </div>
+      )}
+      <button
+        className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500 z-10"
+        onClick={() => (data.onDelete as (id: string) => void)(id)}
+      >
+        <X size={11} />
+      </button>
+      <Handle type="source" position={Position.Bottom} className="!bg-gray-400 !w-2.5 !h-2.5" />
     </div>
   )
 }

@@ -241,7 +241,7 @@ export async function deleteEdge(edgeId: string) {
 
 export async function createElement(
   boardId: string,
-  type: 'shape' | 'image' | 'drawing',
+  type: 'shape' | 'image' | 'drawing' | 'text',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number, height?: number
