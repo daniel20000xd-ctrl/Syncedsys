@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Plus, ChevronDown } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { createSubTab } from '@/app/actions'
+import { createSubTab, deleteBoard } from '@/app/actions'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
 function getAncestorChain(allBoards: Board[], boardId: string): Board[] {
@@ -146,6 +146,14 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
             anchorRect={openPanel.rect}
             onClose={() => setOpenPanel(null)}
             onUpdate={() => { setOpenPanel(null); router.refresh() }}
+            onRemove={() => {
+              if (!confirm(`Remove "${board.name}" and everything in it?`)) return
+              const wasActive = pathname === `/board/${board.id}`
+              setOpenPanel(null)
+              deleteBoard(board.id).catch(() => {})
+              if (wasActive) router.push(board.parent_id ? `/board/${board.parent_id}` : '/boards')
+              else router.refresh()
+            }}
           />
         )
       })()}

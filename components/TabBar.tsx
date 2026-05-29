@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Plus, LayoutGrid, ChevronDown } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { createBoard } from '@/app/actions'
+import { createBoard, deleteBoard } from '@/app/actions'
 import NewBoardModal from './NewBoardModal'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
@@ -111,6 +111,14 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
               setBoards(prev => prev.map(b => b.id === updated.id ? updated : b))
               setOpenPanel(null)
               router.refresh()
+            }}
+            onRemove={() => {
+              if (!confirm(`Remove "${board.name}" and everything in it?`)) return
+              const wasActive = pathname === `/board/${board.id}`
+              setBoards(prev => prev.filter(b => b.id !== board.id))
+              setOpenPanel(null)
+              deleteBoard(board.id).catch(() => {})
+              if (wasActive) router.push('/boards'); else router.refresh()
             }}
           />
         )
