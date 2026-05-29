@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Folder } from 'lucide-react'
+import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Folder, Frame } from 'lucide-react'
 import { useUnits, unitsStore, type Unit } from '@/lib/unitsStore'
 
 const KIND_ICON: Record<Unit['kind'], typeof Square> = {
@@ -12,6 +12,7 @@ const KIND_ICON: Record<Unit['kind'], typeof Square> = {
   image: ImageIcon,
   drawing: Pencil,
   subtab: Folder,
+  portal: Frame,
   unknown: Square,
 }
 

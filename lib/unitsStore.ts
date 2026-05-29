@@ -5,7 +5,7 @@ import { useSyncExternalStore } from 'react'
 // A "unit" is anything that can live on a free-mode board.
 export type Unit = {
   id: string        // react-flow node id (e.g. "el-...", "list-...", "sub-...")
-  kind: 'list' | 'card' | 'shape' | 'drawing' | 'text' | 'image' | 'subtab' | 'unknown'
+  kind: 'list' | 'card' | 'shape' | 'drawing' | 'text' | 'image' | 'subtab' | 'portal' | 'unknown'
   label: string
   opacity: number   // 0..1
   selected: boolean

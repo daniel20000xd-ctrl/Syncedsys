@@ -5,7 +5,7 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef } from 'react'
-import { Plus, X, ExternalLink, ChevronDown } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2 } from 'lucide-react'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
@@ -396,6 +396,181 @@ export function SubTabNode({ id, data }: NodeProps) {
         >
           <X size={11} />
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Portal Node ──────────────────────────────────────────────────────────────
+// A resizable window that shows a live, read-only view of another tab (board).
+
+type PortalContent = {
+  lists: { id: string; name: string; x: number; y: number }[]
+  cards: { id: string; list_id: string; title: string; x: number; y: number }[]
+  elements: { id: string; type: string; x: number; y: number; width: number | null; height: number | null; data: Record<string, unknown> }[]
+}
+
+function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
+  const d = el.data || {}
+  if (el.type === 'shape') {
+    const shape = d.shape as string
+    const cls = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : 'rounded-lg'
+    return <div style={{ position: 'absolute', left: el.x, top: el.y, width: el.width ?? 120, height: el.height ?? 80, backgroundColor: (d.fill as string) || '#93c5fd' }} className={`shadow ${cls}`} />
+  }
+  if (el.type === 'text') {
+    return <div style={{ position: 'absolute', left: el.x, top: el.y, color: (d.color as string) || '#1f2937', fontSize: (d.fontSize as number) || 18, fontWeight: 500 }} className="whitespace-pre-wrap">{(d.text as string) || 'Text'}</div>
+  }
+  if (el.type === 'image') {
+    /* eslint-disable-next-line @next/next/no-img-element */
+    return <img src={d.url as string} alt="" style={{ position: 'absolute', left: el.x, top: el.y, width: 200 }} className="rounded-lg shadow" draggable={false} />
+  }
+  if (el.type === 'drawing') {
+    const bbox = (d.bbox as { width: number; height: number }) || { width: 50, height: 50 }
+    return (
+      <svg style={{ position: 'absolute', left: el.x, top: el.y, overflow: 'visible' }} width={bbox.width + 10} height={bbox.height + 10}>
+        <path d={d.path as string} fill="none" stroke={(d.color as string) || '#1d4ed8'} strokeWidth={(d.strokeWidth as number) || 2} strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+  return null
+}
+
+export function PortalNode({ id, data, selected }: NodeProps) {
+  const targetBoardId = (data.targetBoardId as string | null) ?? null
+  const zoom = (data.zoom as number) ?? 0.4
+  const onSave = data.onSave as SaveFn | undefined
+  const onOpenFully = data.onOpenFully as ((boardId: string) => void) | undefined
+  const onHold = data.onHold as ((id: string) => void) | undefined
+
+  const { updateNodeData } = useReactFlow()
+  const [choosing, setChoosing] = useState(false)
+  const [boards, setBoards] = useState<{ id: string; name: string; color: string }[]>([])
+  const [content, setContent] = useState<PortalContent | null>(null)
+  const [pan, setPan] = useState({ x: (data.vx as number) ?? 20, y: (data.vy as number) ?? 20 })
+  const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
+
+  function persist(patch: Record<string, unknown>) {
+    const next = { targetBoardId, vx: pan.x, vy: pan.y, zoom, width: data.width, height: data.height, ...patch }
+    updateNodeData(id, next) // update the live node so the portal reacts immediately
+    onSave?.(id, next, data.width as number | undefined, data.height as number | undefined)
+  }
+
+  useEffect(() => {
+    let cancel = false
+    import('@/lib/supabase/client').then(({ createClient }) => {
+      createClient().from('boards').select('id,name,color').order('created_at').then(({ data: b }) => { if (!cancel) setBoards(b ?? []) })
+    })
+    return () => { cancel = true }
+  }, [])
+
+  useEffect(() => {
+    if (!targetBoardId) { setContent(null); return }
+    let cancel = false
+    import('@/lib/supabase/client').then(async ({ createClient }) => {
+      const s = createClient()
+      const [{ data: lists }, { data: elements }] = await Promise.all([
+        s.from('lists').select('id,name,x,y').eq('board_id', targetBoardId),
+        s.from('board_elements').select('id,type,x,y,width,height,data').eq('board_id', targetBoardId),
+      ])
+      const listIds = (lists ?? []).map(l => l.id)
+      const cardsRes = listIds.length ? await s.from('cards').select('id,list_id,title,x,y').in('list_id', listIds) : { data: [] }
+      if (!cancel) setContent({ lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [] })
+    })
+    return () => { cancel = true }
+  }, [targetBoardId])
+
+  const target = boards.find(b => b.id === targetBoardId)
+
+  function onContentPointerDown(e: React.PointerEvent) {
+    e.stopPropagation()
+    ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
+    panRef.current = { sx: e.clientX, sy: e.clientY, vx: pan.x, vy: pan.y }
+  }
+  function onContentPointerMove(e: React.PointerEvent) {
+    if (!panRef.current) return
+    e.stopPropagation()
+    setPan({ x: panRef.current.vx + (e.clientX - panRef.current.sx), y: panRef.current.vy + (e.clientY - panRef.current.sy) })
+  }
+  function onContentPointerUp(e: React.PointerEvent) {
+    if (!panRef.current) return
+    e.stopPropagation()
+    panRef.current = null
+    persist({ vx: pan.x, vy: pan.y })
+  }
+
+  return (
+    <div className="relative group w-full h-full" onMouseDown={() => onHold?.(id)}>
+      <NodeResizer
+        minWidth={120}
+        minHeight={90}
+        isVisible={!!selected}
+        lineClassName="!border-fuchsia-400"
+        handleClassName="!bg-white !border-2 !border-fuchsia-400 !w-2.5 !h-2.5 !rounded-sm"
+        onResizeEnd={(_, p) => persist({ width: p.width, height: p.height })}
+      />
+      <SideHandles color="!bg-fuchsia-500" />
+
+      <div className="w-full h-full rounded-lg overflow-hidden shadow-lg ring-1 ring-fuchsia-400/40 bg-[#1d2125] relative">
+        {targetBoardId && (
+          <div
+            className="nodrag absolute inset-0 cursor-grab active:cursor-grabbing"
+            style={{ backgroundColor: target?.color ?? '#0079bf' }}
+            onPointerDown={onContentPointerDown}
+            onPointerMove={onContentPointerMove}
+            onPointerUp={onContentPointerUp}
+          >
+            <div style={{ position: 'absolute', transformOrigin: '0 0', transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+              {content?.lists.map(l => (
+                <div key={l.id} style={{ position: 'absolute', left: l.x, top: l.y }} className="bg-[#ebecf0] rounded-xl shadow px-3 py-2 w-52 text-sm font-semibold text-gray-800">{l.name}</div>
+              ))}
+              {content?.cards.map(c => (
+                <div key={c.id} style={{ position: 'absolute', left: c.x, top: c.y }} className="bg-white rounded-lg shadow border border-gray-200 w-44 p-2 text-sm text-gray-800">{c.title}</div>
+              ))}
+              {content?.elements.map(el => <MiniUnit key={el.id} el={el} />)}
+            </div>
+          </div>
+        )}
+
+        {(!targetBoardId) && (
+          <div className="absolute inset-0 flex items-center justify-center border-2 border-dashed border-fuchsia-400/60">
+            <button
+              onClick={e => { e.stopPropagation(); setChoosing(v => !v) }}
+              className="nodrag bg-fuchsia-500 hover:bg-fuchsia-600 text-white text-xs px-3 py-1.5 rounded-lg shadow"
+            >
+              Choose a tab…
+            </button>
+          </div>
+        )}
+
+        {/* top bar: drag handle to move the portal + actions */}
+        <div className="absolute top-0 left-0 right-0 h-6 bg-black/40 flex items-center justify-between px-1.5 text-white/80 text-[10px]">
+          <span className="truncate">{target ? `↪ ${target.name}` : 'Portal'}</span>
+          <div className="flex items-center gap-0.5">
+            {targetBoardId && (
+              <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Change tab" onClick={e => { e.stopPropagation(); setChoosing(v => !v) }}><ChevronDown size={11} /></button>
+            )}
+            {targetBoardId && (
+              <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Open this tab fully" onClick={e => { e.stopPropagation(); onOpenFully?.(targetBoardId) }}><Maximize2 size={11} /></button>
+            )}
+            <button className="nodrag p-0.5 rounded hover:bg-red-500/50" title="Remove portal" onClick={e => { e.stopPropagation(); (data.onDelete as (id: string) => void)(id) }}><X size={11} /></button>
+          </div>
+        </div>
+
+        {choosing && (
+          <div className="nodrag absolute top-7 right-1.5 z-10 bg-white rounded-lg shadow-xl border border-gray-200 py-1 w-40 max-h-44 overflow-y-auto">
+            {boards.length === 0 && <p className="px-3 py-1.5 text-xs text-gray-400">Loading…</p>}
+            {boards.map(b => (
+              <button
+                key={b.id}
+                onClick={e => { e.stopPropagation(); setChoosing(false); persist({ targetBoardId: b.id }) }}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 text-left"
+              >
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                <span className="truncate">{b.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
