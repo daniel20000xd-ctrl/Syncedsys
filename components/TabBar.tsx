@@ -110,6 +110,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
             onUpdate={updated => {
               setBoards(prev => prev.map(b => b.id === updated.id ? updated : b))
               setOpenPanel(null)
+              router.refresh()
             }}
           />
         )
