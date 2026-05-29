@@ -5,7 +5,7 @@ import {
   ReactFlow, Background, Controls, BackgroundVariant,
   useNodesState, useEdgesState, addEdge, ReactFlowProvider,
   useReactFlow, type Connection, type Node, type Edge,
-  type NodeTypes, Panel,
+  type NodeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
@@ -364,7 +364,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       id: `el-${el.id}`, type: 'drawingNode', position: { x: flowPos.x, y: flowPos.y },
       data: { path: normalizedPath, color: drawColor, strokeWidth: 2, bbox: { width: maxX - minX, height: maxY - minY }, onDelete: (id: string) => handleDeleteNode(id, 'element') },
     }])
-    drawingRef.current = null; setCurrentPath(''); setTool('select')
+    drawingRef.current = null; setCurrentPath('')
+    // Stay in draw mode — hold-and-draw, release ends the stroke, draw again freely
   }
 
   const shapeDragRef = useRef<{ x: number; y: number } | null>(null)
@@ -391,7 +392,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       id: `el-${el.id}`, type: 'shapeNode', position: { x: flowPos.x, y: flowPos.y },
       data: { shape: selectedShape, fill: shapeColorPicker, label: '', onDelete: (id: string) => handleDeleteNode(id, 'element') },
     }])
-    shapeDragRef.current = null; setTool('select')
+    shapeDragRef.current = null
+    // Stay in shape mode so multiple shapes can be placed; click Select to stop
   }
 
   const isDrawingMode = tool === 'draw' || tool === 'shape'
@@ -428,49 +430,6 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       >
         <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.2)" gap={24} size={1.5} />
         <Controls />
-
-        <Panel position="top-right">
-          <div className="bg-white rounded-xl shadow-lg p-2 flex flex-col gap-1.5">
-            <div className="flex gap-1.5">
-              {(['select', 'draw', 'shape'] as Tool[]).map(t => {
-                const Icon = TOOL_ICONS[t]
-                return (
-                  <button
-                    key={t}
-                    onClick={() => setTool(t)}
-                    title={t.charAt(0).toUpperCase() + t.slice(1)}
-                    className={`p-2 rounded-lg transition-colors ${tool === t ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
-                  >
-                    <Icon size={16} />
-                  </button>
-                )
-              })}
-            </div>
-            {tool === 'draw' && (
-              <div className="flex gap-1 flex-wrap mt-1 px-1">
-                {SHAPE_COLORS.map(c => (
-                  <button key={c} onClick={() => setDrawColor(c)} className={`w-5 h-5 rounded-full border-2 ${drawColor === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
-                ))}
-              </div>
-            )}
-            {tool === 'shape' && (
-              <>
-                <div className="flex gap-1 mt-1 px-1">
-                  {(['rect', 'circle', 'diamond'] as ShapeType[]).map(s => (
-                    <button key={s} onClick={() => setSelectedShape(s)} className={`text-[10px] px-2 py-1 rounded border ${selectedShape === s ? 'bg-blue-100 border-blue-400' : 'border-gray-200 text-gray-600'}`}>{s}</button>
-                  ))}
-                </div>
-                <div className="flex gap-1 flex-wrap px-1">
-                  {SHAPE_COLORS.map(c => (
-                    <button key={c} onClick={() => setShapeColorPicker(c)} className={`w-5 h-5 rounded border-2 ${shapeColorPicker === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
-                  ))}
-                </div>
-                <p className="text-[10px] text-gray-400 px-1">Drag to place</p>
-              </>
-            )}
-            <p className="text-[10px] text-gray-300 px-1 mt-1 border-t border-gray-100 pt-1">Hold node + scroll to scale</p>
-          </div>
-        </Panel>
       </ReactFlow>
 
       {isDrawingMode && (
@@ -485,6 +444,45 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           {currentPath && <path d={currentPath} fill="none" stroke={drawColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
         </svg>
       )}
+
+      {/* Toolbar — rendered above the drawing overlay (z-20 > overlay z-10) so it stays clickable while drawing */}
+      <div className="absolute top-3 right-3 z-20 bg-white rounded-xl shadow-lg p-2 flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1.5">
+          {(['select', 'draw', 'shape'] as Tool[]).map(t => {
+            const Icon = TOOL_ICONS[t]
+            return (
+              <button
+                key={t}
+                onClick={() => setTool(t)}
+                title={t.charAt(0).toUpperCase() + t.slice(1)}
+                className={`p-2 rounded-lg transition-colors ${tool === t ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+              >
+                <Icon size={16} />
+              </button>
+            )
+          })}
+        </div>
+        {tool === 'draw' && (
+          <div className="flex flex-col items-center gap-1 mt-1 pt-1 border-t border-gray-100">
+            {SHAPE_COLORS.map(c => (
+              <button key={c} onClick={() => setDrawColor(c)} className={`w-5 h-5 rounded-full border-2 ${drawColor === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+            ))}
+          </div>
+        )}
+        {tool === 'shape' && (
+          <div className="flex flex-col gap-1 mt-1 pt-1 border-t border-gray-100">
+            {(['rect', 'circle', 'diamond'] as ShapeType[]).map(s => (
+              <button key={s} onClick={() => setSelectedShape(s)} className={`text-[10px] px-2 py-1 rounded border ${selectedShape === s ? 'bg-blue-100 border-blue-400' : 'border-gray-200 text-gray-600'}`}>{s}</button>
+            ))}
+            <div className="flex flex-col items-center gap-1 mt-1">
+              {SHAPE_COLORS.map(c => (
+                <button key={c} onClick={() => setShapeColorPicker(c)} className={`w-5 h-5 rounded border-2 ${shapeColorPicker === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+              ))}
+            </div>
+            <p className="text-[9px] text-gray-400 text-center">Click to place</p>
+          </div>
+        )}
+      </div>
 
       {contextMenu && (
         <div
