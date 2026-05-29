@@ -5,7 +5,7 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2 } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal } from '@/app/actions'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
@@ -439,6 +439,8 @@ function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
 export function PortalNode({ id, data, selected }: NodeProps) {
   const targetBoardId = (data.targetBoardId as string | null) ?? null
   const home = (data.home as string | null) ?? null
+  const locked = (data.locked as boolean) ?? false
+  const fitted = (data.fitted as boolean) ?? false
   const onSave = data.onSave as SaveFn | undefined
   const onOpenFully = data.onOpenFully as ((boardId: string) => void) | undefined
   const onHold = data.onHold as ((id: string) => void) | undefined
@@ -487,8 +489,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       if (cancel) return
       const c: PortalContent = { lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [] }
       setContent(c)
-      // Auto-fit the view to the content the first time this target loads
-      if (fittedRef.current !== targetBoardId) {
+      // Auto-fit once to frame the content — never when locked or already fitted/saved
+      if (!locked && !fitted && fittedRef.current !== targetBoardId) {
         fittedRef.current = targetBoardId
         const xs: number[] = [], ys: number[] = [], xe: number[] = [], ye: number[] = []
         c.lists.forEach(l => { xs.push(l.x); ys.push(l.y); xe.push(l.x + 208); ye.push(l.y + 60) })
@@ -501,6 +503,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           const nx = (pw - (maxX - minX) * fit) / 2 - minX * fit
           const ny = (ph - (maxY - minY) * fit) / 2 - minY * fit + 24
           setZoom(fit); setPan({ x: nx, y: ny })
+          persist({ vx: nx, vy: ny, zoom: fit, fitted: true })
         }
       }
     })
@@ -513,17 +516,17 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   // Scroll to zoom inside a (non-text) portal without zooming the main board
   useEffect(() => {
     const el = contentElRef.current
-    if (!el || isText) return
+    if (!el || isText || locked) return
     function onWheel(e: WheelEvent) {
       e.preventDefault(); e.stopPropagation()
       setZoom(z => Math.max(0.05, Math.min(3, z * (e.deltaY > 0 ? 0.9 : 1.1))))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [targetBoardId, isText])
+  }, [targetBoardId, isText, locked])
 
   function onContentPointerDown(e: React.PointerEvent) {
-    if (isText) return
+    if (isText || locked) return
     e.stopPropagation()
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
     panRef.current = { sx: e.clientX, sy: e.clientY, vx: pan.x, vy: pan.y }
@@ -545,6 +548,11 @@ export function PortalNode({ id, data, selected }: NodeProps) {
     if (!targetBoardId) return
     if (textTimer.current) clearTimeout(textTimer.current)
     textTimer.current = setTimeout(() => { updateBoardContent(targetBoardId, value).catch(() => {}) }, 600)
+  }
+
+  function toggleLock() {
+    // Save the exact current view together with the new lock state
+    persist({ locked: !locked, vx: pan.x, vy: pan.y, zoom, fitted: true })
   }
 
   return (
@@ -574,7 +582,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         {targetBoardId && !isText && (
           <div
             ref={contentElRef}
-            className="nodrag nowheel absolute inset-0 cursor-grab active:cursor-grabbing"
+            className={`nodrag nowheel absolute inset-0 ${locked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}`}
             style={{ backgroundColor: target?.color ?? '#0079bf' }}
             onPointerDown={onContentPointerDown}
             onPointerMove={onContentPointerMove}
@@ -608,6 +616,15 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           <span className="truncate">{target ? `↪ ${target.name}` : 'Portal'}</span>
           <div className="flex items-center gap-0.5">
             {targetBoardId && (
+              <button
+                className={`nodrag p-0.5 rounded hover:bg-white/20 ${locked ? 'text-fuchsia-300' : ''}`}
+                title={locked ? 'Unlock view (allow pan/zoom)' : 'Lock to this view'}
+                onClick={e => { e.stopPropagation(); toggleLock() }}
+              >
+                {locked ? <Lock size={11} /> : <LockOpen size={11} />}
+              </button>
+            )}
+            {targetBoardId && !locked && (
               <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Change tab" onClick={e => { e.stopPropagation(); setChoosing(v => !v) }}><ChevronDown size={11} /></button>
             )}
             {targetBoardId && (
