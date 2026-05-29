@@ -9,6 +9,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
+import { MousePointer2, Pencil, Square, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, createEdge, deleteEdge, deleteBoard,
@@ -27,6 +28,12 @@ const nodeTypes: NodeTypes = {
 }
 
 type Tool = 'select' | 'draw' | 'shape'
+
+const TOOL_ICONS: Record<Tool, LucideIcon> = {
+  select: MousePointer2,
+  draw: Pencil,
+  shape: Square,
+}
 type ShapeType = 'rect' | 'circle' | 'diamond'
 
 const SHAPE_COLORS = ['#93c5fd','#6ee7b7','#fca5a5','#fcd34d','#c4b5fd','#f9a8d4']
@@ -421,13 +428,21 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
         <Panel position="top-right">
           <div className="bg-white rounded-xl shadow-lg p-2 flex flex-col gap-1.5">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-1">Tool</p>
-            {(['select', 'draw', 'shape'] as Tool[]).map(t => (
-              <button key={t} onClick={() => setTool(t)}
-                className={`px-3 py-1.5 rounded text-xs font-medium capitalize transition-colors ${tool === t ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>
-                {t}
-              </button>
-            ))}
+            <div className="flex gap-1.5">
+              {(['select', 'draw', 'shape'] as Tool[]).map(t => {
+                const Icon = TOOL_ICONS[t]
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setTool(t)}
+                    title={t.charAt(0).toUpperCase() + t.slice(1)}
+                    className={`p-2 rounded-lg transition-colors ${tool === t ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+                  >
+                    <Icon size={16} />
+                  </button>
+                )
+              })}
+            </div>
             {tool === 'draw' && (
               <div className="flex gap-1 flex-wrap mt-1 px-1">
                 {SHAPE_COLORS.map(c => (
