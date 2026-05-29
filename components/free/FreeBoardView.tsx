@@ -353,7 +353,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const maxY = Math.max(...pts.map(p => p.y))
     const normalizedPath = pts.reduce((acc, p, i) =>
       i === 0 ? `M ${p.x - minX + 5} ${p.y - minY + 5}` : `${acc} L ${p.x - minX + 5} ${p.y - minY + 5}`, '')
-    const flowPos = screenToFlowPosition({ x: minX, y: minY })
+    const rect = e.currentTarget.getBoundingClientRect()
+    const flowPos = screenToFlowPosition({ x: minX + rect.left, y: minY + rect.top })
     const el = await createElement(board.id, 'drawing', flowPos.x, flowPos.y, {
       path: normalizedPath, color: drawColor, strokeWidth: 2,
       bbox: { width: maxX - minX, height: maxY - minY },
@@ -370,17 +371,19 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   function onShapeStart(e: React.MouseEvent<SVGSVGElement>) {
     if (tool !== 'shape') return
-    shapeDragRef.current = getOverlayPoint(e)
+    // Store raw client coords — screenToFlowPosition expects viewport coordinates
+    shapeDragRef.current = { x: e.clientX, y: e.clientY }
   }
 
   async function onShapeEnd(e: React.MouseEvent<SVGSVGElement>) {
     if (tool !== 'shape' || !shapeDragRef.current) return
-    const pt = getOverlayPoint(e)
     const { x: startX, y: startY } = shapeDragRef.current
-    const w = Math.abs(pt.x - startX) || 100
-    const h = Math.abs(pt.y - startY) || 80
-    const x = Math.min(startX, pt.x)
-    const y = Math.min(startY, pt.y)
+    const endX = e.clientX
+    const endY = e.clientY
+    const w = Math.abs(endX - startX) || 100
+    const h = Math.abs(endY - startY) || 80
+    const x = Math.min(startX, endX)
+    const y = Math.min(startY, endY)
     const flowPos = screenToFlowPosition({ x, y })
     const el = await createElement(board.id, 'shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '' }, w, h)
     setElements(prev => [...prev, el])
