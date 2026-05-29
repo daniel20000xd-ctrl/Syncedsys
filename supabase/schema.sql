@@ -180,13 +180,13 @@ create index on account_links(member_id);
 create index on lists(board_id);
 create index on cards(list_id);
 
--- Migration: run these if upgrading an existing database (skip if running schema fresh)
+-- Migration: run these if upgrading an existing database (skip if running schema fresh).
+-- All idempotent — safe to run repeatedly. 'classic' is the freeform-canvas default.
+-- alter table boards add column if not exists mode text not null default 'classic';
+-- alter table boards add column if not exists deadline timestamptz;
 -- alter table boards add column if not exists parent_id uuid references boards(id) on delete cascade;
 -- alter table boards add column if not exists tab_position integer not null default 0;
 -- create index if not exists boards_parent_id_idx on boards(parent_id);
 -- alter table boards add column if not exists content text;
 -- alter table boards add column if not exists free_x double precision not null default 100;
 -- alter table boards add column if not exists free_y double precision not null default 100;
--- Rename modes: old 'classic' (kanban) → 'trello', old 'free' (canvas) → 'classic' (new default)
--- UPDATE boards SET mode = 'trello' WHERE mode = 'classic';
--- UPDATE boards SET mode = 'classic' WHERE mode = 'free';
