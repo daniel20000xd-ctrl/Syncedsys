@@ -76,6 +76,8 @@ function buildNodes(
     position: { x: el.x, y: el.y },
     data: {
       ...el.data,
+      width: el.width ?? undefined,
+      height: el.height ?? undefined,
       onDelete: (nodeId: string) => onDeleteNode(nodeId, 'element'),
       onHold,
     },
@@ -147,6 +149,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const drawingRef = useRef<{ points: { x: number; y: number }[] } | null>(null)
   const svgOverlayRef = useRef<SVGSVGElement>(null)
   const [currentPath, setCurrentPath] = useState<string>('')
+
+  // Shape click-move-click state (overlay-relative coords)
+  const [shapeAnchor, setShapeAnchor] = useState<{ x: number; y: number } | null>(null)
+  const [shapePreview, setShapePreview] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
   // Scale on hold+scroll
   const heldNodeRef = useRef<string | null>(null)
@@ -322,39 +328,48 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (action === 'shape') setTool('shape')
   }
 
-  // Drawing handlers
-  function getOverlayPoint(e: React.MouseEvent<SVGSVGElement>) {
-    const rect = e.currentTarget.getBoundingClientRect()
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+  // Overlay-relative point from any pointer/mouse event
+  function getOverlayPoint(clientX: number, clientY: number) {
+    const rect = svgOverlayRef.current!.getBoundingClientRect()
+    return { x: clientX - rect.left, y: clientY - rect.top }
+  }
+  // Convert an overlay-relative point to a flow-canvas position
+  function overlayToFlow(ox: number, oy: number) {
+    const rect = svgOverlayRef.current!.getBoundingClientRect()
+    return screenToFlowPosition({ x: ox + rect.left, y: oy + rect.top })
   }
 
-  function onDrawStart(e: React.MouseEvent<SVGSVGElement>) {
+  // ── Draw: press & hold, freehand follows, release ends the stroke ──
+  function onDrawPointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'draw') return
-    const pt = getOverlayPoint(e)
+    e.currentTarget.setPointerCapture(e.pointerId)
+    const pt = getOverlayPoint(e.clientX, e.clientY)
     drawingRef.current = { points: [pt] }
     setCurrentPath(`M ${pt.x} ${pt.y}`)
   }
 
-  function onDrawMove(e: React.MouseEvent<SVGSVGElement>) {
+  function onDrawPointerMove(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'draw' || !drawingRef.current) return
-    const pt = getOverlayPoint(e)
+    const pt = getOverlayPoint(e.clientX, e.clientY)
     drawingRef.current.points.push(pt)
     const pts = drawingRef.current.points
     setCurrentPath(pts.reduce((acc, p, i) => i === 0 ? `M ${p.x} ${p.y}` : `${acc} L ${p.x} ${p.y}`, ''))
   }
 
-  async function onDrawEnd(e: React.MouseEvent<SVGSVGElement>) {
+  async function onDrawPointerUp(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'draw' || !drawingRef.current) return
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
     const pts = drawingRef.current.points
-    if (pts.length < 2) { drawingRef.current = null; setCurrentPath(''); return }
+    drawingRef.current = null
+    setCurrentPath('')
+    if (pts.length < 2) return
     const minX = Math.min(...pts.map(p => p.x))
     const minY = Math.min(...pts.map(p => p.y))
     const maxX = Math.max(...pts.map(p => p.x))
     const maxY = Math.max(...pts.map(p => p.y))
     const normalizedPath = pts.reduce((acc, p, i) =>
       i === 0 ? `M ${p.x - minX + 5} ${p.y - minY + 5}` : `${acc} L ${p.x - minX + 5} ${p.y - minY + 5}`, '')
-    const rect = e.currentTarget.getBoundingClientRect()
-    const flowPos = screenToFlowPosition({ x: minX + rect.left, y: minY + rect.top })
+    const flowPos = overlayToFlow(minX, minY)
     const el = await createElement(board.id, 'drawing', flowPos.x, flowPos.y, {
       path: normalizedPath, color: drawColor, strokeWidth: 2,
       bbox: { width: maxX - minX, height: maxY - minY },
@@ -364,37 +379,51 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       id: `el-${el.id}`, type: 'drawingNode', position: { x: flowPos.x, y: flowPos.y },
       data: { path: normalizedPath, color: drawColor, strokeWidth: 2, bbox: { width: maxX - minX, height: maxY - minY }, onDelete: (id: string) => handleDeleteNode(id, 'element') },
     }])
-    drawingRef.current = null; setCurrentPath('')
-    // Stay in draw mode — hold-and-draw, release ends the stroke, draw again freely
+    // Stay in draw mode for further strokes; click Select to stop
   }
 
-  const shapeDragRef = useRef<{ x: number; y: number } | null>(null)
-
-  function onShapeStart(e: React.MouseEvent<SVGSVGElement>) {
+  // ── Shape: click to anchor, move to size (live preview), click again to commit ──
+  async function onShapePointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'shape') return
-    // Store raw client coords — screenToFlowPosition expects viewport coordinates
-    shapeDragRef.current = { x: e.clientX, y: e.clientY }
-  }
-
-  async function onShapeEnd(e: React.MouseEvent<SVGSVGElement>) {
-    if (tool !== 'shape' || !shapeDragRef.current) return
-    const { x: startX, y: startY } = shapeDragRef.current
-    const endX = e.clientX
-    const endY = e.clientY
-    const w = Math.abs(endX - startX) || 100
-    const h = Math.abs(endY - startY) || 80
-    const x = Math.min(startX, endX)
-    const y = Math.min(startY, endY)
-    const flowPos = screenToFlowPosition({ x, y })
-    const el = await createElement(board.id, 'shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '' }, w, h)
+    const pt = getOverlayPoint(e.clientX, e.clientY)
+    if (!shapeAnchor) {
+      setShapeAnchor(pt)
+      setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
+      return
+    }
+    // Second click — commit
+    const x = Math.min(shapeAnchor.x, pt.x)
+    const y = Math.min(shapeAnchor.y, pt.y)
+    const w = Math.abs(pt.x - shapeAnchor.x) || 120
+    const h = Math.abs(pt.y - shapeAnchor.y) || 80
+    setShapeAnchor(null)
+    setShapePreview(null)
+    const flowPos = overlayToFlow(x, y)
+    const el = await createElement(board.id, 'shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h }, w, h)
     setElements(prev => [...prev, el])
     setNodes(prev => [...prev, {
       id: `el-${el.id}`, type: 'shapeNode', position: { x: flowPos.x, y: flowPos.y },
-      data: { shape: selectedShape, fill: shapeColorPicker, label: '', onDelete: (id: string) => handleDeleteNode(id, 'element') },
+      data: { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h, onDelete: (id: string) => handleDeleteNode(id, 'element') },
     }])
-    shapeDragRef.current = null
-    // Stay in shape mode so multiple shapes can be placed; click Select to stop
+    // Stay in shape mode for further shapes; click Select to stop
   }
+
+  function onShapePointerMove(e: React.PointerEvent<SVGSVGElement>) {
+    if (tool !== 'shape' || !shapeAnchor) return
+    const pt = getOverlayPoint(e.clientX, e.clientY)
+    setShapePreview({
+      x: Math.min(shapeAnchor.x, pt.x),
+      y: Math.min(shapeAnchor.y, pt.y),
+      w: Math.abs(pt.x - shapeAnchor.x),
+      h: Math.abs(pt.y - shapeAnchor.y),
+    })
+  }
+
+  // Reset any in-progress shape/stroke when leaving the relevant tool
+  useEffect(() => {
+    if (tool !== 'shape') { setShapeAnchor(null); setShapePreview(null) }
+    if (tool !== 'draw') { drawingRef.current = null; setCurrentPath('') }
+  }, [tool])
 
   const isDrawingMode = tool === 'draw' || tool === 'shape'
 
@@ -436,12 +465,31 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         <svg
           ref={svgOverlayRef}
           className="absolute inset-0 w-full h-full"
-          style={{ cursor: 'crosshair', zIndex: 10, pointerEvents: 'all' }}
-          onMouseDown={tool === 'draw' ? onDrawStart : onShapeStart}
-          onMouseMove={tool === 'draw' ? onDrawMove : undefined}
-          onMouseUp={tool === 'draw' ? onDrawEnd : onShapeEnd}
+          style={{ cursor: 'crosshair', zIndex: 10, pointerEvents: 'all', touchAction: 'none' }}
+          onPointerDown={tool === 'draw' ? onDrawPointerDown : onShapePointerDown}
+          onPointerMove={tool === 'draw' ? onDrawPointerMove : onShapePointerMove}
+          onPointerUp={tool === 'draw' ? onDrawPointerUp : undefined}
         >
           {currentPath && <path d={currentPath} fill="none" stroke={drawColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
+          {shapePreview && (
+            selectedShape === 'circle' ? (
+              <ellipse
+                cx={shapePreview.x + shapePreview.w / 2} cy={shapePreview.y + shapePreview.h / 2}
+                rx={shapePreview.w / 2} ry={shapePreview.h / 2}
+                fill={shapeColorPicker} fillOpacity={0.5} stroke={shapeColorPicker} strokeWidth={2} strokeDasharray="4 3"
+              />
+            ) : selectedShape === 'diamond' ? (
+              <polygon
+                points={`${shapePreview.x + shapePreview.w / 2},${shapePreview.y} ${shapePreview.x + shapePreview.w},${shapePreview.y + shapePreview.h / 2} ${shapePreview.x + shapePreview.w / 2},${shapePreview.y + shapePreview.h} ${shapePreview.x},${shapePreview.y + shapePreview.h / 2}`}
+                fill={shapeColorPicker} fillOpacity={0.5} stroke={shapeColorPicker} strokeWidth={2} strokeDasharray="4 3"
+              />
+            ) : (
+              <rect
+                x={shapePreview.x} y={shapePreview.y} width={shapePreview.w} height={shapePreview.h} rx={6}
+                fill={shapeColorPicker} fillOpacity={0.5} stroke={shapeColorPicker} strokeWidth={2} strokeDasharray="4 3"
+              />
+            )
+          )}
         </svg>
       )}
 
@@ -479,7 +527,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
                 <button key={c} onClick={() => setShapeColorPicker(c)} className={`w-5 h-5 rounded border-2 ${shapeColorPicker === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
               ))}
             </div>
-            <p className="text-[9px] text-gray-400 text-center">Click to place</p>
+            <p className="text-[9px] text-gray-400 text-center w-16 leading-tight">Click, move, click to size</p>
           </div>
         )}
       </div>

@@ -98,12 +98,14 @@ export function ShapeNode({ id, data }: NodeProps) {
   const { updateNodeData } = useReactFlow()
   const scale = (data.scale as number) ?? 1
   const onHold = data.onHold as ((id: string) => void) | undefined
+  const width = (data.width as number) || 120
+  const height = (data.height as number) || 80
 
   const shapeClass = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : 'rounded-lg'
 
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
-      <div className="relative group select-none" style={{ width: 120, height: 80 }}>
+      <div className="relative group select-none" style={{ width, height }}>
         <Handle type="target" position={Position.Top} className="!bg-gray-500 !w-3 !h-3" />
         <Handle type="target" position={Position.Left} className="!bg-gray-500 !w-3 !h-3" />
         <div className={`w-full h-full flex items-center justify-center shadow ${shapeClass}`} style={{ backgroundColor: fill }} onDoubleClick={() => setEditing(true)}>
