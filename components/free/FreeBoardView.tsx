@@ -451,31 +451,32 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
   }
 
-  // Hold + scroll to scale
+  // Hold a unit + scroll to resize it (capture phase so React Flow's pane
+  // zoom listener never sees the event — otherwise it would zoom the canvas)
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
     function handleWheel(e: WheelEvent) {
-      if (!heldNodeRef.current) return
+      if (!heldNodeRef.current) return // not holding a unit → let the canvas zoom
       e.preventDefault()
       e.stopPropagation()
       const factor = e.deltaY > 0 ? 0.9 : 1.1
       setNodesRef.current!(prev => prev.map(n => {
         if (n.id !== heldNodeRef.current) return n
-        if (n.type === 'shapeNode') {
-          // Resize the shape itself; the text inside auto-scales to fit
+        if (n.type === 'shapeNode' || n.type === 'portalNode') {
+          // Resize the box itself; inner content scales with it
           const curW = Number(n.style?.width) || n.measured?.width || (n.data.width as number) || 120
           const curH = Number(n.style?.height) || n.measured?.height || (n.data.height as number) || 80
-          const w = Math.max(30, Math.min(3000, curW * factor))
-          const h = Math.max(20, Math.min(3000, curH * factor))
+          const w = Math.max(30, Math.min(4000, curW * factor))
+          const h = Math.max(20, Math.min(4000, curH * factor))
           return { ...n, style: { ...n.style, width: w, height: h }, data: { ...n.data, width: w, height: h } }
         }
         const curr = (n.data.scale as number) ?? 1
         return { ...n, data: { ...n.data, scale: Math.max(0.2, Math.min(5, curr * factor)) } }
       }))
     }
-    el.addEventListener('wheel', handleWheel, { passive: false })
-    return () => el.removeEventListener('wheel', handleWheel)
+    el.addEventListener('wheel', handleWheel, { passive: false, capture: true })
+    return () => el.removeEventListener('wheel', handleWheel, { capture: true } as EventListenerOptions)
   }, [])
 
   function handleWrapperMouseUp() {
@@ -486,11 +487,11 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const rawId = heldId.replace('el-', '')
     const node = nodes.find(n => n.id === heldId)
     if (!node) return
-    if (node.type === 'shapeNode') {
-      // Persist the new shape size (text size is derived from it)
+    if (node.type === 'shapeNode' || node.type === 'portalNode') {
+      // Persist the new size (shape text / portal content scale with it)
       const w = Number(node.style?.width) || node.measured?.width || (node.data.width as number) || 120
       const h = Number(node.style?.height) || node.measured?.height || (node.data.height as number) || 80
-      saveElement(heldId, { shape: node.data.shape, fill: node.data.fill, label: node.data.label, width: w, height: h }, w, h)
+      saveElement(heldId, { ...node.data, width: w, height: h }, w, h)
     } else {
       const el = elementsRef.current.find(e => e.id === rawId)
       if (el) updateElement(rawId, { data: { ...el.data, scale: (node.data.scale as number) ?? 1 } })
