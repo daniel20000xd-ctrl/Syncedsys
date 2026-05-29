@@ -58,6 +58,19 @@ A resizable window showing a live read-only view of another tab.
 - **Auto-mirror**: choosing a target inserts a portal back on the target board via `ensureMirrorPortal(targetBoardId, home)`. Portal data carries `home` (its own board id).
 - Portal element type is `'portal'` in `board_elements`; data = `{ targetBoardId, home, vx, vy, zoom, locked, fitted, width, height }`.
 
+## iOS sync (groundwork — the iOS app does not exist yet)
+Goal: mark certain tabs as "synced" and let a future iOS app pull them.
+- `boards.synced` boolean flagged per-tab via the **"Sync to connected iOS apps"** checkbox in `BoardPropertiesPanel`. Server action `setBoardSynced(boardId, synced)`.
+- `device_links` table = paired apps/devices. Actions: `createDeviceLink(name)` → returns a **6-char pairing code** + stores a secret `token`; `removeDeviceLink(id)`.
+- **REST API the app will call** (both use `createAdminClient()` / service role, since the device has no Supabase session):
+  - `POST /api/devices/pair` — body `{ code, name? }` → finds the unpaired `device_links` row by code, marks it paired, returns `{ token, deviceId, userId }`.
+  - `GET /api/sync` — header `Authorization: Bearer <token>` → looks up the paired device by token, bumps `last_seen`, returns `{ boards, lists, cards, elements }` for that user's `synced` boards.
+- **Sidebar UI** (`components/Sidebar.tsx`, receives `devices` from layout):
+  - Dashboard has a divider: units (or lists) above, a **"Synced tabs"** list (all `boards.synced`) below.
+  - Above Settings: a **"Connected apps"** list with `+` (calls `createDeviceLink`, shows the code inline) and `×` remove; pending (un-paired) devices show a "pending" badge.
+- Connection flow for the future app: user taps **+** → gets code → enters it in the app → app `POST /api/devices/pair` → stores token → polls `GET /api/sync`.
+- Not yet done (fine to add when the app exists): pairing-code expiry, write-back from the app (sync is read-only), push/realtime.
+
 ## Admin overview
 - `ADMIN_EMAIL` env designates admin. `app/(app)/overview/page.tsx` uses the service-role client to list all users' boards. One-way only; `account_links` table exists but is unused.
 
@@ -79,14 +92,31 @@ alter table boards add column if not exists free_x double precision not null def
 alter table boards add column if not exists free_y double precision not null default 100;
 create index if not exists boards_parent_id_idx on boards(parent_id);
 
+alter table boards add column if not exists synced boolean not null default false;
+
 -- board_elements (shapes/drawings/text/images/portals) + RLS  (full create-if-not-exists + policy in schema.sql)
 -- board_edges
 alter table board_edges add column if not exists data jsonb not null default '{}';  -- link bend {cx,cy}
+
+-- device_links (iOS sync) — run the full create table + RLS policy block from schema.sql:
+create table if not exists device_links (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references auth.users(id) on delete cascade not null,
+  name text not null default 'iOS device',
+  pairing_code text, token text not null,
+  paired boolean not null default false,
+  last_seen timestamptz, created_at timestamptz default now()
+);
+alter table device_links enable row level security;
+create policy "users manage their device links" on device_links for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create index if not exists device_links_user_idx on device_links(user_id);
 ```
 
-As of this session's end, the **`board_edges.data` column** is the most recently added — the user must run that `alter` for link-bending to persist. Do NOT run the old `UPDATE boards SET mode=...` rename lines (there was never old mode data).
+As of this session's end, the most recently added pieces are **`boards.synced`** and the **`device_links`** table — the user must run those for iOS-sync UI/API to work (and `board_edges.data` from the prior session for link-bending). Do NOT run the old `UPDATE boards SET mode=...` rename lines (there was never old mode data).
 
 ## Known gaps / next tasks
+- **iOS app** itself isn't built — only the pairing/sync API + UI groundwork exists (see "iOS sync" above).
 - **Portal cross-tab links** (links from a main-tab unit to a unit shown inside a portal, visible on both tabs) — deferred. Bringing this in should also add "remove portal → remove its cross-tab links".
 - **Portal invert/open animation** (smooth zoom-swap where the portal becomes the full board at the same screen proportion) — deferred; "Maximize" just navigates today.
 - Removing a portal does **not** remove its auto-mirror on the other tab (they're independent).
@@ -99,5 +129,6 @@ As of this session's end, the **`board_edges.data` column** is the most recently
 ## Key files
 - `components/free/FreeBoardView.tsx` — the canvas (tools, history, units publish, edges, portals wiring). Large; most free-mode logic lives here.
 - `components/free/nodes.tsx` — all node components (List/Card/Shape/Image/Drawing/SubTab/Text/Portal) + `DeletableEdge` + `SideHandles` + portal mini-renderers (`MiniUnit`, `PortalEdges`).
-- `app/actions.ts` — server actions (boards, lists, cards, elements upsert/delete, edges upsert/delete/shape, sub-tabs, mirror portal, board content/free position).
-- `lib/types.ts`, `lib/unitsStore.ts`, `components/UnitsPanel.tsx`, `components/Sidebar.tsx`, `components/TabBar.tsx`, `components/SubTabBar.tsx`, `components/BoardPropertiesPanel.tsx`.
+- `app/actions.ts` — server actions (boards, lists, cards, elements upsert/delete, edges upsert/delete/shape, sub-tabs, mirror portal, board content/free position, setBoardSynced, createDeviceLink/removeDeviceLink).
+- `app/api/devices/pair/route.ts`, `app/api/sync/route.ts` — REST endpoints for the future iOS app (service-role).
+- `lib/types.ts` (incl. `DeviceLink`), `lib/unitsStore.ts`, `components/UnitsPanel.tsx`, `components/Sidebar.tsx`, `components/TabBar.tsx`, `components/SubTabBar.tsx`, `components/BoardPropertiesPanel.tsx`.
