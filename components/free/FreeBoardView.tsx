@@ -15,7 +15,7 @@ import {
   createList, createFreeCard, deleteEdge, deleteBoard,
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
-  updateBoard, updateCard, updateEdgeShape,
+  updateBoard, updateCard, updateCardDone, updateEdgeShape,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, DeletableEdge, PortalNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
@@ -60,6 +60,7 @@ function buildNodes(
   onRenameCard: (id: string, title: string) => void,
   onRenameSubTab: (boardId: string, name: string) => void,
   onOpenSubPanel: (boardId: string, rect: DOMRect) => void,
+  onToggleDone: (id: string, done: boolean) => void,
 ): Node[] {
   const listNodes: Node[] = lists.map((l, i) => ({
     id: `list-${l.id}`,
@@ -80,9 +81,11 @@ function buildNodes(
     position: { x: c.x || 0, y: c.y || 0 },
     data: {
       title: c.title,
+      done: c.done,
       listId: c.list_id,
       onDelete: (nodeId: string) => onDeleteNode(nodeId, 'card'),
       onRename: onRenameCard,
+      onToggleDone,
       onHold,
     },
   }))
@@ -131,7 +134,13 @@ function buildNodes(
   return [...listNodes, ...cardNodes, ...elementNodes, ...subTabNodes]
 }
 
-function buildEdges(cards: Card[], boardEdges: BoardEdge[], onDeleteEdge: (id: string) => void, onReshapeEdge: (id: string, offset: { cx: number; cy: number }) => void): Edge[] {
+function buildEdges(
+  cards: Card[],
+  boardEdges: BoardEdge[],
+  onDeleteEdge: (id: string) => void,
+  onReshapeEdge: (id: string, offset: { cx: number; cy: number }) => void,
+  onColorEdge: (id: string, color: string) => void,
+): Edge[] {
   const autoEdges: Edge[] = cards.map(c => ({
     id: `auto-${c.id}`,
     source: `list-${c.list_id}`,
@@ -140,21 +149,32 @@ function buildEdges(cards: Card[], boardEdges: BoardEdge[], onDeleteEdge: (id: s
     targetHandle: 'top',
     type: 'deletable',
     data: { deletable: false },
-    style: { stroke: '#94a3b8', strokeWidth: 1.5, strokeDasharray: '4 2' },
+    style: { stroke: 'rgba(255,255,255,0.7)', strokeWidth: 2 },
     animated: false,
   }))
 
-  const manualEdges: Edge[] = boardEdges.map(e => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    sourceHandle: e.source_handle ?? undefined,
-    targetHandle: e.target_handle ?? undefined,
-    type: 'deletable',
-    data: { deletable: true, onDelete: onDeleteEdge, onReshape: onReshapeEdge, cx: (e.data?.cx as number) ?? 0, cy: (e.data?.cy as number) ?? 0 },
-    style: { stroke: '#3b82f6', strokeWidth: 2 },
-    markerEnd: { type: 'arrowclosed' as const },
-  }))
+  const manualEdges: Edge[] = boardEdges.map(e => {
+    const color = (e.data?.color as string | undefined) ?? '#3b82f6'
+    return {
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.source_handle ?? undefined,
+      targetHandle: e.target_handle ?? undefined,
+      type: 'deletable',
+      data: {
+        deletable: true,
+        onDelete: onDeleteEdge,
+        onReshape: onReshapeEdge,
+        onColor: onColorEdge,
+        cx: (e.data?.cx as number) ?? 0,
+        cy: (e.data?.cy as number) ?? 0,
+        color,
+      },
+      style: { stroke: color, strokeWidth: 2 },
+      markerEnd: { type: 'arrowclosed' as const },
+    }
+  })
 
   return [...autoEdges, ...manualEdges]
 }
@@ -259,6 +279,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     updateCard(rawId, { title }, board.id).catch(err => console.error('Failed to rename card:', err))
   }
 
+  function toggleCardDone(nodeId: string, done: boolean) {
+    const rawId = nodeId.replace('card-', '')
+    setCards(prev => prev.map(c => c.id === rawId ? { ...c, done } : c))
+    updateCardDone(rawId, done, board.id).catch(err => console.error('Failed to toggle card done:', err))
+  }
+
   function renameSubTab(boardId: string, name: string) {
     setSubBoards(prev => prev.map(b => b.id === boardId ? { ...b, name } : b))
     setNodesRef.current?.(prev => prev.map(n => n.id === `sub-${boardId}` ? { ...n, data: { ...n.data, name } } : n))
@@ -270,11 +296,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }
 
   const [nodes, setNodes, onNodesChange] = useNodesState(
-    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel)
+    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel, toggleCardDone)
   )
   const removeEdgeRef = useRef<(id: string) => void>(() => {})
   const reshapeEdgeRef = useRef<(id: string, offset: { cx: number; cy: number }) => void>(() => {})
-  const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(cards, initialEdges, (id) => removeEdgeRef.current(id), (id, off) => reshapeEdgeRef.current(id, off)))
+  const colorEdgeRef = useRef<(id: string, color: string) => void>(() => {})
+  const [edges, setEdges, onEdgesChange] = useEdgesState(buildEdges(
+    cards, initialEdges,
+    (id) => removeEdgeRef.current(id),
+    (id, off) => reshapeEdgeRef.current(id, off),
+    (id, color) => colorEdgeRef.current(id, color),
+  ))
 
   // Keep ref in sync so the wheel handler (in effect) can always call latest setNodes
   setNodesRef.current = setNodes
@@ -287,9 +319,25 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   const reshapeEdge = useCallback((id: string, offset: { cx: number; cy: number }) => {
     setEdges(prev => prev.map(e => e.id === id ? { ...e, data: { ...e.data, cx: offset.cx, cy: offset.cy } } : e))
-    if (!id.startsWith('auto-')) updateEdgeShape(id, { cx: offset.cx, cy: offset.cy }).catch(() => {})
+    if (!id.startsWith('auto-')) {
+      const cur = edgesRef.current.find(e => e.id === id)
+      const curData = (cur?.data ?? {}) as Record<string, unknown>
+      updateEdgeShape(id, { ...curData, cx: offset.cx, cy: offset.cy }).catch(() => {})
+    }
   }, [setEdges])
   reshapeEdgeRef.current = reshapeEdge
+
+  const colorEdge = useCallback((id: string, color: string) => {
+    setEdges(prev => prev.map(e =>
+      e.id === id ? { ...e, style: { ...e.style, stroke: color }, data: { ...e.data, color } } : e
+    ))
+    if (!id.startsWith('auto-')) {
+      const cur = edgesRef.current.find(e => e.id === id)
+      const curData = (cur?.data ?? {}) as Record<string, unknown>
+      updateEdgeShape(id, { ...curData, color }).catch(() => {})
+    }
+  }, [setEdges])
+  colorEdgeRef.current = colorEdge
 
   // Live refs for history capture / persistence callbacks
   const nodesRef = useRef(nodes)
@@ -501,11 +549,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const onConnect = useCallback((connection: Connection) => {
     // Client-generated id so the edge id matches the DB row (delete/undo work)
     const id = crypto.randomUUID()
+    const defaultColor = '#3b82f6'
     setEdges(eds => addEdge({
       ...connection, id,
       type: 'deletable',
-      data: { deletable: true, cx: 0, cy: 0, onDelete: (eid: string) => removeEdgeRef.current(eid), onReshape: (eid: string, off: { cx: number; cy: number }) => reshapeEdgeRef.current(eid, off) },
-      style: { stroke: '#3b82f6', strokeWidth: 2 },
+      data: {
+        deletable: true, cx: 0, cy: 0, color: defaultColor,
+        onDelete: (eid: string) => removeEdgeRef.current(eid),
+        onReshape: (eid: string, off: { cx: number; cy: number }) => reshapeEdgeRef.current(eid, off),
+        onColor: (eid: string, color: string) => colorEdgeRef.current(eid, color),
+      },
+      style: { stroke: defaultColor, strokeWidth: 2 },
       markerEnd: { type: 'arrowclosed' as const },
     }, eds))
     upsertEdge(id, board.id, connection.source!, connection.target!, connection.sourceHandle ?? undefined, connection.targetHandle ?? undefined)
@@ -538,13 +592,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       {
         id: `card-${card.id}`, type: 'cardNode',
         position: { x, y },
-        data: { title: card.title, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onHold: holdNode },
+        data: { title: card.title, done: card.done, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onToggleDone: toggleCardDone, onHold: holdNode },
       },
     ])
     setEdges(prev => [...prev, {
       id: `auto-${card.id}`, source: `list-${listId}`, target: `card-${card.id}`,
       sourceHandle: 'bottom', targetHandle: 'top', type: 'deletable', data: { deletable: false },
-      style: { stroke: '#94a3b8', strokeWidth: 1.5, strokeDasharray: '4 2' },
+      style: { stroke: 'rgba(255,255,255,0.7)', strokeWidth: 2 },
     }])
   }
 
@@ -580,12 +634,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       setCards(prev => [...prev, card])
       setNodes(prev => [...prev, {
         id: `card-${card.id}`, type: 'cardNode', position: { x, y },
-        data: { title: card.title, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onHold: holdNode },
+        data: { title: card.title, done: card.done, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onToggleDone: toggleCardDone, onHold: holdNode },
       }])
       setEdges(prev => [...prev, {
         id: `auto-${card.id}`, source: `list-${listId}`, target: `card-${card.id}`,
         sourceHandle: 'bottom', targetHandle: 'top', type: 'deletable', data: { deletable: false },
-        style: { stroke: '#94a3b8', strokeWidth: 1.5, strokeDasharray: '4 2' },
+        style: { stroke: 'rgba(255,255,255,0.7)', strokeWidth: 2 },
       }])
     }
 

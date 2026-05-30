@@ -3,9 +3,9 @@
 import { useState, useRef } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { MoreHorizontal, Plus, X, Check } from 'lucide-react'
+import { MoreHorizontal, Plus, X, Check, Smartphone } from 'lucide-react'
 import type { List, Card } from '@/lib/types'
-import { createCard, deleteList, renameList } from '@/app/actions'
+import { createCard, deleteList, renameList, setListWidget } from '@/app/actions'
 import CardItem from './CardItem'
 
 export default function KanbanList({
@@ -32,6 +32,7 @@ export default function KanbanList({
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleValue, setTitleValue] = useState(list.name)
   const [showMenu, setShowMenu] = useState(false)
+  const [isWidget, setIsWidget] = useState(list.is_widget)
   const menuRef = useRef<HTMLDivElement>(null)
 
   const { setNodeRef, isOver } = useDroppable({ id: list.id })
@@ -57,6 +58,13 @@ export default function KanbanList({
     onListDeleted(list.id)
   }
 
+  async function handleToggleWidget() {
+    const next = !isWidget
+    setIsWidget(next)
+    setShowMenu(false)
+    await setListWidget(list.id, next, boardId)
+  }
+
   return (
     <div id={`list-${list.id}`} className="shrink-0 w-72 flex flex-col max-h-full">
       <div
@@ -78,10 +86,11 @@ export default function KanbanList({
             />
           ) : (
             <h3
-              className="flex-1 text-sm font-semibold text-gray-800 cursor-pointer px-1 py-0.5 rounded hover:bg-black/5"
+              className="flex-1 text-sm font-semibold text-gray-800 cursor-pointer px-1 py-0.5 rounded hover:bg-black/5 flex items-center gap-1.5"
               onClick={() => setEditingTitle(true)}
             >
               {list.name}
+              {isWidget && <Smartphone size={12} className="text-blue-500 shrink-0" />}
             </h3>
           )}
 
@@ -99,6 +108,13 @@ export default function KanbanList({
                   onClick={() => { setEditingTitle(true); setShowMenu(false) }}
                 >
                   Rename list
+                </button>
+                <button
+                  className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
+                  onClick={handleToggleWidget}
+                >
+                  <Smartphone size={13} className={isWidget ? 'text-blue-500' : 'text-gray-400'} />
+                  {isWidget ? 'Remove from widgets' : 'Add as widget'}
                 </button>
                 <button
                   className="w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-gray-100"

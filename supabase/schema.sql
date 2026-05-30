@@ -211,3 +211,6 @@ create index on cards(list_id);
 -- alter table board_edges add column if not exists data jsonb not null default '{}';
 -- alter table boards add column if not exists synced boolean not null default false;
 -- (device_links table: run the create table + policy block above on existing DBs)
+-- alter table cards add column if not exists done boolean not null default false;
+-- alter table lists add column if not exists is_widget boolean not null default false;
+-- alter table lists add column if not exists widget_position integer not null default 0;

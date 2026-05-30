@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { Check, Plus, Trash2 } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { updateBoard, createSubTab, setBoardSynced } from '@/app/actions'
+import { updateBoard, createSubTab } from '@/app/actions'
 
 const COLORS = [
   '#0079bf', '#d29034', '#519839', '#b04632',
@@ -29,7 +29,6 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
   const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
   const [mode, setMode] = useState<'classic' | 'trello' | 'text'>(board.mode ?? 'classic')
-  const [synced, setSynced] = useState(!!board.synced)
   const [saving, setSaving] = useState(false)
   const [subTabCreating, setSubTabCreating] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -54,8 +53,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
         deadline: hasDeadline && deadline ? new Date(deadline).toISOString() : null,
         mode,
       })
-      if (synced !== !!board.synced) await setBoardSynced(board.id, synced)
-      onUpdate({ ...updated, synced })
+      onUpdate(updated)
       onClose()
     } catch (err) {
       console.error('Failed to save board:', err)
@@ -128,12 +126,6 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
       {mode === 'classic' && <p className="text-[10px] text-gray-400 mb-3">Freeform canvas — drag anything, draw connections.</p>}
       {mode === 'trello' && <p className="text-[10px] text-gray-400 mb-3">Kanban columns and cards.</p>}
       {mode === 'text' && <p className="text-[10px] text-gray-400 mb-3">Document — a plain writing space, auto-saved.</p>}
-
-      <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none mb-1">
-        <input type="checkbox" checked={synced} onChange={e => setSynced(e.target.checked)} className="rounded" />
-        Sync to connected iOS apps
-      </label>
-      <p className="text-[10px] text-gray-400 mb-4">Synced tabs are available to your paired iOS devices.</p>
 
       <button onClick={handleSave} disabled={saving} className="w-full bg-[#0079bf] hover:bg-[#026aa7] text-white text-sm py-1.5 rounded disabled:opacity-60">
         {saving ? 'Saving…' : 'Save'}

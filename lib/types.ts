@@ -32,6 +32,8 @@ export type List = {
   position: number
   x: number
   y: number
+  is_widget: boolean
+  widget_position: number
   created_at: string
 }
 
@@ -43,6 +45,7 @@ export type Card = {
   position: number
   x: number
   y: number
+  done: boolean
   created_at: string
 }
 

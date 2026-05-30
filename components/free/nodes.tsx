@@ -4,8 +4,8 @@ import {
   Handle, Position, NodeProps, useReactFlow, NodeResizer,
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
-import { useState, useEffect, useRef } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen } from 'lucide-react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal } from '@/app/actions'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
@@ -31,7 +31,12 @@ export function DeletableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePo
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null)
   const onDelete = data?.onDelete as ((id: string) => void) | undefined
   const onReshape = data?.onReshape as ((id: string, offset: { cx: number; cy: number }) => void) | undefined
+  const onColor = data?.onColor as ((id: string, color: string) => void) | undefined
   const deletable = (data?.deletable as boolean) ?? true
+  const colorInputRef = useRef<HTMLInputElement>(null)
+
+  const strokeColor = (data?.color as string | undefined) ?? (style?.stroke as string | undefined) ?? '#3b82f6'
+  const effectiveStyle = { ...style, stroke: strokeColor }
 
   const mx = (sourceX + targetX) / 2
   const my = (sourceY + targetY) / 2
@@ -71,7 +76,7 @@ export function DeletableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePo
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={effectiveStyle} />
       {/* wide invisible hit area: hover to reveal controls, drag to bend the link */}
       <path
         d={edgePath}
@@ -94,7 +99,24 @@ export function DeletableEdge({ id, sourceX, sourceY, targetX, targetY, sourcePo
             onMouseLeave={() => setHover(false)}
           >
             <div className="flex items-center gap-1">
-              <span className="w-2.5 h-2.5 rounded-full bg-blue-500 border-2 border-white shadow" title="Drag the link to bend it" />
+              <span className="w-2.5 h-2.5 rounded-full border-2 border-white shadow" style={{ background: strokeColor }} title="Drag the link to bend it" />
+              {onColor && (
+                <>
+                  <button
+                    onClick={() => colorInputRef.current?.click()}
+                    title="Change link colour"
+                    className="w-4 h-4 rounded-full border-2 border-white shadow cursor-pointer"
+                    style={{ background: strokeColor }}
+                  />
+                  <input
+                    ref={colorInputRef}
+                    type="color"
+                    className="sr-only"
+                    value={strokeColor.startsWith('#') ? strokeColor : '#3b82f6'}
+                    onChange={e => onColor(id, e.target.value)}
+                  />
+                </>
+              )}
               <button
                 onClick={() => onDelete?.(id)}
                 title="Remove link"
@@ -164,10 +186,12 @@ export function ListNode({ id, data }: NodeProps) {
 export function CardNode({ id, data }: NodeProps) {
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(data.title as string)
+  const [done, setDone] = useState(!!(data.done as boolean))
   const { updateNodeData } = useReactFlow()
   const scale = (data.scale as number) ?? 1
   const onHold = data.onHold as ((id: string) => void) | undefined
   const onRename = data.onRename as ((id: string, title: string) => void) | undefined
+  const onToggleDone = data.onToggleDone as ((id: string, done: boolean) => void) | undefined
 
   function commitTitle() {
     updateNodeData(id, { ...data, title })
@@ -175,11 +199,26 @@ export function CardNode({ id, data }: NodeProps) {
     onRename?.(id, title)
   }
 
+  function handleToggleDone(e: React.MouseEvent) {
+    e.stopPropagation()
+    const next = !done
+    setDone(next)
+    updateNodeData(id, { ...data, done: next })
+    onToggleDone?.(id, next)
+  }
+
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
       <div className="bg-white rounded-lg shadow border border-gray-200 w-44 group select-none">
         <SideHandles />
-        <div className="p-2">
+        <div className="p-2 flex items-start gap-1.5">
+          <button
+            className={`nodrag mt-0.5 shrink-0 w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${done ? 'bg-blue-500 border-blue-500' : 'border-gray-300 hover:border-blue-400'}`}
+            onPointerDown={e => e.stopPropagation()}
+            onClick={handleToggleDone}
+          >
+            {done && <Check size={9} className="text-white" />}
+          </button>
           {editing ? (
             <textarea
               autoFocus rows={2} value={title}
@@ -189,7 +228,7 @@ export function CardNode({ id, data }: NodeProps) {
               className="nodrag w-full text-sm resize-none focus:outline-none"
             />
           ) : (
-            <p className="text-sm text-gray-800 cursor-pointer" onDoubleClick={() => setEditing(true)}>{data.title as string}</p>
+            <p className={`text-sm cursor-pointer flex-1 ${done ? 'line-through text-gray-400' : 'text-gray-800'}`} onDoubleClick={() => setEditing(true)}>{data.title as string}</p>
           )}
         </div>
         <button

@@ -3,9 +3,9 @@
 import { useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Pencil, X } from 'lucide-react'
+import { Pencil, X, Check } from 'lucide-react'
 import type { Card } from '@/lib/types'
-import { deleteCard, updateCard } from '@/app/actions'
+import { deleteCard, updateCard, updateCardDone } from '@/app/actions'
 
 export default function CardItem({
   card,
@@ -20,6 +20,7 @@ export default function CardItem({
 }) {
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(card.title)
+  const [done, setDone] = useState(card.done)
   const [hovered, setHovered] = useState(false)
 
   const {
@@ -49,6 +50,14 @@ export default function CardItem({
   async function handleDelete() {
     await deleteCard(card.id, boardId)
     onDeleted(card.id)
+  }
+
+  async function handleToggleDone(e: React.MouseEvent) {
+    e.stopPropagation()
+    const next = !done
+    setDone(next)
+    onUpdated({ ...card, done: next })
+    await updateCardDone(card.id, next, boardId)
   }
 
   if (editing) {
@@ -91,9 +100,17 @@ export default function CardItem({
       {...listeners}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className="relative bg-white rounded-lg shadow-sm border border-transparent hover:border-blue-300 p-2 text-sm text-gray-800 cursor-grab active:cursor-grabbing group"
+      className="relative bg-white rounded-lg shadow-sm border border-transparent hover:border-blue-300 p-2 text-sm text-gray-800 cursor-grab active:cursor-grabbing group flex items-start gap-2"
     >
-      <span className="pr-5">{card.title}</span>
+      <button
+        onPointerDown={e => e.stopPropagation()}
+        onClick={handleToggleDone}
+        className={`mt-0.5 shrink-0 w-4 h-4 rounded border flex items-center justify-center transition-colors ${done ? 'bg-blue-500 border-blue-500' : 'border-gray-300 hover:border-blue-400'}`}
+      >
+        {done && <Check size={10} className="text-white" />}
+      </button>
+
+      <span className={`flex-1 pr-5 ${done ? 'line-through text-gray-400' : ''}`}>{card.title}</span>
 
       {hovered && (
         <div className="absolute top-1.5 right-1.5 flex gap-1">

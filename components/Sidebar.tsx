@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid, Smartphone, Plus, X, RefreshCw } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid, Smartphone, Plus, X } from 'lucide-react'
 import type { Board, List as ListType, DeviceLink } from '@/lib/types'
 import { useUnits } from '@/lib/unitsStore'
 import { createDeviceLink, removeDeviceLink } from '@/app/actions'
@@ -20,8 +20,6 @@ export default function Sidebar({ boards, isAdmin, devices = [] }: { boards: Boa
   const activeBoard = boards.find(b => b.id === boardId)
   const units = useUnits()
   const showUnits = units.length > 0
-  const syncedBoards = boards.filter(b => b.synced)
-
   useEffect(() => {
     if (!boardId) { setLists([]); return }
     import('@/lib/supabase/client').then(({ createClient }) => {
@@ -108,31 +106,6 @@ export default function Sidebar({ boards, isAdmin, devices = [] }: { boards: Boa
           </button>
         ))}
 
-        {/* Break: synced tabs below */}
-        {!collapsed && (
-          <>
-            <div className="mx-3 my-2 border-t border-white/10" />
-            <div className="px-3 py-1 mb-1 flex items-center gap-1.5">
-              <RefreshCw size={11} className="text-white/40" />
-              <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">Synced tabs</span>
-            </div>
-            {syncedBoards.length === 0 ? (
-              <p className="px-3 py-1 text-[11px] text-white/25">None — enable “Sync to iOS” on a tab</p>
-            ) : (
-              syncedBoards.map(b => (
-                <button
-                  key={b.id}
-                  onClick={() => router.push(`/board/${b.id}`)}
-                  className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-                  title={b.name}
-                >
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
-                  <span className="truncate text-left">{b.name}</span>
-                </button>
-              ))
-            )}
-          </>
-        )}
       </nav>
 
       {/* Footer */}

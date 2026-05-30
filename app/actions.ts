@@ -172,6 +172,12 @@ export async function renameList(listId: string, name: string, boardId: string) 
   revalidatePath(`/board/${boardId}`)
 }
 
+export async function setListWidget(listId: string, isWidget: boolean, boardId: string) {
+  const supabase = await createClient()
+  await supabase.from('lists').update({ is_widget: isWidget }).eq('id', listId)
+  revalidatePath(`/board/${boardId}`)
+}
+
 // ── Cards ────────────────────────────────────────────────────────────────────
 
 export async function createCard(listId: string, title: string, boardId: string) {
@@ -206,6 +212,12 @@ export async function deleteCard(cardId: string, boardId: string) {
 export async function updateCard(cardId: string, updates: { title?: string; description?: string }, boardId: string) {
   const supabase = await createClient()
   await supabase.from('cards').update(updates).eq('id', cardId)
+  revalidatePath(`/board/${boardId}`)
+}
+
+export async function updateCardDone(cardId: string, done: boolean, boardId: string) {
+  const supabase = await createClient()
+  await supabase.from('cards').update({ done }).eq('id', cardId)
   revalidatePath(`/board/${boardId}`)
 }
 
