@@ -11,6 +11,19 @@ const TEXT_EXTENSIONS = [
 
 const MAX_BYTES = 1_000_000 // 1 MB — generous for text, keeps the DB row sane
 
+// Trigger a browser download of text content as a file.
+export function downloadTextFile(name: string, content: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name || 'file.txt'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 export function isTextFile(file: File): boolean {
   if (file.type.startsWith('text/')) return true
   if (file.type === 'application/json' || file.type === 'application/xml') return true

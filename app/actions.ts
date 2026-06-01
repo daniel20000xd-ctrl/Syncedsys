@@ -417,6 +417,19 @@ export async function createTextFile(boardId: string, name: string, content: str
   return data
 }
 
+// Move an element (e.g. a text file) to another board the user owns — used to
+// drag files between folders, or off a canvas into a folder. Resets position.
+export async function moveElementToBoard(elementId: string, targetBoardId: string, fromBoardId?: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  const { data: tgt } = await supabase.from('boards').select('id').eq('id', targetBoardId).eq('user_id', user.id).single()
+  if (!tgt) throw new Error('Target board not found')
+  await supabase.from('board_elements').update({ board_id: targetBoardId, x: 0, y: 0 }).eq('id', elementId)
+  if (fromBoardId) revalidatePath(`/board/${fromBoardId}`)
+  revalidatePath(`/board/${targetBoardId}`)
+}
+
 export async function updateTextFile(elementId: string, name: string, content: string, boardId: string) {
   const supabase = await createClient()
   // Preserve any other data keys (e.g. hidden/opacity from the canvas view).

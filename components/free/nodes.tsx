@@ -5,9 +5,10 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal } from '@/app/actions'
 import { recurLabel } from '@/lib/recur'
+import { downloadTextFile } from '@/lib/files'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
@@ -456,7 +457,14 @@ export function TextFileNode({ id, data }: NodeProps) {
             className="w-full text-xs text-gray-800 font-mono resize-none focus:outline-none"
             placeholder="File contents…"
           />
-          <div className="flex justify-end pt-1">
+          <div className="flex justify-between items-center pt-1">
+            <button
+              onClick={() => downloadTextFile(name || 'file.txt', content)}
+              className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-indigo-600"
+              title="Download"
+            >
+              <Download size={12} /> Download
+            </button>
             <button onClick={commit} className="text-xs bg-indigo-500 hover:bg-indigo-600 text-white px-2 py-0.5 rounded">Done</button>
           </div>
         </div>

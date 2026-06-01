@@ -15,7 +15,7 @@ import {
   createList, createFreeCard, deleteEdge, deleteBoard,
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
-  updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden,
+  updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, DeletableEdge, PortalNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
@@ -205,7 +205,7 @@ interface Props {
 
 function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [] }: Props) {
   const router = useRouter()
-  const { screenToFlowPosition, getViewport, setViewport } = useReactFlow()
+  const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes } = useReactFlow()
   const [lists, setLists] = useState(initialLists)
   const [cards, setCards] = useState(initialCards)
   const [elements, setElements] = useState(initialElements)
@@ -651,11 +651,24 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }, [])
 
   const onNodeDragStop = useCallback((_: unknown, node: Node) => {
+    // Drop a file block onto a folder/sub-tab node → move it into that board.
+    if (node.type === 'textFileNode') {
+      const target = getIntersectingNodes(node).find(n => n.id.startsWith('sub-'))
+      if (target) {
+        const elId = node.id.replace('el-', '')
+        const targetBoardId = target.id.replace('sub-', '')
+        setNodes(prev => prev.filter(n => n.id !== node.id))
+        setElements(prev => prev.filter(e => e.id !== elId))
+        moveElementToBoard(elId, targetBoardId, board.id).catch(err => console.error('Failed to move file:', err))
+        return
+      }
+    }
     const { x, y } = node.position
     if (node.id.startsWith('list-')) updateListPosition(node.id.replace('list-', ''), x, y)
     else if (node.id.startsWith('card-')) updateCardPosition(node.id.replace('card-', ''), x, y)
     else if (node.id.startsWith('el-')) updateElement(node.id.replace('el-', ''), { x, y })
     else if (node.id.startsWith('sub-')) updateBoardFreePosition(node.id.replace('sub-', ''), x, y)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function handleAddCard(listId: string) {

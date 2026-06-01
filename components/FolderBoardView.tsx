@@ -2,12 +2,14 @@
 
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Folder, FolderPlus, FileText, ArrowLeft, Trash2, X, Save } from 'lucide-react'
+import { Folder, FolderPlus, FileText, ArrowLeft, Trash2, X, Save, Download } from 'lucide-react'
 import type { Board, BoardElement } from '@/lib/types'
-import { createSubTab, renameBoard, deleteBoard, createTextFile, updateTextFile, deleteElement } from '@/app/actions'
-import { readDroppedTextFiles } from '@/lib/files'
+import { createSubTab, renameBoard, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard } from '@/app/actions'
+import { readDroppedTextFiles, downloadTextFile } from '@/lib/files'
 
 const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
+// Custom drag type so internal file moves are distinguishable from OS file drops.
+const FILE_MIME = 'application/x-syncedsys-fileid'
 
 export default function FolderBoardView({
   board,
@@ -26,7 +28,16 @@ export default function FolderBoardView({
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [editing, setEditing] = useState<BoardElement | null>(null)
+  const [moveTargetId, setMoveTargetId] = useState<string | null>(null) // folder/back highlighted as a move target
   const dragDepth = useRef(0)
+
+  // ── Move a file into another board (sub-folder, or up to the parent) ──
+  async function moveFileToBoard(fileId: string, targetBoardId: string) {
+    if (!fileId || targetBoardId === board.id) return
+    setFiles(prev => prev.filter(f => f.id !== fileId))
+    setMoveTargetId(null)
+    await moveElementToBoard(fileId, targetBoardId, board.id)
+  }
 
   // ── Folders ──
   async function handleNewFolder() {
@@ -89,6 +100,8 @@ export default function FolderBoardView({
   async function onDrop(e: React.DragEvent) {
     dragDepth.current = 0
     setDragOver(false)
+    // Internal file move dropped on empty space — it already lives here, ignore.
+    if (e.dataTransfer.getData(FILE_MIME)) return
     if (!e.dataTransfer.files?.length) return
     e.preventDefault()
     const { accepted, skipped } = await readDroppedTextFiles(e.dataTransfer.files)
@@ -115,8 +128,11 @@ export default function FolderBoardView({
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-200 bg-white">
         <button
           onClick={() => board.parent_id ? router.push(`/board/${board.parent_id}`) : router.push('/')}
-          className="p-1.5 rounded hover:bg-gray-100 text-gray-500"
-          title="Back"
+          onDragOver={e => { if (board.parent_id && e.dataTransfer.types.includes(FILE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId('__back__') } }}
+          onDragLeave={() => setMoveTargetId(null)}
+          onDrop={e => { e.preventDefault(); e.stopPropagation(); const id = e.dataTransfer.getData(FILE_MIME); if (id && board.parent_id) moveFileToBoard(id, board.parent_id) }}
+          className={`p-1.5 rounded text-gray-500 ${moveTargetId === '__back__' ? 'bg-blue-100 ring-2 ring-blue-400' : 'hover:bg-gray-100'}`}
+          title={board.parent_id ? 'Back (drop a file here to move it up)' : 'Back'}
         >
           <ArrowLeft size={16} />
         </button>
@@ -147,8 +163,11 @@ export default function FolderBoardView({
               <div
                 key={f.id}
                 onDoubleClick={() => router.push(`/board/${f.id}`)}
-                className="group relative flex flex-col items-center gap-1.5 p-3 rounded-lg hover:bg-blue-50 cursor-pointer"
-                title="Double-click to open"
+                onDragOver={e => { if (e.dataTransfer.types.includes(FILE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId(f.id) } }}
+                onDragLeave={() => setMoveTargetId(prev => prev === f.id ? null : prev)}
+                onDrop={e => { e.preventDefault(); e.stopPropagation(); const id = e.dataTransfer.getData(FILE_MIME); if (id) moveFileToBoard(id, f.id) }}
+                className={`group relative flex flex-col items-center gap-1.5 p-3 rounded-lg cursor-pointer ${moveTargetId === f.id ? 'bg-blue-100 ring-2 ring-blue-400' : 'hover:bg-blue-50'}`}
+                title="Double-click to open · drop a file here to move it in"
               >
                 <div className="relative">
                   <Folder size={44} className="text-blue-400 fill-blue-100" />
@@ -187,20 +206,32 @@ export default function FolderBoardView({
             {files.map(file => (
               <div
                 key={file.id}
+                draggable
+                onDragStart={e => { e.dataTransfer.setData(FILE_MIME, file.id); e.dataTransfer.effectAllowed = 'move' }}
                 onDoubleClick={() => setEditing(file)}
                 className="group relative flex flex-col items-center gap-1.5 p-3 rounded-lg hover:bg-indigo-50 cursor-pointer"
-                title="Double-click to open"
+                title="Double-click to open · drag onto a folder to move it"
               >
                 <FileText size={42} className="text-indigo-400" />
                 <span className="text-[11px] text-gray-700 text-center break-words line-clamp-2 leading-tight">
                   {(file.data.name as string) || 'Untitled.txt'}
                 </span>
-                <button
-                  onClick={e => { e.stopPropagation(); removeFile(file.id) }}
-                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-white shadow text-gray-400 hover:text-red-500"
-                >
-                  <Trash2 size={11} />
-                </button>
+                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 flex gap-0.5">
+                  <button
+                    onClick={e => { e.stopPropagation(); downloadTextFile((file.data.name as string) || 'file.txt', (file.data.content as string) || '') }}
+                    className="p-0.5 rounded bg-white shadow text-gray-400 hover:text-indigo-500"
+                    title="Download"
+                  >
+                    <Download size={11} />
+                  </button>
+                  <button
+                    onClick={e => { e.stopPropagation(); removeFile(file.id) }}
+                    className="p-0.5 rounded bg-white shadow text-gray-400 hover:text-red-500"
+                    title="Delete"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -226,6 +257,13 @@ export default function FolderBoardView({
                 className="flex-1 text-sm font-medium text-gray-800 focus:outline-none"
                 placeholder="filename.txt"
               />
+              <button
+                onClick={() => downloadTextFile((editing.data.name as string) || 'file.txt', (editing.data.content as string) || '')}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-600 px-2 py-1 rounded hover:bg-gray-100"
+                title="Download"
+              >
+                <Download size={13} /> Download
+              </button>
               <button onClick={saveEditing} className="flex items-center gap-1 text-xs bg-indigo-500 hover:bg-indigo-600 text-white px-2.5 py-1 rounded">
                 <Save size={12} /> Save
               </button>
