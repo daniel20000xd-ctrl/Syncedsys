@@ -219,3 +219,5 @@ create index on cards(list_id);
 -- alter table board_elements add column if not exists deadline timestamptz;
 -- alter table lists add column if not exists hidden boolean not null default false;
 -- alter table cards add column if not exists hidden boolean not null default false;
+-- alter table cards add column if not exists done_at timestamptz;
+-- alter table cards add column if not exists recur_interval_minutes integer;

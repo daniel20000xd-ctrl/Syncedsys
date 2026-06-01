@@ -48,7 +48,9 @@ export type Card = {
   x: number
   y: number
   done: boolean
+  done_at: string | null
   deadline: string | null
+  recur_interval_minutes: number | null
   hidden: boolean
   created_at: string
 }

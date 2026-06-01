@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import BoardView from '@/components/BoardView'
 import FreeBoardView from '@/components/free/FreeBoardView'
 import TextBoardView from '@/components/TextBoardView'
+import { resetDueRecurringCards } from '@/lib/recur'
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -29,6 +30,9 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
     .select('*')
     .in('list_id', (lists ?? []).map(l => l.id))
     .order('position', { ascending: true })
+
+  // Recurring cards: reset any whose interval has elapsed since completion.
+  await resetDueRecurringCards(supabase, cards ?? [])
 
   if (board.mode === 'classic' || (board.mode as string) === 'free') {
     const { data: edges } = await supabase

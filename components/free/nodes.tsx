@@ -5,8 +5,9 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal } from '@/app/actions'
+import { recurLabel } from '@/lib/recur'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
@@ -228,7 +229,14 @@ export function CardNode({ id, data }: NodeProps) {
               className="nodrag w-full text-sm resize-none focus:outline-none"
             />
           ) : (
-            <p className={`text-sm cursor-pointer flex-1 ${done ? 'line-through text-gray-400' : 'text-gray-800'}`} onDoubleClick={() => setEditing(true)}>{data.title as string}</p>
+            <div className="flex-1 min-w-0">
+              <p className={`text-sm cursor-pointer ${done ? 'line-through text-gray-400' : 'text-gray-800'}`} onDoubleClick={() => setEditing(true)}>{data.title as string}</p>
+              {data.recur != null && (
+                <span className="mt-0.5 inline-flex items-center gap-0.5 text-[9px] font-medium text-indigo-500">
+                  <Repeat size={8} /> {recurLabel(data.recur as number)}
+                </span>
+              )}
+            </div>
           )}
         </div>
         <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 flex gap-0.5">

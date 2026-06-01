@@ -89,6 +89,7 @@ function buildNodes(
       title: c.title,
       done: c.done,
       hidden: c.hidden,
+      recur: c.recur_interval_minutes,
       listId: c.list_id,
       onDelete: (nodeId: string) => onDeleteNode(nodeId, 'card'),
       onRename: onRenameCard,

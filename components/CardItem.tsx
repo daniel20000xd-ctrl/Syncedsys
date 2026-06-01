@@ -3,9 +3,10 @@
 import { useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Pencil, X, Check, Clock } from 'lucide-react'
+import { Pencil, X, Check, Clock, Repeat } from 'lucide-react'
 import type { Card } from '@/lib/types'
-import { deleteCard, updateCard, updateCardDone, setCardDeadline } from '@/app/actions'
+import { recurLabel } from '@/lib/recur'
+import { deleteCard, updateCard, updateCardDone, setCardDeadline, setCardRecur } from '@/app/actions'
 
 export default function CardItem({
   card,
@@ -23,6 +24,18 @@ export default function CardItem({
   const [done, setDone] = useState(card.done)
   const [hovered, setHovered] = useState(false)
   const [deadlineValue, setDeadlineValue] = useState(card.deadline ? card.deadline.slice(0, 10) : '')
+  // Schedule editor: a card is either 'expire' (deleted at deadline) or 'repeat'
+  // (done resets every interval). These are mutually exclusive.
+  const [schedMode, setSchedMode] = useState<'none' | 'expire' | 'repeat'>(
+    card.deadline ? 'expire' : card.recur_interval_minutes ? 'repeat' : 'none'
+  )
+  const initialRecur = card.recur_interval_minutes ?? 1440
+  const [recurEvery, setRecurEvery] = useState(initialRecur % 1440 === 0 ? initialRecur / 1440 : initialRecur % 60 === 0 ? initialRecur / 60 : initialRecur)
+  const [recurUnit, setRecurUnit] = useState<'minutes' | 'hours' | 'days'>(
+    card.recur_interval_minutes == null
+      ? 'days'
+      : card.recur_interval_minutes % 1440 === 0 ? 'days' : card.recur_interval_minutes % 60 === 0 ? 'hours' : 'minutes'
+  )
 
   const expired = card.deadline ? new Date(card.deadline) < new Date() : false
 
@@ -66,7 +79,22 @@ export default function CardItem({
   async function handleSaveDeadline() {
     const iso = deadlineValue ? new Date(deadlineValue).toISOString() : null
     await setCardDeadline(card.id, iso, boardId)
-    onUpdated({ ...card, deadline: iso })
+    onUpdated({ ...card, deadline: iso, recur_interval_minutes: iso ? null : card.recur_interval_minutes })
+  }
+
+  const recurMinutes = Math.max(1, Math.round(recurEvery)) * (recurUnit === 'days' ? 1440 : recurUnit === 'hours' ? 60 : 1)
+
+  async function handleSaveRecur() {
+    await setCardRecur(card.id, recurMinutes, boardId)
+    onUpdated({ ...card, recur_interval_minutes: recurMinutes, deadline: null })
+  }
+
+  async function clearSchedule() {
+    setSchedMode('none')
+    setDeadlineValue('')
+    if (card.deadline) await setCardDeadline(card.id, null, boardId)
+    if (card.recur_interval_minutes) await setCardRecur(card.id, null, boardId)
+    onUpdated({ ...card, deadline: null, recur_interval_minutes: null })
   }
 
   if (editing) {
@@ -84,24 +112,71 @@ export default function CardItem({
           className="w-full text-sm text-gray-800 focus:outline-none resize-none"
         />
         <div className="mt-2 border-t border-gray-100 pt-2">
-          <p className="text-[10px] text-gray-400 mb-1 flex items-center gap-1"><Clock size={10} /> Expiry (deletes automatically)</p>
-          <div className="flex gap-1">
-            <input
-              type="date"
-              value={deadlineValue}
-              onChange={e => setDeadlineValue(e.target.value)}
-              onBlur={handleSaveDeadline}
-              className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
-            />
-            {deadlineValue && (
+          {/* Schedule type toggle: none / expire / repeat */}
+          <div className="flex gap-1 mb-2 text-[10px]">
+            {([
+              ['none', 'None'],
+              ['expire', 'Expire'],
+              ['repeat', 'Repeat'],
+            ] as const).map(([m, label]) => (
               <button
-                onClick={async () => { setDeadlineValue(''); await setCardDeadline(card.id, null, boardId); onUpdated({ ...card, deadline: null }) }}
-                className="text-gray-400 hover:text-red-500 px-1"
+                key={m}
+                onClick={() => {
+                  if (m === 'none') { clearSchedule() }
+                  else if (m === 'repeat') { setSchedMode('repeat'); if (card.recur_interval_minutes == null) handleSaveRecur() }
+                  else { setSchedMode('expire') }
+                }}
+                className={`flex-1 py-1 rounded border transition-colors ${
+                  schedMode === m
+                    ? 'bg-[#0079bf] border-[#0079bf] text-white'
+                    : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+                }`}
               >
-                <X size={13} />
+                {label}
               </button>
-            )}
+            ))}
           </div>
+
+          {schedMode === 'expire' && (
+            <div>
+              <p className="text-[10px] text-gray-400 mb-1 flex items-center gap-1"><Clock size={10} /> Deletes automatically on this date</p>
+              <input
+                type="date"
+                value={deadlineValue}
+                onChange={e => setDeadlineValue(e.target.value)}
+                onBlur={handleSaveDeadline}
+                className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          )}
+
+          {schedMode === 'repeat' && (
+            <div>
+              <p className="text-[10px] text-gray-400 mb-1 flex items-center gap-1"><Repeat size={10} /> Re-opens itself for completion</p>
+              <div className="flex gap-1 items-center">
+                <span className="text-[11px] text-gray-500">Every</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={recurEvery}
+                  onChange={e => setRecurEvery(Number(e.target.value))}
+                  onBlur={handleSaveRecur}
+                  className="w-14 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
+                />
+                <select
+                  value={recurUnit}
+                  onChange={e => { setRecurUnit(e.target.value as 'minutes' | 'hours' | 'days') }}
+                  onBlur={handleSaveRecur}
+                  className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 bg-white"
+                >
+                  <option value="minutes">minutes</option>
+                  <option value="hours">hours</option>
+                  <option value="days">days</option>
+                </select>
+              </div>
+              <p className="text-[10px] text-gray-400 mt-1">{recurLabel(recurMinutes)} · resets to undone</p>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 mt-2">
           <button onClick={handleSave} className="bg-[#0079bf] hover:bg-[#026aa7] text-white text-xs px-2 py-1 rounded">Save</button>
@@ -135,6 +210,12 @@ export default function CardItem({
           <span className={`ml-1.5 text-[10px] font-medium ${expired ? 'text-red-500' : 'text-amber-500'}`}>
             <Clock size={9} className="inline mr-0.5" />
             {expired ? 'Expired' : new Date(card.deadline).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+          </span>
+        )}
+        {card.recur_interval_minutes != null && (
+          <span className="ml-1.5 text-[10px] font-medium text-indigo-500" title={`Repeats ${recurLabel(card.recur_interval_minutes).toLowerCase()}`}>
+            <Repeat size={9} className="inline mr-0.5" />
+            {recurLabel(card.recur_interval_minutes)}
           </span>
         )}
       </div>

@@ -135,6 +135,42 @@ export async function updateBoard(boardId: string, updates: { name?: string; col
   return data
 }
 
+// Spread a board's lists and cards into a kanban-style grid on the canvas.
+// Used when switching Trello → Classic, where items would otherwise pile up at
+// (0,0). Only repositions items still sitting at the origin so a hand-arranged
+// classic layout is never clobbered.
+export async function layoutBoardGrid(boardId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data: lists } = await supabase
+    .from('lists').select('id, position, x, y').eq('board_id', boardId).order('position', { ascending: true })
+  if (!lists || lists.length === 0) return
+
+  const { data: cards } = await supabase
+    .from('cards').select('id, list_id, position, x, y').in('list_id', lists.map(l => l.id)).order('position', { ascending: true })
+
+  const COL_W = 280, ROW_H = 64, CARD_TOP = 96, GAP = 40
+  const updates: PromiseLike<unknown>[] = []
+
+  lists.forEach((l, i) => {
+    const lx = GAP + i * COL_W
+    if (l.x === 0 && l.y === 0) {
+      updates.push(supabase.from('lists').update({ x: lx, y: GAP }).eq('id', l.id))
+    }
+    const listCards = (cards ?? []).filter(c => c.list_id === l.id)
+    listCards.forEach((c, j) => {
+      if (c.x === 0 && c.y === 0) {
+        updates.push(supabase.from('cards').update({ x: lx, y: CARD_TOP + j * ROW_H }).eq('id', c.id))
+      }
+    })
+  })
+
+  await Promise.all(updates)
+  revalidatePath(`/board/${boardId}`)
+}
+
 // ── Lists ────────────────────────────────────────────────────────────────────
 
 export async function createList(boardId: string, name: string) {
@@ -229,13 +265,28 @@ export async function updateCard(cardId: string, updates: { title?: string; desc
 
 export async function updateCardDone(cardId: string, done: boolean, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('cards').update({ done }).eq('id', cardId)
+  // Stamp done_at so recurring cards know when the current cycle started.
+  await supabase.from('cards').update({ done, done_at: done ? new Date().toISOString() : null }).eq('id', cardId)
   revalidatePath(`/board/${boardId}`)
 }
 
 export async function setCardDeadline(cardId: string, deadline: string | null, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('cards').update({ deadline }).eq('id', cardId)
+  // Expiry and recurrence are mutually exclusive — setting an expiry clears recurrence.
+  const updates: Record<string, unknown> = { deadline }
+  if (deadline) updates.recur_interval_minutes = null
+  await supabase.from('cards').update(updates).eq('id', cardId)
+  revalidatePath(`/board/${boardId}`)
+}
+
+// Set (or clear, with null) a recurrence interval in minutes. When a card
+// recurs, checking it off resets to undone after the interval elapses.
+export async function setCardRecur(cardId: string, intervalMinutes: number | null, boardId: string) {
+  const supabase = await createClient()
+  const updates: Record<string, unknown> = { recur_interval_minutes: intervalMinutes }
+  // Recurrence and expiry are mutually exclusive.
+  if (intervalMinutes != null) updates.deadline = null
+  await supabase.from('cards').update(updates).eq('id', cardId)
   revalidatePath(`/board/${boardId}`)
 }
 
