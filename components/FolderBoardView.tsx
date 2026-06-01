@@ -4,8 +4,8 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Folder, FolderPlus, FileText, ArrowLeft, Trash2, X, Save, Download } from 'lucide-react'
 import type { Board, BoardElement } from '@/lib/types'
-import { createSubTab, renameBoard, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard } from '@/app/actions'
-import { readDroppedTextFiles, downloadTextFile } from '@/lib/files'
+import { createSubTab, renameBoard, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard, importFolderTree } from '@/app/actions'
+import { collectEntries, readDroppedEntries, downloadTextFile } from '@/lib/files'
 
 const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
 // Custom drag type so internal file moves are distinguishable from OS file drops.
@@ -102,14 +102,20 @@ export default function FolderBoardView({
     setDragOver(false)
     // Internal file move dropped on empty space — it already lives here, ignore.
     if (e.dataTransfer.getData(FILE_MIME)) return
-    if (!e.dataTransfer.files?.length) return
+    // Grab directory entries synchronously before any await.
+    const entries = collectEntries(e.dataTransfer)
+    if (!entries && !e.dataTransfer.files?.length) return
     e.preventDefault()
-    const { accepted, skipped } = await readDroppedTextFiles(e.dataTransfer.files)
-    for (const f of accepted) {
+    const { trees, files, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
+    for (const f of files) {
       const el = await createTextFile(board.id, f.name, f.content)
       setFiles(prev => [...prev, el as BoardElement])
     }
-    if (skipped.length && !accepted.length) {
+    for (const tree of trees) {
+      const top = await importFolderTree(board.id, tree, board.color)
+      setFolders(prev => [...prev, top as Board])
+    }
+    if (skipped.length && !files.length && !trees.length) {
       alert('Only text files are supported for now (binary storage is coming later).')
     }
   }
@@ -155,7 +161,7 @@ export default function FolderBoardView({
           <div className="h-full flex flex-col items-center justify-center text-center text-gray-400">
             <FileText size={40} className="mb-3 opacity-40" />
             <p className="text-sm">This folder is empty.</p>
-            <p className="text-xs mt-1">Drag text files in, or create a sub-folder.</p>
+            <p className="text-xs mt-1">Drag in files or whole folders, or create a sub-folder.</p>
           </div>
         ) : (
           <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))' }}>
@@ -241,7 +247,7 @@ export default function FolderBoardView({
       {/* Drop overlay */}
       {dragOver && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-indigo-500/10 border-4 border-dashed border-indigo-400 pointer-events-none">
-          <p className="bg-white/90 text-indigo-600 text-sm font-medium px-4 py-2 rounded-lg shadow">Drop text files here</p>
+          <p className="bg-white/90 text-indigo-600 text-sm font-medium px-4 py-2 rounded-lg shadow">Drop files or folders here</p>
         </div>
       )}
 

@@ -15,12 +15,12 @@ import {
   createList, createFreeCard, deleteEdge, deleteBoard,
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
-  updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard,
+  updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, DeletableEdge, PortalNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
-import { readDroppedTextFiles } from '@/lib/files'
+import { collectEntries, readDroppedEntries } from '@/lib/files'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -427,17 +427,30 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }
 
   async function onCanvasDrop(e: React.DragEvent) {
-    if (!e.dataTransfer.files?.length) return
+    // Capture directory entries synchronously before any await.
+    const entries = collectEntries(e.dataTransfer)
+    if (!entries && !e.dataTransfer.files?.length) return
     e.preventDefault()
     setFileDragOver(false)
-    const { accepted, skipped } = await readDroppedTextFiles(e.dataTransfer.files)
     const origin = screenToFlowPosition({ x: e.clientX, y: e.clientY })
-    accepted.forEach((f, i) => {
+    const { trees, files, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
+    files.forEach((f, i) => {
       addElement('textfile', origin.x + i * 24, origin.y + i * 24, { name: f.name, content: f.content })
     })
-    if (skipped.length) {
-      console.warn('Skipped non-text or oversized files:', skipped)
-      if (!accepted.length) alert('Only text files are supported for now (binary storage is coming later).')
+    // Each dropped folder becomes a sub-tab (folder board) node on the canvas.
+    for (let i = 0; i < trees.length; i++) {
+      const x = origin.x + (files.length + i) * 28, y = origin.y + (files.length + i) * 28
+      const top = await importFolderTree(board.id, trees[i], board.color)
+      await updateBoardFreePosition(top.id, x, y)
+      const newSub = { ...top, free_x: x, free_y: y } as Board
+      setSubBoards(prev => [...prev, newSub])
+      setNodes(prev => [...prev, {
+        id: `sub-${top.id}`, type: 'subTabNode', position: { x, y },
+        data: { boardId: top.id, name: top.name, color: top.color, mode: top.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
+      }])
+    }
+    if (skipped.length && !files.length && !trees.length) {
+      alert('Only text files are supported for now (binary storage is coming later).')
     }
   }
 
@@ -1086,7 +1099,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
       {fileDragOver && (
         <div className="absolute inset-0 z-20 flex items-center justify-center bg-indigo-500/10 border-4 border-dashed border-indigo-400 pointer-events-none">
-          <p className="bg-white/90 text-indigo-600 text-sm font-medium px-4 py-2 rounded-lg shadow">Drop text files to add them to the canvas</p>
+          <p className="bg-white/90 text-indigo-600 text-sm font-medium px-4 py-2 rounded-lg shadow">Drop files or folders to add them to the canvas</p>
         </div>
       )}
 

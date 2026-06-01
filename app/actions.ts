@@ -417,6 +417,42 @@ export async function createTextFile(boardId: string, name: string, content: str
   return data
 }
 
+// Recreate a dropped folder tree under a parent board: each folder becomes a
+// child board (mode 'folder'), each text file a 'textfile' element. Returns the
+// top-level folder board so the caller can show it immediately.
+type ImportNode = { name: string; files: { name: string; content: string }[]; dirs: ImportNode[] }
+
+export async function importFolderTree(parentBoardId: string, tree: ImportNode, color: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  async function createDir(node: ImportNode, parentId: string, tabPos: number) {
+    const { data: board, error } = await supabase
+      .from('boards')
+      .insert({ name: node.name, color, user_id: user!.id, parent_id: parentId, tab_position: tabPos, mode: 'folder' })
+      .select().single()
+    if (error) throw error
+    if (node.files.length) {
+      await supabase.from('board_elements').insert(
+        node.files.map(f => ({ board_id: board.id, type: 'textfile', x: 0, y: 0, data: { name: f.name, content: f.content } }))
+      )
+    }
+    for (let i = 0; i < node.dirs.length; i++) {
+      await createDir(node.dirs[i], board.id, i)
+    }
+    return board
+  }
+
+  const { data: existing } = await supabase
+    .from('boards').select('tab_position').eq('parent_id', parentBoardId).order('tab_position', { ascending: false }).limit(1)
+  const tabPos = existing && existing.length > 0 ? existing[0].tab_position + 1 : 0
+
+  const top = await createDir(tree, parentBoardId, tabPos)
+  revalidatePath(`/board/${parentBoardId}`)
+  return top
+}
+
 // Move an element (e.g. a text file) to another board the user owns — used to
 // drag files between folders, or off a canvas into a folder. Resets position.
 export async function moveElementToBoard(elementId: string, targetBoardId: string, fromBoardId?: string) {
