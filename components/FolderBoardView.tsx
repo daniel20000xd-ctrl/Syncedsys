@@ -4,12 +4,13 @@ import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Folder, FolderPlus, FileText, ArrowLeft, Trash2, X, Save, Download } from 'lucide-react'
 import type { Board, BoardElement } from '@/lib/types'
-import { createSubTab, renameBoard, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard, importFolderTree } from '@/app/actions'
+import { createSubTab, renameBoard, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard, importFolderTree, moveBoardToParent } from '@/app/actions'
 import { collectEntries, readDroppedEntries, downloadTextFile } from '@/lib/files'
 
 const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
-// Custom drag type so internal file moves are distinguishable from OS file drops.
+// Custom drag types so internal moves are distinguishable from OS file drops.
 const FILE_MIME = 'application/x-syncedsys-fileid'
+const FOLDER_MIME = 'application/x-syncedsys-folderid'
 
 export default function FolderBoardView({
   board,
@@ -29,6 +30,7 @@ export default function FolderBoardView({
   const [renameValue, setRenameValue] = useState('')
   const [editing, setEditing] = useState<BoardElement | null>(null)
   const [moveTargetId, setMoveTargetId] = useState<string | null>(null) // folder/back highlighted as a move target
+  const [draggingFolderId, setDraggingFolderId] = useState<string | null>(null)
   const dragDepth = useRef(0)
 
   // ── Move a file into another board (sub-folder, or up to the parent) ──
@@ -37,6 +39,30 @@ export default function FolderBoardView({
     setFiles(prev => prev.filter(f => f.id !== fileId))
     setMoveTargetId(null)
     await moveElementToBoard(fileId, targetBoardId, board.id)
+  }
+
+  // ── Move a folder into another folder (nest), or up to the parent (null = top level) ──
+  async function moveFolderToBoard(folderId: string, targetBoardId: string | null) {
+    if (!folderId || folderId === targetBoardId) return
+    const moved = folders.find(f => f.id === folderId)
+    setFolders(prev => prev.filter(f => f.id !== folderId))
+    setMoveTargetId(null)
+    try {
+      await moveBoardToParent(folderId, targetBoardId, board.id)
+    } catch (err) {
+      console.error('Failed to move folder:', err)
+      if (moved) setFolders(prev => [...prev, moved]) // restore on rejection (e.g. cycle)
+      alert(err instanceof Error ? err.message : 'Could not move that folder.')
+    }
+  }
+
+  // What the dragged item is, read on drop (FILE has priority).
+  function handleTileDrop(e: React.DragEvent, targetBoardId: string | null) {
+    e.preventDefault(); e.stopPropagation()
+    const fileId = e.dataTransfer.getData(FILE_MIME)
+    if (fileId) { if (targetBoardId) moveFileToBoard(fileId, targetBoardId); return }
+    const folderId = e.dataTransfer.getData(FOLDER_MIME)
+    if (folderId) moveFolderToBoard(folderId, targetBoardId)
   }
 
   // ── Folders ──
@@ -100,8 +126,8 @@ export default function FolderBoardView({
   async function onDrop(e: React.DragEvent) {
     dragDepth.current = 0
     setDragOver(false)
-    // Internal file move dropped on empty space — it already lives here, ignore.
-    if (e.dataTransfer.getData(FILE_MIME)) return
+    // Internal move dropped on empty space — it already lives here, ignore.
+    if (e.dataTransfer.getData(FILE_MIME) || e.dataTransfer.getData(FOLDER_MIME)) return
     // Grab directory entries synchronously before any await.
     const entries = collectEntries(e.dataTransfer)
     if (!entries && !e.dataTransfer.files?.length) return
@@ -134,11 +160,16 @@ export default function FolderBoardView({
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-200 bg-white">
         <button
           onClick={() => board.parent_id ? router.push(`/board/${board.parent_id}`) : router.push('/')}
-          onDragOver={e => { if (board.parent_id && e.dataTransfer.types.includes(FILE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId('__back__') } }}
+          onDragOver={e => {
+            const t = e.dataTransfer.types
+            // Files need a real parent board; folders can go up to the top level too.
+            const canDrop = (t.includes(FILE_MIME) && board.parent_id) || t.includes(FOLDER_MIME)
+            if (canDrop) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId('__back__') }
+          }}
           onDragLeave={() => setMoveTargetId(null)}
-          onDrop={e => { e.preventDefault(); e.stopPropagation(); const id = e.dataTransfer.getData(FILE_MIME); if (id && board.parent_id) moveFileToBoard(id, board.parent_id) }}
+          onDrop={e => handleTileDrop(e, board.parent_id)}
           className={`p-1.5 rounded text-gray-500 ${moveTargetId === '__back__' ? 'bg-blue-100 ring-2 ring-blue-400' : 'hover:bg-gray-100'}`}
-          title={board.parent_id ? 'Back (drop a file here to move it up)' : 'Back'}
+          title={board.parent_id ? 'Back (drop here to move up)' : 'Back'}
         >
           <ArrowLeft size={16} />
         </button>
@@ -168,12 +199,21 @@ export default function FolderBoardView({
             {folders.map(f => (
               <div
                 key={f.id}
+                draggable={renamingId !== f.id}
+                onDragStart={e => { e.dataTransfer.setData(FOLDER_MIME, f.id); e.dataTransfer.effectAllowed = 'move'; setDraggingFolderId(f.id) }}
+                onDragEnd={() => { setDraggingFolderId(null); setMoveTargetId(null) }}
                 onDoubleClick={() => router.push(`/board/${f.id}`)}
-                onDragOver={e => { if (e.dataTransfer.types.includes(FILE_MIME)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId(f.id) } }}
+                onDragOver={e => {
+                  const t = e.dataTransfer.types
+                  // Accept files and other folders, but not the folder being dragged onto itself.
+                  if ((t.includes(FILE_MIME) || t.includes(FOLDER_MIME)) && draggingFolderId !== f.id) {
+                    e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId(f.id)
+                  }
+                }}
                 onDragLeave={() => setMoveTargetId(prev => prev === f.id ? null : prev)}
-                onDrop={e => { e.preventDefault(); e.stopPropagation(); const id = e.dataTransfer.getData(FILE_MIME); if (id) moveFileToBoard(id, f.id) }}
-                className={`group relative flex flex-col items-center gap-1.5 p-3 rounded-lg cursor-pointer ${moveTargetId === f.id ? 'bg-blue-100 ring-2 ring-blue-400' : 'hover:bg-blue-50'}`}
-                title="Double-click to open · drop a file here to move it in"
+                onDrop={e => handleTileDrop(e, f.id)}
+                className={`group relative flex flex-col items-center gap-1.5 p-3 rounded-lg cursor-pointer ${moveTargetId === f.id ? 'bg-blue-100 ring-2 ring-blue-400' : 'hover:bg-blue-50'} ${draggingFolderId === f.id ? 'opacity-40' : ''}`}
+                title="Double-click to open · drag onto another folder to nest · drop items here to move them in"
               >
                 <div className="relative">
                   <Folder size={44} className="text-blue-400 fill-blue-100" />

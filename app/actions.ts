@@ -453,6 +453,42 @@ export async function importFolderTree(parentBoardId: string, tree: ImportNode, 
   return top
 }
 
+// Re-parent a folder (board) under another board, or to the top level (null).
+// Guards against moving a folder into itself or into one of its own
+// descendants, which would create a cycle.
+export async function moveBoardToParent(boardId: string, newParentId: string | null, fromParentId?: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  if (boardId === newParentId) throw new Error('Cannot move a folder into itself')
+
+  if (newParentId) {
+    const { data: tgt } = await supabase.from('boards').select('id').eq('id', newParentId).eq('user_id', user.id).single()
+    if (!tgt) throw new Error('Target folder not found')
+    // Walk up from the target; if we reach the folder being moved, it's a cycle.
+    let cursor: string | null = newParentId
+    const seen = new Set<string>()
+    while (cursor) {
+      if (cursor === boardId) throw new Error('Cannot move a folder into one of its own sub-folders')
+      if (seen.has(cursor)) break
+      seen.add(cursor)
+      const { data: row }: { data: { parent_id: string | null } | null } =
+        await supabase.from('boards').select('parent_id').eq('id', cursor).single()
+      cursor = row?.parent_id ?? null
+    }
+  }
+
+  let posQuery = supabase.from('boards').select('tab_position').eq('user_id', user.id).order('tab_position', { ascending: false }).limit(1)
+  posQuery = newParentId ? posQuery.eq('parent_id', newParentId) : posQuery.is('parent_id', null)
+  const { data: existing } = await posQuery
+  const tab_position = existing && existing.length > 0 ? existing[0].tab_position + 1 : 0
+
+  await supabase.from('boards').update({ parent_id: newParentId, tab_position }).eq('id', boardId).eq('user_id', user.id)
+  if (fromParentId) revalidatePath(`/board/${fromParentId}`)
+  if (newParentId) revalidatePath(`/board/${newParentId}`)
+  revalidatePath('/', 'layout')
+}
+
 // Move an element (e.g. a text file) to another board the user owns — used to
 // drag files between folders, or off a canvas into a folder. Resets position.
 export async function moveElementToBoard(elementId: string, targetBoardId: string, fromBoardId?: string) {
