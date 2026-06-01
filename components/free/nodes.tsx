@@ -5,7 +5,7 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal } from '@/app/actions'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
@@ -231,12 +231,22 @@ export function CardNode({ id, data }: NodeProps) {
             <p className={`text-sm cursor-pointer flex-1 ${done ? 'line-through text-gray-400' : 'text-gray-800'}`} onDoubleClick={() => setEditing(true)}>{data.title as string}</p>
           )}
         </div>
-        <button
-          className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-100 text-gray-400 hover:text-red-500"
-          onClick={() => (data.onDelete as (id: string) => void)(id)}
-        >
-          <X size={11} />
-        </button>
+        <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 flex gap-0.5">
+          <button
+            className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600"
+            onPointerDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
+            title="Hide (unhide from dashboard)"
+          >
+            <EyeOff size={11} />
+          </button>
+          <button
+            className="p-0.5 rounded hover:bg-red-100 text-gray-400 hover:text-red-500"
+            onClick={() => (data.onDelete as (id: string) => void)(id)}
+          >
+            <X size={11} />
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -314,6 +324,21 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
       >
         <X size={11} />
       </button>
+      <button
+        className="absolute top-0 right-5 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-gray-600 z-10"
+        title="Hide (unhide from dashboard)"
+        onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
+      >
+        <EyeOff size={11} />
+      </button>
+      <button
+        className="absolute -top-2 -left-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow z-10"
+        style={{ color: data.deadline && new Date(data.deadline as string) < new Date() ? '#ef4444' : '#9ca3af' }}
+        title={data.deadline ? `Expires ${new Date(data.deadline as string).toLocaleDateString()}` : 'Set expiry'}
+        onClick={e => { e.stopPropagation(); (data.onSetExpiry as (id: string) => void)?.(id) }}
+      >
+        <Clock size={11} />
+      </button>
     </div>
   )
 }
@@ -364,6 +389,21 @@ export function TextNode({ id, data }: NodeProps) {
         onClick={() => (data.onDelete as (id: string) => void)(id)}
       >
         <X size={11} />
+      </button>
+      <button
+        className="absolute -top-2 right-3 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-gray-600 z-10"
+        title="Hide (unhide from dashboard)"
+        onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
+      >
+        <EyeOff size={11} />
+      </button>
+      <button
+        className="absolute -top-2 -left-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow z-10"
+        style={{ color: data.deadline && new Date(data.deadline as string) < new Date() ? '#ef4444' : '#9ca3af' }}
+        title={data.deadline ? `Expires ${new Date(data.deadline as string).toLocaleDateString()}` : 'Set expiry'}
+        onClick={e => { e.stopPropagation(); (data.onSetExpiry as (id: string) => void)?.(id) }}
+      >
+        <Clock size={11} />
       </button>
     </div>
   )

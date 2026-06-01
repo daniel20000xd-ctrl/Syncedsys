@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Folder, Frame } from 'lucide-react'
+import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Folder, Frame, Eye, EyeOff } from 'lucide-react'
 import { useUnits, unitsStore, type Unit } from '@/lib/unitsStore'
 
 const KIND_ICON: Record<Unit['kind'], typeof Square> = {
@@ -33,7 +33,7 @@ export default function UnitsPanel() {
     const to = ids.indexOf(targetId)
     if (from === -1 || to === -1) return
     ids.splice(to, 0, ids.splice(from, 1)[0])
-    unitsStore.reorder(ids) // top of the list = highest layer
+    unitsStore.reorder(ids)
     setDragId(null)
     setOverId(null)
   }
@@ -47,30 +47,54 @@ export default function UnitsPanel() {
         return (
           <div key={u.id}>
             <div
-              draggable
+              draggable={!u.hidden}
               onDragStart={() => setDragId(u.id)}
               onDragOver={e => { e.preventDefault(); setOverId(u.id) }}
               onDrop={() => handleDrop(u.id)}
               onDragEnd={() => { setDragId(null); setOverId(null) }}
-              onClick={() => unitsStore.select(u.id)}
-              className={`group flex items-center gap-1.5 px-1.5 py-1 rounded cursor-pointer text-sm transition-colors ${
-                u.selected ? 'bg-blue-500/30 text-white' : 'text-white/70 hover:bg-white/10 hover:text-white'
-              } ${overId === u.id && dragId ? 'border-t-2 border-blue-400' : 'border-t-2 border-transparent'}`}
+              onClick={() => !u.hidden && unitsStore.select(u.id)}
+              className={`group flex items-center gap-1.5 px-1.5 py-1 rounded text-sm transition-colors
+                ${u.hidden
+                  ? 'opacity-40 cursor-default'
+                  : u.selected
+                    ? 'bg-blue-500/30 text-white cursor-pointer'
+                    : 'text-white/70 hover:bg-white/10 hover:text-white cursor-pointer'
+                }
+                ${overId === u.id && dragId ? 'border-t-2 border-blue-400' : 'border-t-2 border-transparent'}`}
             >
               <GripVertical size={12} className="shrink-0 text-white/25 group-hover:text-white/50 cursor-grab" />
               <Icon size={13} className="shrink-0 text-white/50" />
-              <span className="truncate flex-1 text-left text-[13px]">{u.label || u.kind}</span>
-              {u.opacity < 1 && <span className="text-[9px] text-white/30">{Math.round(u.opacity * 100)}%</span>}
+              <span className={`truncate flex-1 text-left text-[13px] ${u.hidden ? 'line-through text-white/30' : ''}`}>
+                {u.label || u.kind}
+              </span>
+              {!u.hidden && u.opacity < 1 && <span className="text-[9px] text-white/30">{Math.round(u.opacity * 100)}%</span>}
+
+              {/* Hide / show toggle — the ONLY way to unhide */}
               <button
-                onClick={e => { e.stopPropagation(); setSettingsId(isOpen ? null : u.id) }}
-                className={`p-0.5 rounded shrink-0 ${isOpen ? 'text-white bg-white/15' : 'text-white/30 hover:text-white opacity-0 group-hover:opacity-100'}`}
-                title="Unit settings"
+                onClick={e => { e.stopPropagation(); unitsStore.setHidden(u.id, !u.hidden) }}
+                className={`p-0.5 rounded shrink-0 transition-colors ${
+                  u.hidden
+                    ? 'text-white/60 hover:text-white opacity-100'
+                    : 'text-white/30 hover:text-white opacity-0 group-hover:opacity-100'
+                }`}
+                title={u.hidden ? 'Show unit' : 'Hide unit'}
               >
-                <Settings2 size={12} />
+                {u.hidden ? <Eye size={12} /> : <EyeOff size={12} />}
               </button>
+
+              {/* Gear / settings — only when visible */}
+              {!u.hidden && (
+                <button
+                  onClick={e => { e.stopPropagation(); setSettingsId(isOpen ? null : u.id) }}
+                  className={`p-0.5 rounded shrink-0 ${isOpen ? 'text-white bg-white/15' : 'text-white/30 hover:text-white opacity-0 group-hover:opacity-100'}`}
+                  title="Unit settings"
+                >
+                  <Settings2 size={12} />
+                </button>
+              )}
             </div>
 
-            {isOpen && (
+            {isOpen && !u.hidden && (
               <div className="mx-2 mb-1 mt-0.5 p-2 rounded bg-black/30 border border-white/10">
                 <label className="flex items-center justify-between text-[10px] text-white/50 mb-1">
                   <span>Opacity</span>
@@ -84,6 +108,12 @@ export default function UnitsPanel() {
                   onChange={e => unitsStore.setOpacity(u.id, Number(e.target.value) / 100)}
                   className="w-full accent-blue-500"
                 />
+                <button
+                  onClick={() => { unitsStore.setHidden(u.id, true); setSettingsId(null) }}
+                  className="mt-2 w-full flex items-center justify-center gap-1.5 text-[10px] text-white/40 hover:text-white/70 py-1 rounded hover:bg-white/10"
+                >
+                  <EyeOff size={10} /> Hide unit
+                </button>
               </div>
             )}
           </div>

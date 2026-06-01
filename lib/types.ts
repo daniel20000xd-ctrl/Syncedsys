@@ -34,6 +34,8 @@ export type List = {
   y: number
   is_widget: boolean
   widget_position: number
+  deadline: string | null
+  hidden: boolean
   created_at: string
 }
 
@@ -46,6 +48,8 @@ export type Card = {
   x: number
   y: number
   done: boolean
+  deadline: string | null
+  hidden: boolean
   created_at: string
 }
 
@@ -69,5 +73,6 @@ export type BoardElement = {
   width: number | null
   height: number | null
   data: Record<string, unknown>
+  deadline: string | null
   created_at: string
 }

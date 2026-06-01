@@ -3,10 +3,26 @@
 import { useState, useRef } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
-import { MoreHorizontal, Plus, X, Check, Smartphone } from 'lucide-react'
+import { MoreHorizontal, Plus, X, Check, Smartphone, Clock } from 'lucide-react'
 import type { List, Card } from '@/lib/types'
-import { createCard, deleteList, renameList, setListWidget } from '@/app/actions'
+import { createCard, deleteList, renameList, setListWidget, setListDeadline } from '@/app/actions'
 import CardItem from './CardItem'
+
+function isExpired(deadline: string | null) {
+  return deadline ? new Date(deadline) < new Date() : false
+}
+
+function deadlineLabel(deadline: string | null) {
+  if (!deadline) return null
+  const d = new Date(deadline)
+  const now = new Date()
+  const diffMs = d.getTime() - now.getTime()
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+  if (diffMs < 0) return 'Expired'
+  if (diffDays === 0) return 'Expires today'
+  if (diffDays === 1) return 'Expires tomorrow'
+  return `Expires in ${diffDays}d`
+}
 
 export default function KanbanList({
   list,
@@ -32,8 +48,13 @@ export default function KanbanList({
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleValue, setTitleValue] = useState(list.name)
   const [showMenu, setShowMenu] = useState(false)
+  const [showExpiryPicker, setShowExpiryPicker] = useState(false)
+  const [deadlineValue, setDeadlineValue] = useState(list.deadline ? list.deadline.slice(0, 10) : '')
   const [isWidget, setIsWidget] = useState(list.is_widget)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  const expired = isExpired(list.deadline)
+  const label = deadlineLabel(list.deadline)
 
   const { setNodeRef, isOver } = useDroppable({ id: list.id })
 
@@ -65,10 +86,26 @@ export default function KanbanList({
     await setListWidget(list.id, next, boardId)
   }
 
+  async function handleSetDeadline() {
+    const iso = deadlineValue ? new Date(deadlineValue).toISOString() : null
+    await setListDeadline(list.id, iso, boardId)
+    setShowExpiryPicker(false)
+    setShowMenu(false)
+  }
+
+  async function handleClearDeadline() {
+    setDeadlineValue('')
+    await setListDeadline(list.id, null, boardId)
+    setShowExpiryPicker(false)
+    setShowMenu(false)
+  }
+
   return (
     <div id={`list-${list.id}`} className="shrink-0 w-72 flex flex-col max-h-full">
       <div
-        className={`bg-[#ebecf0] rounded-xl flex flex-col max-h-full shadow transition-shadow ${isOver ? 'ring-2 ring-blue-400' : ''}`}
+        className={`bg-[#ebecf0] rounded-xl flex flex-col max-h-full shadow transition-shadow
+          ${isOver ? 'ring-2 ring-blue-400' : ''}
+          ${expired ? 'ring-2 ring-red-400' : ''}`}
       >
         {/* List header */}
         <div className="flex items-center justify-between px-3 pt-3 pb-1">
@@ -96,13 +133,14 @@ export default function KanbanList({
 
           <div className="relative" ref={menuRef}>
             <button
-              onClick={() => setShowMenu(!showMenu)}
+              onClick={() => { setShowMenu(!showMenu); setShowExpiryPicker(false) }}
               className="p-1 rounded hover:bg-black/10 text-gray-500"
             >
               <MoreHorizontal size={16} />
             </button>
+
             {showMenu && (
-              <div className="absolute right-0 top-7 bg-white rounded-lg shadow-lg border border-gray-200 py-1 w-40 z-20">
+              <div className="absolute right-0 top-7 bg-white rounded-lg shadow-lg border border-gray-200 py-1 w-48 z-20">
                 <button
                   className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
                   onClick={() => { setEditingTitle(true); setShowMenu(false) }}
@@ -117,6 +155,31 @@ export default function KanbanList({
                   {isWidget ? 'Remove from widgets' : 'Add as widget'}
                 </button>
                 <button
+                  className="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
+                  onClick={() => setShowExpiryPicker(!showExpiryPicker)}
+                >
+                  <Clock size={13} className="text-gray-400" />
+                  Set expiry
+                </button>
+
+                {showExpiryPicker && (
+                  <div className="px-3 pb-2 pt-1 border-t border-gray-100">
+                    <input
+                      type="date"
+                      value={deadlineValue}
+                      onChange={e => setDeadlineValue(e.target.value)}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-xs mb-1.5 focus:outline-none focus:border-blue-500"
+                    />
+                    <div className="flex gap-1">
+                      <button onClick={handleSetDeadline} className="flex-1 bg-[#0079bf] text-white text-xs py-1 rounded">Set</button>
+                      {list.deadline && (
+                        <button onClick={handleClearDeadline} className="flex-1 text-xs text-gray-500 border border-gray-200 py-1 rounded hover:bg-gray-50">Clear</button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <button
                   className="w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-gray-100"
                   onClick={() => { handleDelete(); setShowMenu(false) }}
                 >
@@ -126,6 +189,14 @@ export default function KanbanList({
             )}
           </div>
         </div>
+
+        {/* Expiry badge */}
+        {label && (
+          <div className={`mx-3 mb-1 flex items-center gap-1 text-[10px] font-medium ${expired ? 'text-red-500' : 'text-amber-600'}`}>
+            <Clock size={10} />
+            {label}
+          </div>
+        )}
 
         {/* Cards */}
         <div
@@ -162,18 +233,8 @@ export default function KanbanList({
                 className="w-full border border-blue-500 rounded px-2 py-1.5 text-sm focus:outline-none resize-none shadow"
               />
               <div className="flex items-center gap-2 mt-1.5">
-                <button
-                  onClick={handleAddCard}
-                  className="bg-[#0079bf] hover:bg-[#026aa7] text-white text-sm px-3 py-1.5 rounded"
-                >
-                  Add card
-                </button>
-                <button
-                  onClick={() => { setAddingCard(false); setNewCardTitle('') }}
-                  className="text-gray-500 hover:text-gray-700 p-1"
-                >
-                  <X size={18} />
-                </button>
+                <button onClick={handleAddCard} className="bg-[#0079bf] hover:bg-[#026aa7] text-white text-sm px-3 py-1.5 rounded">Add card</button>
+                <button onClick={() => { setAddingCard(false); setNewCardTitle('') }} className="text-gray-500 hover:text-gray-700 p-1"><X size={18} /></button>
               </div>
             </div>
           ) : (

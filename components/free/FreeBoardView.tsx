@@ -9,13 +9,13 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, Type, Hand, Frame, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, deleteEdge, deleteBoard,
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
-  updateBoard, updateCard, updateCardDone, updateEdgeShape,
+  updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, DeletableEdge, PortalNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
@@ -61,16 +61,21 @@ function buildNodes(
   onRenameSubTab: (boardId: string, name: string) => void,
   onOpenSubPanel: (boardId: string, rect: DOMRect) => void,
   onToggleDone: (id: string, done: boolean) => void,
+  onSetExpiry: (nodeId: string) => void,
+  onHide: (nodeId: string) => void,
 ): Node[] {
   const listNodes: Node[] = lists.map((l, i) => ({
     id: `list-${l.id}`,
     type: 'listNode',
+    hidden: l.hidden,
     position: { x: l.x || i * 240, y: l.y || 100 },
     data: {
       name: l.name,
+      hidden: l.hidden,
       cardCount: cards.filter(c => c.list_id === l.id).length,
       onAddCard: (nodeId: string) => onAddCard(nodeId.replace('list-', '')),
       onDelete: (nodeId: string) => onDeleteNode(nodeId, 'list'),
+      onHide,
       onHold,
     },
   }))
@@ -78,14 +83,17 @@ function buildNodes(
   const cardNodes: Node[] = cards.map(c => ({
     id: `card-${c.id}`,
     type: 'cardNode',
+    hidden: c.hidden,
     position: { x: c.x || 0, y: c.y || 0 },
     data: {
       title: c.title,
       done: c.done,
+      hidden: c.hidden,
       listId: c.list_id,
       onDelete: (nodeId: string) => onDeleteNode(nodeId, 'card'),
       onRename: onRenameCard,
       onToggleDone,
+      onHide,
       onHold,
     },
   }))
@@ -95,13 +103,17 @@ function buildNodes(
     const base: Node = {
       id: `el-${el.id}`,
       type,
+      hidden: !!(el.data.hidden),
       position: { x: el.x, y: el.y },
       data: {
         ...el.data,
         width: el.width ?? undefined,
         height: el.height ?? undefined,
+        deadline: el.deadline ?? null,
         onDelete: (nodeId: string) => onDeleteNode(nodeId, 'element'),
         onSave,
+        onSetExpiry: (nodeId: string) => onSetExpiry(nodeId),
+        onHide: (nodeId: string) => onHide(nodeId),
         ...(el.type === 'portal' ? { onOpenFully: onNavigate } : {}),
         // Text has its own font size; everything else (incl. shapes) scales on hold+scroll
         ...(el.type === 'text' ? {} : { onHold }),
@@ -201,6 +213,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null)
   const [shapeColorPicker, setShapeColorPicker] = useState<string>(SHAPE_COLORS[0])
   const [subPanel, setSubPanel] = useState<{ boardId: string; rect: DOMRect } | null>(null)
+  const [expiryPanel, setExpiryPanel] = useState<string | null>(null) // nodeId of element being given a deadline
 
   // Drawing state
   const drawingRef = useRef<{ points: { x: number; y: number }[] } | null>(null)
@@ -285,6 +298,31 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     updateCardDone(rawId, done, board.id).catch(err => console.error('Failed to toggle card done:', err))
   }
 
+  function openExpiryPanel(nodeId: string) {
+    setExpiryPanel(nodeId)
+  }
+
+  function hideUnit(nodeId: string, hidden: boolean) {
+    setNodes(prev => prev.map(n =>
+      n.id === nodeId ? { ...n, hidden, data: { ...n.data, hidden } } : n
+    ))
+    const rawId = nodeId.replace(/^(el-|list-|card-)/, '')
+    if (nodeId.startsWith('el-')) {
+      const el = elements.find(e => e.id === rawId)
+      if (el) {
+        const newData = { ...el.data, hidden }
+        updateElement(el.id, { data: newData }).catch(err => console.error('hide element failed:', err))
+        setElements(prev => prev.map(e => e.id === rawId ? { ...e, data: newData } : e))
+      }
+    } else if (nodeId.startsWith('list-')) {
+      setListHidden(rawId, hidden, board.id).catch(err => console.error('hide list failed:', err))
+      setLists(prev => prev.map(l => l.id === rawId ? { ...l, hidden } : l))
+    } else if (nodeId.startsWith('card-')) {
+      setCardHidden(rawId, hidden, board.id).catch(err => console.error('hide card failed:', err))
+      setCards(prev => prev.map(c => c.id === rawId ? { ...c, hidden } : c))
+    }
+  }
+
   function renameSubTab(boardId: string, name: string) {
     setSubBoards(prev => prev.map(b => b.id === boardId ? { ...b, name } : b))
     setNodesRef.current?.(prev => prev.map(n => n.id === `sub-${boardId}` ? { ...n, data: { ...n.data, name } } : n))
@@ -296,7 +334,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }
 
   const [nodes, setNodes, onNodesChange] = useNodesState(
-    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel, toggleCardDone)
+    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel, toggleCardDone, openExpiryPanel, (id) => hideUnit(id, true))
   )
   const removeEdgeRef = useRef<(id: string) => void>(() => {})
   const reshapeEdgeRef = useRef<(id: string, offset: { cx: number; cy: number }) => void>(() => {})
@@ -394,7 +432,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const sigOf = (ns: Node[], es: Edge[]) =>
     JSON.stringify(
       {
-        n: ns.map(n => ({ id: n.id, p: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, s: n.style, d: n.data })),
+        n: ns.map(n => ({ id: n.id, p: { x: Math.round(n.position.x), y: Math.round(n.position.y) }, s: n.style, d: n.data, h: n.hidden })),
         e: es.filter(e => !e.id.startsWith('auto-')).map(e => ({ id: e.id, s: e.source, t: e.target })),
       },
       (k, v) => (typeof v === 'function' ? undefined : v),
@@ -447,11 +485,21 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         data: clean(n.data), created_at: existing?.created_at ?? new Date().toISOString(),
       } as BoardElement
     }))
-    // restore positions of lists / cards / sub-tabs
+    // restore positions + hidden state of lists / cards / sub-tabs
     for (const n of s.nodes) {
-      if (n.id.startsWith('list-')) updateListPosition(n.id.replace('list-', ''), n.position.x, n.position.y)
-      else if (n.id.startsWith('card-')) updateCardPosition(n.id.replace('card-', ''), n.position.x, n.position.y)
-      else if (n.id.startsWith('sub-')) updateBoardFreePosition(n.id.replace('sub-', ''), n.position.x, n.position.y)
+      if (n.id.startsWith('list-')) {
+        const rawId = n.id.replace('list-', '')
+        updateListPosition(rawId, n.position.x, n.position.y)
+        setListHidden(rawId, !!(n.data.hidden), board.id).catch(() => {})
+        setLists(prev => prev.map(l => l.id === rawId ? { ...l, hidden: !!(n.data.hidden) } : l))
+      } else if (n.id.startsWith('card-')) {
+        const rawId = n.id.replace('card-', '')
+        updateCardPosition(rawId, n.position.x, n.position.y)
+        setCardHidden(rawId, !!(n.data.hidden), board.id).catch(() => {})
+        setCards(prev => prev.map(c => c.id === rawId ? { ...c, hidden: !!(n.data.hidden) } : c))
+      } else if (n.id.startsWith('sub-')) {
+        updateBoardFreePosition(n.id.replace('sub-', ''), n.position.x, n.position.y)
+      }
     }
   }
 
@@ -592,7 +640,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       {
         id: `card-${card.id}`, type: 'cardNode',
         position: { x, y },
-        data: { title: card.title, done: card.done, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onToggleDone: toggleCardDone, onHold: holdNode },
+        data: { title: card.title, done: card.done, hidden: false, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onToggleDone: toggleCardDone, onHide: (id: string) => hideUnit(id, true), onHold: holdNode },
       },
     ])
     setEdges(prev => [...prev, {
@@ -634,7 +682,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       setCards(prev => [...prev, card])
       setNodes(prev => [...prev, {
         id: `card-${card.id}`, type: 'cardNode', position: { x, y },
-        data: { title: card.title, done: card.done, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onToggleDone: toggleCardDone, onHold: holdNode },
+        data: { title: card.title, done: card.done, hidden: false, listId, onDelete: (id: string) => handleDeleteNode(id, 'card'), onRename: renameCard, onToggleDone: toggleCardDone, onHide: (id: string) => hideUnit(id, true), onHold: holdNode },
       }])
       setEdges(prev => [...prev, {
         id: `auto-${card.id}`, source: `list-${listId}`, target: `card-${card.id}`,
@@ -863,6 +911,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         label: unitLabel(n, kind),
         opacity: typeof n.style?.opacity === 'number' ? (n.style.opacity as number) : 1,
         selected: !!n.selected,
+        hidden: !!n.hidden,
       }
     })
     unitsStore.publish(list)
@@ -891,6 +940,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         const n = nodesRef.current.find(x => x.id === id)
         if (n && id.startsWith('el-')) saveElement(id, { ...n.data, opacity }, n.data.width as number | undefined, n.data.height as number | undefined)
       },
+      setHidden: (id: string, hidden: boolean) => hideUnit(id, hidden),
     })
     return () => unitsStore.setHandlers(null)
   }, [setNodes, saveElement])
@@ -1103,6 +1153,26 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         </div>
       )}
 
+      {expiryPanel && (() => {
+        const el = elements.find(e => `el-${e.id}` === expiryPanel)
+        const currentDeadline = el?.deadline ? el.deadline.slice(0, 10) : ''
+        return (
+          <ExpiryPanel
+            key={expiryPanel}
+            initialValue={currentDeadline}
+            onSave={async (iso) => {
+              if (el) {
+                await updateElement(el.id, { deadline: iso })
+                setElements(prev => prev.map(e => e.id === el.id ? { ...e, deadline: iso } : e))
+                setNodes(prev => prev.map(n => n.id === expiryPanel ? { ...n, data: { ...n.data, deadline: iso } } : n))
+              }
+              setExpiryPanel(null)
+            }}
+            onClose={() => setExpiryPanel(null)}
+          />
+        )
+      })()}
+
       {subPanel && (() => {
         const sb = subBoards.find(b => b.id === subPanel.boardId)
         if (!sb) return null
@@ -1126,6 +1196,62 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     </div>
   )
 }
+
+// ── Expiry panel (floating, centered) ────────────────────────────────────────
+
+function ExpiryPanel({ initialValue, onSave, onClose }: {
+  initialValue: string
+  onSave: (iso: string | null) => Promise<void>
+  onClose: () => void
+}) {
+  const [value, setValue] = useState(initialValue)
+  const [saving, setSaving] = useState(false)
+
+  async function handleSave() {
+    setSaving(true)
+    await onSave(value ? new Date(value).toISOString() : null)
+    setSaving(false)
+  }
+
+  return (
+    <div className="fixed inset-0 flex items-center justify-center z-[9999] bg-black/20" onClick={onClose}>
+      <div className="bg-white rounded-xl shadow-2xl border border-gray-200 p-4 w-64" onClick={e => e.stopPropagation()}>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+          <Clock size={12} /> Set expiry
+        </p>
+        <p className="text-[10px] text-gray-400 mb-2">This unit will be automatically deleted when the date passes.</p>
+        <input
+          type="date"
+          autoFocus
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm mb-3 focus:outline-none focus:border-blue-500"
+        />
+        <div className="flex gap-2">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex-1 bg-[#0079bf] hover:bg-[#026aa7] text-white text-sm py-1.5 rounded disabled:opacity-60"
+          >
+            {saving ? 'Saving…' : 'Set'}
+          </button>
+          {initialValue && (
+            <button
+              onClick={async () => { setSaving(true); await onSave(null); setSaving(false) }}
+              disabled={saving}
+              className="text-xs text-gray-500 border border-gray-200 px-2 py-1.5 rounded hover:bg-gray-50 disabled:opacity-60"
+            >
+              Clear
+            </button>
+          )}
+          <button onClick={onClose} className="text-xs text-gray-400 hover:text-gray-600 px-2">Cancel</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 
 export default function FreeBoardView(props: Props) {
   return (

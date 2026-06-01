@@ -214,3 +214,8 @@ create index on cards(list_id);
 -- alter table cards add column if not exists done boolean not null default false;
 -- alter table lists add column if not exists is_widget boolean not null default false;
 -- alter table lists add column if not exists widget_position integer not null default 0;
+-- alter table lists add column if not exists deadline timestamptz;
+-- alter table cards add column if not exists deadline timestamptz;
+-- alter table board_elements add column if not exists deadline timestamptz;
+-- alter table lists add column if not exists hidden boolean not null default false;
+-- alter table cards add column if not exists hidden boolean not null default false;

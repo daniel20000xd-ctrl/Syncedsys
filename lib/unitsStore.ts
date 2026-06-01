@@ -9,12 +9,14 @@ export type Unit = {
   label: string
   opacity: number   // 0..1
   selected: boolean
+  hidden: boolean
 }
 
 type Handlers = {
   select: (id: string) => void
   reorder: (orderedIdsTopFirst: string[]) => void
   setOpacity: (id: string, opacity: number) => void
+  setHidden: (id: string, hidden: boolean) => void
 }
 
 let units: Unit[] = []
@@ -36,6 +38,7 @@ export const unitsStore = {
   select(id: string) { handlers?.select(id) },
   reorder(ids: string[]) { handlers?.reorder(ids) },
   setOpacity(id: string, o: number) { handlers?.setOpacity(id, o) },
+  setHidden(id: string, hidden: boolean) { handlers?.setHidden(id, hidden) },
 }
 
 export function useUnits(): Unit[] {

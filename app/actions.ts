@@ -178,6 +178,18 @@ export async function setListWidget(listId: string, isWidget: boolean, boardId: 
   revalidatePath(`/board/${boardId}`)
 }
 
+export async function setListDeadline(listId: string, deadline: string | null, boardId: string) {
+  const supabase = await createClient()
+  await supabase.from('lists').update({ deadline }).eq('id', listId)
+  revalidatePath(`/board/${boardId}`)
+}
+
+export async function setListHidden(listId: string, hidden: boolean, boardId: string) {
+  const supabase = await createClient()
+  await supabase.from('lists').update({ hidden }).eq('id', listId)
+  revalidatePath(`/board/${boardId}`)
+}
+
 // ── Cards ────────────────────────────────────────────────────────────────────
 
 export async function createCard(listId: string, title: string, boardId: string) {
@@ -218,6 +230,18 @@ export async function updateCard(cardId: string, updates: { title?: string; desc
 export async function updateCardDone(cardId: string, done: boolean, boardId: string) {
   const supabase = await createClient()
   await supabase.from('cards').update({ done }).eq('id', cardId)
+  revalidatePath(`/board/${boardId}`)
+}
+
+export async function setCardDeadline(cardId: string, deadline: string | null, boardId: string) {
+  const supabase = await createClient()
+  await supabase.from('cards').update({ deadline }).eq('id', cardId)
+  revalidatePath(`/board/${boardId}`)
+}
+
+export async function setCardHidden(cardId: string, hidden: boolean, boardId: string) {
+  const supabase = await createClient()
+  await supabase.from('cards').update({ hidden }).eq('id', cardId)
   revalidatePath(`/board/${boardId}`)
 }
 
@@ -317,7 +341,7 @@ export async function createElement(
 
 export async function updateElement(
   elementId: string,
-  updates: { x?: number; y?: number; data?: Record<string, unknown>; width?: number; height?: number }
+  updates: { x?: number; y?: number; data?: Record<string, unknown>; width?: number; height?: number; deadline?: string | null }
 ) {
   const supabase = await createClient()
   await supabase.from('board_elements').update(updates).eq('id', elementId)
