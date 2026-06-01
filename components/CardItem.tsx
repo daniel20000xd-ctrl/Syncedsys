@@ -11,11 +11,13 @@ import { deleteCard, updateCard, updateCardDone, setCardDeadline, setCardRecur }
 export default function CardItem({
   card,
   boardId,
+  isWidget = false,
   onDeleted,
   onUpdated,
 }: {
   card: Card
   boardId: string
+  isWidget?: boolean
   onDeleted: (id: string) => void
   onUpdated: (card: Card) => void
 }) {
@@ -84,9 +86,13 @@ export default function CardItem({
 
   const recurMinutes = Math.max(1, Math.round(recurEvery)) * (recurUnit === 'days' ? 1440 : recurUnit === 'hours' ? 60 : 1)
 
-  async function handleSaveRecur() {
-    await setCardRecur(card.id, recurMinutes, boardId)
-    onUpdated({ ...card, recur_interval_minutes: recurMinutes, deadline: null })
+  // Persist immediately from explicit values — no reliance on blur timing, so
+  // the saved interval always matches what the inputs show.
+  function persistRecur(every: number, unit: 'minutes' | 'hours' | 'days') {
+    if (!Number.isFinite(every) || every < 1) return
+    const mins = Math.round(every) * (unit === 'days' ? 1440 : unit === 'hours' ? 60 : 1)
+    onUpdated({ ...card, recur_interval_minutes: mins, deadline: null })
+    setCardRecur(card.id, mins, boardId).catch(err => console.error('Failed to save recurrence:', err))
   }
 
   async function clearSchedule() {
@@ -123,7 +129,7 @@ export default function CardItem({
                 key={m}
                 onClick={() => {
                   if (m === 'none') { clearSchedule() }
-                  else if (m === 'repeat') { setSchedMode('repeat'); if (card.recur_interval_minutes == null) handleSaveRecur() }
+                  else if (m === 'repeat') { setSchedMode('repeat'); if (card.recur_interval_minutes == null) persistRecur(recurEvery, recurUnit) }
                   else { setSchedMode('expire') }
                 }}
                 className={`flex-1 py-1 rounded border transition-colors ${
@@ -159,14 +165,12 @@ export default function CardItem({
                   type="number"
                   min={1}
                   value={recurEvery}
-                  onChange={e => setRecurEvery(Number(e.target.value))}
-                  onBlur={handleSaveRecur}
+                  onChange={e => { const v = Number(e.target.value); setRecurEvery(v); persistRecur(v, recurUnit) }}
                   className="w-14 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500"
                 />
                 <select
                   value={recurUnit}
-                  onChange={e => { setRecurUnit(e.target.value as 'minutes' | 'hours' | 'days') }}
-                  onBlur={handleSaveRecur}
+                  onChange={e => { const u = e.target.value as 'minutes' | 'hours' | 'days'; setRecurUnit(u); persistRecur(recurEvery, u) }}
                   className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500 bg-white"
                 >
                   <option value="minutes">minutes</option>
@@ -194,7 +198,7 @@ export default function CardItem({
       {...listeners}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className="relative bg-white rounded-lg shadow-sm border border-transparent hover:border-blue-300 p-2 text-sm text-gray-800 cursor-grab active:cursor-grabbing group flex items-start gap-2"
+      className={`relative bg-white rounded-lg shadow-sm border border-transparent hover:border-blue-300 p-2 text-sm text-gray-800 cursor-grab active:cursor-grabbing group flex items-start gap-2 transition-opacity duration-500 ${done && isWidget ? 'opacity-50' : ''}`}
     >
       <button
         onPointerDown={e => e.stopPropagation()}

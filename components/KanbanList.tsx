@@ -5,8 +5,11 @@ import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { MoreHorizontal, Plus, X, Check, Smartphone, Clock } from 'lucide-react'
 import type { List, Card } from '@/lib/types'
-import { createCard, deleteList, renameList, setListWidget, setListDeadline } from '@/app/actions'
+import { createCard, deleteCard, deleteList, renameList, setListWidget, setListDeadline } from '@/app/actions'
 import CardItem from './CardItem'
+
+// How long a checked card lingers in a widget list before it's removed.
+const WIDGET_GRACE_MS = 5000
 
 function isExpired(deadline: string | null) {
   return deadline ? new Date(deadline) < new Date() : false
@@ -52,6 +55,41 @@ export default function KanbanList({
   const [deadlineValue, setDeadlineValue] = useState(list.deadline ? list.deadline.slice(0, 10) : '')
   const [isWidget, setIsWidget] = useState(list.is_widget)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  // Cards just checked in a widget list stay visible during a short grace
+  // period, then leave (one-time → deleted, recurring → hidden until it resets).
+  const [graceIds, setGraceIds] = useState<Set<string>>(new Set())
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  function handleCardUpdated(card: Card) {
+    onCardUpdated(card)
+    if (!isWidget) return
+    const pending = timersRef.current.get(card.id)
+    if (card.done && !pending) {
+      // Begin the grace countdown.
+      setGraceIds(prev => new Set(prev).add(card.id))
+      const t = setTimeout(() => {
+        timersRef.current.delete(card.id)
+        setGraceIds(prev => { const n = new Set(prev); n.delete(card.id); return n })
+        if (card.recur_interval_minutes == null) {
+          // One-time task: remove it so the widget never fills with done items.
+          onCardDeleted(card.id)
+          deleteCard(card.id, boardId).catch(err => console.error('Failed to delete card:', err))
+        }
+        // Recurring: it stays done and falls out of the widget filter until the
+        // recurrence flips it back to undone.
+      }, WIDGET_GRACE_MS)
+      timersRef.current.set(card.id, t)
+    } else if (!card.done && pending) {
+      // Unchecked within the grace window — cancel removal.
+      clearTimeout(pending)
+      timersRef.current.delete(card.id)
+      setGraceIds(prev => { const n = new Set(prev); n.delete(card.id); return n })
+    }
+  }
+
+  // In a widget list, show only undone cards (plus any in their grace window).
+  const visibleCards = isWidget ? cards.filter(c => !c.done || graceIds.has(c.id)) : cards
 
   const expired = isExpired(list.deadline)
   const label = deadlineLabel(list.deadline)
@@ -203,14 +241,15 @@ export default function KanbanList({
           ref={setNodeRef}
           className="flex-1 overflow-y-auto px-2 pb-1 space-y-2 min-h-[8px]"
         >
-          <SortableContext items={cards.map(c => c.id)} strategy={verticalListSortingStrategy}>
-            {cards.map(card => (
+          <SortableContext items={visibleCards.map(c => c.id)} strategy={verticalListSortingStrategy}>
+            {visibleCards.map(card => (
               <CardItem
                 key={card.id}
                 card={card}
                 boardId={boardId}
+                isWidget={isWidget}
                 onDeleted={onCardDeleted}
-                onUpdated={onCardUpdated}
+                onUpdated={handleCardUpdated}
               />
             ))}
           </SortableContext>
