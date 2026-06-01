@@ -17,9 +17,10 @@ import {
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden,
 } from '@/app/actions'
-import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, DeletableEdge, PortalNode } from './nodes'
+import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, DeletableEdge, PortalNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
+import { readDroppedTextFiles } from '@/lib/files'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -29,6 +30,7 @@ const nodeTypes: NodeTypes = {
   drawingNode: DrawingNode,
   subTabNode: SubTabNode,
   textNode: TextNode,
+  textFileNode: TextFileNode,
   portalNode: PortalNode,
 }
 
@@ -100,7 +102,7 @@ function buildNodes(
   }))
 
   const elementNodes: Node[] = elements.map(el => {
-    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'portal' ? 'portalNode' : 'drawingNode'
+    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'portal' ? 'portalNode' : 'drawingNode'
     const base: Node = {
       id: `el-${el.id}`,
       type,
@@ -116,8 +118,8 @@ function buildNodes(
         onSetExpiry: (nodeId: string) => onSetExpiry(nodeId),
         onHide: (nodeId: string) => onHide(nodeId),
         ...(el.type === 'portal' ? { onOpenFully: onNavigate } : {}),
-        // Text has its own font size; everything else (incl. shapes) scales on hold+scroll
-        ...(el.type === 'text' ? {} : { onHold }),
+        // Text/files manage their own interaction; everything else scales on hold+scroll
+        ...(el.type === 'text' || el.type === 'textfile' ? {} : { onHold }),
       },
     }
     if (el.type === 'shape' || el.type === 'portal') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
@@ -386,7 +388,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // ── Create a free-mode element (client-controlled id so undo can restore it) ──
   function addElement(
-    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal',
+    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile',
     x: number, y: number,
     data: Record<string, unknown>,
     w?: number, h?: number,
@@ -394,7 +396,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   ) {
     const id = crypto.randomUUID()
     const nodeId = `el-${id}`
-    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'portal' ? 'portalNode' : 'imageNode'
+    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'portal' ? 'portalNode' : 'imageNode'
     const node: Node = {
       id: nodeId, type: nodeType, position: { x, y },
       ...(type === 'shape' || type === 'portal' ? { style: { width: w, height: h } } : {}),
@@ -402,7 +404,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         ...data,
         onDelete: (i: string) => handleDeleteNode(i, 'element'),
         onSave: saveElement,
-        ...(type === 'text' ? {} : { onHold: holdNode }),
+        onHide: (i: string) => hideUnit(i, true),
+        onSetExpiry: (i: string) => openExpiryPanel(i),
+        ...(type === 'text' || type === 'textfile' ? {} : { onHold: holdNode }),
         ...extraNodeData,
       },
     }
@@ -410,6 +414,31 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setElements(prev => [...prev, { id, board_id: board.id, type, x, y, width: w ?? null, height: h ?? null, data, created_at: new Date().toISOString() } as BoardElement])
     upsertElement(id, board.id, type, x, y, data, w ?? null, h ?? null).catch(err => console.error('Failed to save element:', err))
     return nodeId
+  }
+
+  // ── Drag & drop OS text files onto the canvas ──
+  const [fileDragOver, setFileDragOver] = useState(false)
+
+  function onCanvasDragOver(e: React.DragEvent) {
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    if (!fileDragOver) setFileDragOver(true)
+  }
+
+  async function onCanvasDrop(e: React.DragEvent) {
+    if (!e.dataTransfer.files?.length) return
+    e.preventDefault()
+    setFileDragOver(false)
+    const { accepted, skipped } = await readDroppedTextFiles(e.dataTransfer.files)
+    const origin = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    accepted.forEach((f, i) => {
+      addElement('textfile', origin.x + i * 24, origin.y + i * 24, { name: f.name, content: f.content })
+    })
+    if (skipped.length) {
+      console.warn('Skipped non-text or oversized files:', skipped)
+      if (!accepted.length) alert('Only text files are supported for now (binary storage is coming later).')
+    }
   }
 
   // Delete key on a marquee/multi-selection — persist every removed node
@@ -885,6 +914,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (n.type === 'shapeNode') return 'shape'
     if (n.type === 'drawingNode') return 'drawing'
     if (n.type === 'textNode') return 'text'
+    if (n.type === 'textFileNode') return 'file'
     if (n.type === 'imageNode') return 'image'
     if (n.type === 'portalNode') return 'portal'
     return 'unknown'
@@ -895,6 +925,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (kind === 'card') return (d.title as string) || 'Card'
     if (kind === 'shape') return (d.label as string) || `${(d.shape as string) || 'Shape'}`
     if (kind === 'text') return (d.text as string) || 'Text'
+    if (kind === 'file') return (d.name as string) || 'File'
     if (kind === 'image') return 'Image'
     if (kind === 'drawing') return 'Drawing'
     if (kind === 'portal') return 'Portal'
@@ -1001,6 +1032,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       className="relative flex-1 h-full"
       style={{ backgroundColor: board.color }}
       onMouseUp={handleWrapperMouseUp}
+      onDragOver={onCanvasDragOver}
+      onDragLeave={e => { if (e.currentTarget === e.target) setFileDragOver(false) }}
+      onDrop={onCanvasDrop}
     >
       <ReactFlow
         nodes={nodes}
@@ -1036,6 +1070,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.2)" gap={24} size={1.5} />
         <Controls />
       </ReactFlow>
+
+      {fileDragOver && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-indigo-500/10 border-4 border-dashed border-indigo-400 pointer-events-none">
+          <p className="bg-white/90 text-indigo-600 text-sm font-medium px-4 py-2 rounded-lg shadow">Drop text files to add them to the canvas</p>
+        </div>
+      )}
 
       {overlayActive && (
         <svg

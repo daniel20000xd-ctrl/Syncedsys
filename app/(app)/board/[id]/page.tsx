@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import BoardView from '@/components/BoardView'
 import FreeBoardView from '@/components/free/FreeBoardView'
 import TextBoardView from '@/components/TextBoardView'
+import FolderBoardView from '@/components/FolderBoardView'
 import { resetDueRecurringCards } from '@/lib/recur'
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
@@ -66,6 +67,29 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
 
   if (board.mode === 'text') {
     return <TextBoardView board={board} />
+  }
+
+  if (board.mode === 'folder') {
+    const { data: subBoards } = await supabase
+      .from('boards')
+      .select('*')
+      .eq('parent_id', id)
+      .order('tab_position', { ascending: true })
+
+    const { data: fileElements } = await supabase
+      .from('board_elements')
+      .select('*')
+      .eq('board_id', id)
+      .eq('type', 'textfile')
+      .order('created_at', { ascending: true })
+
+    return (
+      <FolderBoardView
+        board={board}
+        initialFolders={subBoards ?? []}
+        initialFiles={fileElements ?? []}
+      />
+    )
   }
 
   return <BoardView board={board} initialLists={lists ?? []} initialCards={cards ?? []} />

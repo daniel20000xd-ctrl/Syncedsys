@@ -5,7 +5,7 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal } from '@/app/actions'
 import { recurLabel } from '@/lib/recur'
 
@@ -417,6 +417,89 @@ export function TextNode({ id, data }: NodeProps) {
   )
 }
 
+// ── Text-file Node (a draggable file block on the canvas) ─────────────────────
+
+export function TextFileNode({ id, data }: NodeProps) {
+  const { updateNodeData } = useReactFlow()
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState((data.name as string) || 'Untitled.txt')
+  const [content, setContent] = useState((data.content as string) || '')
+  const onSave = data.onSave as SaveFn | undefined
+  const expired = data.deadline ? new Date(data.deadline as string) < new Date() : false
+
+  function commit() {
+    const next: Record<string, unknown> = { name, content }
+    if (data.hidden) next.hidden = true
+    if (typeof data.opacity === 'number') next.opacity = data.opacity
+    updateNodeData(id, { ...data, name, content })
+    setEditing(false)
+    onSave?.(id, next)
+  }
+
+  return (
+    <div className="relative group">
+      <SideHandles color="!bg-indigo-400" />
+      {editing ? (
+        <div className="nodrag bg-white rounded-lg shadow-lg border border-indigo-300 w-64 p-2" onPointerDown={e => e.stopPropagation()}>
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            className="w-full text-xs font-medium text-gray-700 border-b border-gray-200 pb-1 mb-1 focus:outline-none"
+            placeholder="filename.txt"
+          />
+          <textarea
+            autoFocus
+            value={content}
+            onChange={e => setContent(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Escape') commit() }}
+            rows={8}
+            className="w-full text-xs text-gray-800 font-mono resize-none focus:outline-none"
+            placeholder="File contents…"
+          />
+          <div className="flex justify-end pt-1">
+            <button onClick={commit} className="text-xs bg-indigo-500 hover:bg-indigo-600 text-white px-2 py-0.5 rounded">Done</button>
+          </div>
+        </div>
+      ) : (
+        <div
+          className="bg-white rounded-lg shadow border border-gray-200 w-44 select-none cursor-pointer overflow-hidden"
+          onDoubleClick={() => setEditing(true)}
+          title="Double-click to open"
+        >
+          <div className="flex items-center gap-1.5 px-2 py-1.5 bg-indigo-50 border-b border-indigo-100">
+            <FileText size={13} className="text-indigo-500 shrink-0" />
+            <span className="text-[11px] font-medium text-gray-700 truncate">{name}</span>
+          </div>
+          <p className="px-2 py-1.5 text-[10px] text-gray-500 font-mono whitespace-pre-wrap line-clamp-4 break-words min-h-[2.5rem]">
+            {content || <span className="italic text-gray-300">empty</span>}
+          </p>
+        </div>
+      )}
+      <button
+        className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500 z-10"
+        onClick={() => (data.onDelete as (id: string) => void)(id)}
+      >
+        <X size={11} />
+      </button>
+      <button
+        className="absolute -top-2 right-3 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-gray-600 z-10"
+        title="Hide (unhide from dashboard)"
+        onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
+      >
+        <EyeOff size={11} />
+      </button>
+      <button
+        className="absolute -top-2 -left-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow z-10"
+        style={{ color: expired ? '#ef4444' : '#9ca3af' }}
+        title={data.deadline ? `Expires ${new Date(data.deadline as string).toLocaleDateString()}` : 'Set expiry'}
+        onClick={e => { e.stopPropagation(); (data.onSetExpiry as (id: string) => void)?.(id) }}
+      >
+        <Clock size={11} />
+      </button>
+    </div>
+  )
+}
+
 // ── Image Node ───────────────────────────────────────────────────────────────
 
 export function ImageNode({ id, data }: NodeProps) {
@@ -482,7 +565,7 @@ export function SubTabNode({ id, data }: NodeProps) {
   const onHold = data.onHold as ((id: string) => void) | undefined
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(name)
-  const modeIcon = mode === 'classic' ? '🎨' : mode === 'text' ? '📝' : '🗂'
+  const modeIcon = mode === 'classic' ? '🎨' : mode === 'text' ? '📝' : mode === 'folder' ? '📁' : '🗂'
 
   function commitName() {
     setEditing(false)

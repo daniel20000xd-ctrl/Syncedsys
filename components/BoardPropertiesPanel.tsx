@@ -28,7 +28,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   const [color, setColor] = useState(board.color)
   const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
   const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
-  const [mode, setMode] = useState<'classic' | 'trello' | 'text'>(board.mode ?? 'classic')
+  const [mode, setMode] = useState<'classic' | 'trello' | 'text' | 'folder'>(board.mode ?? 'classic')
   const [saving, setSaving] = useState(false)
   // Text tabs are locked to text after creation.
   const textLocked = (board.mode ?? 'classic') === 'text'
@@ -38,6 +38,8 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
     if (mode === 'text') {
       warnings.push('Lists, cards and any canvas items stay saved but are hidden in Text mode.')
       warnings.push('Text tabs are locked to text — you won’t be able to switch this tab to another mode afterwards.')
+    } else if (mode === 'folder') {
+      warnings.push('Folder view shows sub-folders and text files only. Lists, cards, shapes, drawings and connections stay saved but are hidden here.')
     } else if (board.mode === 'classic' && mode === 'trello') {
       warnings.push('Shapes, drawings, connections and sub-tabs stay saved but are hidden until you switch back to Classic.')
     }
@@ -139,15 +141,15 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
         Board preset
         {textLocked && <Lock size={10} className="text-gray-400" />}
       </label>
-      <div className="grid grid-cols-3 gap-1.5 mb-2">
-        {(['classic', 'trello', 'text'] as const).map(m => (
+      <div className="grid grid-cols-2 gap-1.5 mb-2">
+        {(['classic', 'trello', 'text', 'folder'] as const).map(m => (
           <button
             key={m}
             disabled={textLocked}
             onClick={() => setMode(m)}
             className={`py-2 rounded text-xs font-medium border capitalize transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${mode === m ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
           >
-            {m === 'classic' ? '🎨 Classic' : m === 'trello' ? '🗂 Trello' : '📝 Text'}
+            {m === 'classic' ? '🎨 Classic' : m === 'trello' ? '🗂 Trello' : m === 'text' ? '📝 Text' : '📁 Folder'}
           </button>
         ))}
       </div>
@@ -158,6 +160,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
           {mode === 'classic' && <p className="text-[10px] text-gray-400 mb-3">Freeform canvas — drag anything, draw connections.</p>}
           {mode === 'trello' && <p className="text-[10px] text-gray-400 mb-3">Kanban columns and cards.</p>}
           {mode === 'text' && <p className="text-[10px] text-gray-400 mb-3">Document — a plain writing space, auto-saved.</p>}
+          {mode === 'folder' && <p className="text-[10px] text-gray-400 mb-3">File explorer — sub-folders and dropped text files.</p>}
         </>
       )}
 

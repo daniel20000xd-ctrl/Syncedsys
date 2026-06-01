@@ -74,7 +74,7 @@ export async function updateBoardContent(boardId: string, content: string) {
   await supabase.from('boards').update({ content }).eq('id', boardId).eq('user_id', user.id)
 }
 
-export async function createSubTab(parentBoardId: string, name: string, color: string) {
+export async function createSubTab(parentBoardId: string, name: string, color: string, mode: 'classic' | 'trello' | 'text' | 'folder' = 'classic') {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
@@ -90,7 +90,7 @@ export async function createSubTab(parentBoardId: string, name: string, color: s
 
   const { data, error } = await supabase
     .from('boards')
-    .insert({ name, color, user_id: user.id, parent_id: parentBoardId, tab_position })
+    .insert({ name, color, user_id: user.id, parent_id: parentBoardId, tab_position, mode })
     .select()
     .single()
 
@@ -376,7 +376,7 @@ export async function upsertEdge(id: string, boardId: string, source: string, ta
 
 export async function createElement(
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number, height?: number
@@ -403,6 +403,29 @@ export async function deleteElement(elementId: string) {
   await supabase.from('board_elements').delete().eq('id', elementId)
 }
 
+// A text file is a board_element of type 'textfile' holding { name, content }.
+// On a canvas it renders as a movable block; in a folder-mode board it renders
+// as a file in the explorer grid. Same row, two views.
+export async function createTextFile(boardId: string, name: string, content: string, x = 0, y = 0) {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('board_elements')
+    .insert({ board_id: boardId, type: 'textfile', x, y, data: { name, content } })
+    .select().single()
+  if (error) throw error
+  revalidatePath(`/board/${boardId}`)
+  return data
+}
+
+export async function updateTextFile(elementId: string, name: string, content: string, boardId: string) {
+  const supabase = await createClient()
+  // Preserve any other data keys (e.g. hidden/opacity from the canvas view).
+  const { data: existing } = await supabase.from('board_elements').select('data').eq('id', elementId).single()
+  const merged = { ...(existing?.data ?? {}), name, content }
+  await supabase.from('board_elements').update({ data: merged }).eq('id', elementId)
+  revalidatePath(`/board/${boardId}`)
+}
+
 // Ensure the target board has a portal pointing back to the source board (mirror)
 export async function ensureMirrorPortal(targetBoardId: string, backBoardId: string) {
   const supabase = await createClient()
@@ -425,7 +448,7 @@ export async function ensureMirrorPortal(targetBoardId: string, backBoardId: str
 export async function upsertElement(
   id: string,
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number | null, height?: number | null
