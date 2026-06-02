@@ -5,9 +5,10 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, Sparkles } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab } from '@/app/actions'
 import ClaudeChat from '@/components/claude/ClaudeChat'
+import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
 import { downloadTextFile, PORTAL_ITEM_MIME } from '@/lib/files'
 import { parseSheet, computeSheet, colToLetter, cellAddr, type SheetData } from '@/lib/spreadsheet'
@@ -694,20 +695,20 @@ export function ClaudeNode({ id, data, selected }: NodeProps) {
         minWidth={260}
         minHeight={260}
         isVisible={!!selected}
-        lineClassName="!border-fuchsia-400"
-        handleClassName="!bg-white !border-2 !border-fuchsia-400 !w-2.5 !h-2.5 !rounded-sm"
+        lineClassName="!border-[#D97757]"
+        handleClassName="!bg-white !border-2 !border-[#D97757] !w-2.5 !h-2.5 !rounded-sm"
       />
-      <SideHandles color="!bg-fuchsia-500" />
-      <div className="w-full h-full rounded-lg overflow-hidden shadow-lg ring-1 ring-fuchsia-400/40 bg-[#1d2125] flex flex-col">
+      <SideHandles color="!bg-[#D97757]" />
+      <div className="w-full h-full rounded-xl overflow-hidden shadow-lg ring-1 ring-[#D97757]/50 bg-[#30302E] flex flex-col">
         {/* Drag handle / title bar (dragging here moves the node) */}
-        <div className="h-7 bg-black/40 flex items-center justify-between px-2 text-white/90 shrink-0">
-          <span className="flex items-center gap-1.5 text-[11px] font-medium"><Sparkles size={12} className="text-fuchsia-400" /> Claude</span>
+        <div className="h-8 bg-[#262624] flex items-center justify-between px-2.5 text-[#F0EEE6] shrink-0">
+          <span className="flex items-center gap-1.5 text-xs font-medium"><ClaudeMark size={14} animate /> Claude</span>
           <button
-            className="nodrag p-0.5 rounded hover:bg-red-500/50"
+            className="nodrag p-0.5 rounded hover:bg-white/15 text-[#F0EEE6]/70 hover:text-[#F0EEE6]"
             title="Remove Claude"
             onClick={e => { e.stopPropagation(); (data.onDelete as (id: string) => void)(id) }}
           >
-            <X size={11} />
+            <X size={12} />
           </button>
         </div>
         {boardId

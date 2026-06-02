@@ -18,6 +18,7 @@ import {
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode } from './nodes'
+import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
 import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME } from '@/lib/files'
@@ -1233,7 +1234,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
             (tool === 'portal' || tool === 'claude') ? (
               <rect
                 x={shapePreview.x} y={shapePreview.y} width={shapePreview.w} height={shapePreview.h} rx={8}
-                fill="#d946ef" fillOpacity={0.15} stroke="#d946ef" strokeWidth={2} strokeDasharray="6 4"
+                fill={tool === 'claude' ? '#D97757' : '#d946ef'} fillOpacity={0.15}
+                stroke={tool === 'claude' ? '#D97757' : '#d946ef'} strokeWidth={2} strokeDasharray="6 4"
               />
             ) : selectedShape === 'circle' ? (
               <ellipse
@@ -1274,9 +1276,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
                   t === 'claude' ? 'Claude — chat on canvas (C)' :
                   t.charAt(0).toUpperCase() + t.slice(1)
                 }
-                className={`p-2 rounded-lg transition-colors ${tool === t ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+                className={`p-2 rounded-lg transition-colors ${
+                  tool === t
+                    ? (t === 'claude' ? 'bg-[#D97757] text-white' : 'bg-blue-500 text-white')
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
               >
-                <Icon size={16} />
+                {t === 'claude' ? <ClaudeMark size={16} color={tool === t ? '#ffffff' : '#D97757'} animate={tool === t} /> : <Icon size={16} />}
               </button>
             )
           })}

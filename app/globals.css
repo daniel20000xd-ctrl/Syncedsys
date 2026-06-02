@@ -7,3 +7,23 @@ body {
 * {
   box-sizing: border-box;
 }
+
+/* Claude mark — slow, GPU-cheap "alive" motion (rotate + gentle breathing) */
+@keyframes claude-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes claude-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.95; }
+  50%      { transform: scale(1.08); opacity: 1; }
+}
+.claude-mark-spin {
+  transform-origin: center;
+  animation: claude-spin 14s linear infinite;
+}
+.claude-mark-breathe {
+  transform-origin: center;
+  animation: claude-breathe 3.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .claude-mark-spin, .claude-mark-breathe { animation: none; }
+}
