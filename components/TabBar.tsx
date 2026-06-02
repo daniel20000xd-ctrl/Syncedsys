@@ -6,7 +6,8 @@ import { createPortal } from 'react-dom'
 import { usePathname, useRouter } from 'next/navigation'
 import { Plus, LayoutGrid, ChevronDown, FolderPlus, Check, Trash2 } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { createBoard, createGroup, moveTab, updateBoard, deleteBoard } from '@/app/actions'
+import { createBoard, createGroup, moveTab, moveBoardToParent, updateBoard, deleteBoard } from '@/app/actions'
+import { BOARD_TAB_MIME } from '@/lib/files'
 import NewBoardModal from './NewBoardModal'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
@@ -67,9 +68,20 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     draggingRef.current = id
     setDraggingId(id)
     e.dataTransfer.setData('text/plain', id)
+    e.dataTransfer.setData(BOARD_TAB_MIME, id)
     e.dataTransfer.effectAllowed = 'move'
   }
   function endDrag() { draggingRef.current = null; setDraggingId(null); setDragOverId(null) }
+
+  async function handleMakeSubtab(boardId: string, parentId: string) {
+    try {
+      await moveBoardToParent(boardId, parentId)
+      router.refresh()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not nest that tab.')
+      router.refresh()
+    }
+  }
 
   async function doMove(groupId: string | null, beforeId: string | null) {
     const id = draggingRef.current
@@ -97,10 +109,34 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
         onMouseEnter={() => router.prefetch(`/board/${board.id}`)}
         onDragStart={e => { e.stopPropagation(); startDrag(e, board.id) }}
         onDragEnd={endDrag}
-        onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (draggingRef.current && draggingRef.current !== board.id) setDragOverId(board.id) }}
-        onDragLeave={() => setDragOverId(prev => prev === board.id ? null : prev)}
-        onDrop={e => { e.preventDefault(); e.stopPropagation(); doMove(board.group_id ?? null, board.id) }}
-        className={`relative group/tab shrink-0 ${dragOverId === board.id ? 'border-l-2 border-[#579dff]' : 'border-l-2 border-transparent'} ${draggingId === board.id ? 'opacity-40' : ''}`}
+        onDragOver={e => {
+          e.preventDefault(); e.stopPropagation()
+          const hasBoard = draggingRef.current || e.dataTransfer.types.includes(BOARD_TAB_MIME)
+          if (!hasBoard) return
+          const draggedId = draggingRef.current ?? e.dataTransfer.getData(BOARD_TAB_MIME)
+          if (draggedId === board.id) return
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          const xRatio = (e.clientX - rect.left) / rect.width
+          // Centre 40 % → will become a sub-tab; edges → reorder
+          setDragOverId(xRatio >= 0.3 && xRatio <= 0.7 ? `${board.id}:sub` : board.id)
+        }}
+        onDragLeave={() => setDragOverId(prev => (prev === board.id || prev === `${board.id}:sub`) ? null : prev)}
+        onDrop={e => {
+          e.preventDefault(); e.stopPropagation()
+          const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          const xRatio = (e.clientX - rect.left) / rect.width
+          const draggedId = draggingRef.current ?? e.dataTransfer.getData(BOARD_TAB_MIME)
+          if (draggedId && draggedId !== board.id && xRatio >= 0.3 && xRatio <= 0.7) {
+            endDrag()
+            handleMakeSubtab(draggedId, board.id)
+          } else {
+            doMove(board.group_id ?? null, board.id)
+          }
+        }}
+        className={`relative group/tab shrink-0 transition-colors
+          ${dragOverId === board.id ? 'border-l-2 border-[#579dff]' : 'border-l-2 border-transparent'}
+          ${dragOverId === `${board.id}:sub` ? 'bg-[#579dff]/20 ring-1 ring-[#579dff] rounded' : ''}
+          ${draggingId === board.id ? 'opacity-40' : ''}`}
       >
         <Link
           href={`/board/${board.id}`}
@@ -246,8 +282,8 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
       {showNewBoard && (
         <NewBoardModal
           onClose={() => setShowNewBoard(false)}
-          onCreate={async (name, color) => {
-            const board = await createBoard(name, color)
+          onCreate={async (name, color, mode) => {
+            const board = await createBoard(name, color, mode)
             setBoards(prev => [...prev, board])
             setShowNewBoard(false)
             router.push(`/board/${board.id}`)

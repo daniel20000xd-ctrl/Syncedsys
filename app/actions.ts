@@ -39,7 +39,7 @@ export async function removeDeviceLink(id: string) {
 
 // ── Boards ──────────────────────────────────────────────────────────────────
 
-export async function createBoard(name: string, color: string) {
+export async function createBoard(name: string, color: string, mode = 'classic') {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
@@ -52,7 +52,7 @@ export async function createBoard(name: string, color: string) {
 
   const { data, error } = await supabase
     .from('boards')
-    .insert({ name, color, user_id: user.id, tab_position })
+    .insert({ name, color, user_id: user.id, tab_position, mode })
     .select()
     .single()
 

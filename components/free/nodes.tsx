@@ -6,7 +6,7 @@ import {
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink } from 'lucide-react'
-import { updateBoardContent, ensureMirrorPortal, updateTextFile } from '@/app/actions'
+import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab } from '@/app/actions'
 import { recurLabel } from '@/lib/recur'
 import { downloadTextFile, PORTAL_ITEM_MIME } from '@/lib/files'
 import { parseSheet, computeSheet, colToLetter, cellAddr, type SheetData } from '@/lib/spreadsheet'
@@ -341,14 +341,6 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
         onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
       >
         <EyeOff size={11} />
-      </button>
-      <button
-        className="absolute -top-2 -left-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow z-10"
-        style={{ color: data.deadline && new Date(data.deadline as string) < new Date() ? '#ef4444' : '#9ca3af' }}
-        title={data.deadline ? `Expires ${new Date(data.deadline as string).toLocaleDateString()}` : 'Set expiry'}
-        onClick={e => { e.stopPropagation(); (data.onSetExpiry as (id: string) => void)?.(id) }}
-      >
-        <Clock size={11} />
       </button>
     </div>
   )
@@ -809,7 +801,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
 
   const { updateNodeData } = useReactFlow()
   const [choosing, setChoosing] = useState(false)
-  const [boards, setBoards] = useState<{ id: string; name: string; color: string }[]>([])
+  const [boards, setBoards] = useState<{ id: string; name: string; color: string; parent_id: string | null }[]>([])
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [content, setContent] = useState<PortalContent | null>(null)
   const [folderContent, setFolderContent] = useState<FolderContent | null>(null)
   const [sheet, setSheet] = useState<SheetData | null>(null)
@@ -853,7 +846,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   useEffect(() => {
     let cancel = false
     import('@/lib/supabase/client').then(({ createClient }) => {
-      createClient().from('boards').select('id,name,color').order('created_at').then(({ data: b }) => { if (!cancel) setBoards(b ?? []) })
+      createClient().from('boards').select('id,name,color,parent_id').order('tab_position', { ascending: true }).then(({ data: b }) => { if (!cancel) setBoards(b ?? []) })
     })
     return () => { cancel = true }
   }, [])
@@ -1128,33 +1121,86 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           </div>
         </div>
 
-        {choosing && (
-          <div className="nodrag absolute top-7 right-1.5 z-10 bg-white rounded-lg shadow-xl border border-gray-200 py-1 w-40 max-h-44 overflow-y-auto">
-            {boards.length === 0 && <p className="px-3 py-1.5 text-xs text-gray-400">Loading…</p>}
-            {boards.filter(b => b.id !== home).map(b => (
+      </div>
+
+      {/* Tab chooser — rendered OUTSIDE overflow-hidden so it is never clipped.
+          onWheel stops scroll from zooming the main canvas while the list is open. */}
+      {choosing && (() => {
+        async function pickBoard(boardId: string) {
+          setChoosing(false)
+          fittedRef.current = null
+          persist({ targetBoardId: boardId })
+          if (home) {
+            const { createClient } = await import('@/lib/supabase/client')
+            const { data: bd } = await createClient().from('boards').select('mode').eq('id', boardId).single()
+            if (((bd?.mode as string) ?? 'classic') === 'classic') ensureMirrorPortal(boardId, home).catch(() => {})
+          }
+        }
+
+        const topBoards = boards.filter(b => !b.parent_id && b.id !== home)
+        const childrenOf = (pid: string) => boards.filter(b => b.parent_id === pid && b.id !== home)
+
+        return (
+          <div
+            className="nodrag absolute top-6 right-0 z-50 bg-white rounded-lg shadow-xl border border-gray-200 py-1 w-52 max-h-64 overflow-y-auto"
+            onWheel={e => { e.stopPropagation(); e.nativeEvent.stopImmediatePropagation() }}
+            onClick={e => e.stopPropagation()}
+          >
+            {boards.length === 0 && <p className="px-3 py-2 text-xs text-gray-400">Loading…</p>}
+            {topBoards.map(b => {
+              const children = childrenOf(b.id)
+              const isExp = expanded.has(b.id)
+              return (
+                <div key={b.id}>
+                  <div className="flex items-center">
+                    <button
+                      onClick={async e => { e.stopPropagation(); await pickBoard(b.id) }}
+                      className="flex-1 flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 text-left min-w-0"
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                      <span className="truncate">{b.name}</span>
+                    </button>
+                    {children.length > 0 && (
+                      <button
+                        onClick={e => { e.stopPropagation(); setExpanded(prev => { const n = new Set(prev); if (isExp) n.delete(b.id); else n.add(b.id); return n }) }}
+                        className="px-2 py-1.5 text-gray-400 hover:text-gray-600 shrink-0"
+                        title={isExp ? 'Collapse sub-tabs' : 'Show sub-tabs'}
+                      >
+                        <ChevronDown size={10} className={`transition-transform ${isExp ? 'rotate-180' : ''}`} />
+                      </button>
+                    )}
+                  </div>
+                  {isExp && children.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={async e => { e.stopPropagation(); await pickBoard(c.id) }}
+                      className="w-full flex items-center gap-2 pl-6 pr-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 text-left"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: c.color }} />
+                      <span className="truncate">{c.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )
+            })}
+            {home && (
               <button
-                key={b.id}
                 onClick={async e => {
                   e.stopPropagation()
                   setChoosing(false)
-                  fittedRef.current = null // re-fit to the new target
-                  persist({ targetBoardId: b.id })
-                  // Mirror a portal back on the target ONLY for canvas tabs.
-                  if (home) {
-                    const { createClient } = await import('@/lib/supabase/client')
-                    const { data: bd } = await createClient().from('boards').select('mode').eq('id', b.id).single()
-                    if (((bd?.mode as string) ?? 'classic') === 'classic') ensureMirrorPortal(b.id, home).catch(() => {})
-                  }
+                  const homeBoard = boards.find(b => b.id === home)
+                  const sub = await createSubTab(home, 'New tab', homeBoard?.color ?? '#0079bf', 'classic')
+                  fittedRef.current = null
+                  persist({ targetBoardId: sub.id })
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 text-left"
+                className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 text-left border-t border-gray-100 mt-0.5"
               >
-                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
-                <span className="truncate">{b.name}</span>
+                <Plus size={10} /> New sub-tab here
               </button>
-            ))}
+            )}
           </div>
-        )}
-      </div>
+        )
+      })()}
     </div>
   )
 }

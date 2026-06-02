@@ -13,6 +13,8 @@ const MAX_BYTES = 1_000_000 // 1 MB — generous for text, keeps the DB row sane
 
 // Drag payload used when dragging a unit out of a portal onto the canvas.
 export const PORTAL_ITEM_MIME = 'application/x-syncedsys-portalitem'
+// Drag payload used when dragging a board tab to become a sub-tab of another.
+export const BOARD_TAB_MIME = 'application/x-syncedsys-boardtab'
 
 // Trigger a browser download of text content as a file.
 export function downloadTextFile(name: string, content: string) {

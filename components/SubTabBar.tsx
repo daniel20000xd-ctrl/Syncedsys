@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Plus, ChevronDown } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { createSubTab, deleteBoard } from '@/app/actions'
+import { createSubTab, deleteBoard, moveBoardToParent } from '@/app/actions'
+import { BOARD_TAB_MIME } from '@/lib/files'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
 function getAncestorChain(allBoards: Board[], boardId: string): Board[] {
@@ -26,6 +27,24 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
   const router = useRouter()
   const [creating, setCreating] = useState(false)
   const [openPanel, setOpenPanel] = useState<OpenPanel>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+  async function handleSubtabDrop(e: React.DragEvent, targetBoardId: string) {
+    e.preventDefault(); e.stopPropagation()
+    setDragOverId(null)
+    const draggedId = e.dataTransfer.getData(BOARD_TAB_MIME) || e.dataTransfer.getData('text/plain')
+    if (!draggedId || draggedId === targetBoardId) return
+    // Find what parent the target belongs to, so the dragged board becomes a sibling subtab
+    const target = allBoards.find(b => b.id === targetBoardId)
+    const newParentId = target?.parent_id ?? null
+    try {
+      await moveBoardToParent(draggedId, newParentId)
+      router.refresh()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not move that tab.')
+      router.refresh()
+    }
+  }
 
   const boardId = pathname.match(/\/board\/([^/]+)/)?.[1] ?? null
   if (!boardId) return null
@@ -86,7 +105,15 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
             const isCurrent = tab.id === boardId
             const isSelected = tab.id === selectedId
             return (
-              <div key={tab.id} className="relative group/tab shrink-0">
+              <div
+                key={tab.id}
+                className={`relative group/tab shrink-0 ${dragOverId === tab.id ? 'ring-1 ring-[#579dff] rounded bg-[#579dff]/20' : ''}`}
+                draggable
+                onDragStart={e => { e.dataTransfer.setData('text/plain', tab.id); e.dataTransfer.setData(BOARD_TAB_MIME, tab.id); e.dataTransfer.effectAllowed = 'move' }}
+                onDragOver={e => { if (e.dataTransfer.types.includes(BOARD_TAB_MIME)) { e.preventDefault(); setDragOverId(tab.id) } }}
+                onDragLeave={() => setDragOverId(prev => prev === tab.id ? null : prev)}
+                onDrop={e => handleSubtabDrop(e, tab.id)}
+              >
                 <button
                   onMouseEnter={() => router.prefetch(`/board/${tab.id}`)}
                   onClick={() => router.push(`/board/${tab.id}`)}

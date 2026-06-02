@@ -72,7 +72,8 @@ function buildNodes(
     id: `list-${l.id}`,
     type: 'listNode',
     hidden: l.hidden,
-    position: { x: l.x || i * 240, y: l.y || 100 },
+    position: { x: l.x ?? (i * 240), y: l.y ?? 100 },
+    zIndex: 0,
     data: {
       name: l.name,
       hidden: l.hidden,
@@ -88,7 +89,8 @@ function buildNodes(
     id: `card-${c.id}`,
     type: 'cardNode',
     hidden: c.hidden,
-    position: { x: c.x || 0, y: c.y || 0 },
+    position: { x: c.x ?? 0, y: c.y ?? 0 },
+    zIndex: 0,
     data: {
       title: c.title,
       done: c.done,
@@ -128,14 +130,15 @@ function buildNodes(
     if (el.type === 'shape' || el.type === 'portal') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
     const opacity = typeof el.data.opacity === 'number' ? (el.data.opacity as number) : 1
     base.style = { ...(base.style ?? {}), opacity }
-    if (typeof el.data.z === 'number') base.zIndex = el.data.z as number
+    base.zIndex = typeof el.data.z === 'number' ? el.data.z as number : 0
     return base
   })
 
   const subTabNodes: Node[] = subBoards.map((sb, i) => ({
     id: `sub-${sb.id}`,
     type: 'subTabNode',
-    position: { x: sb.free_x || 500 + i * 200, y: sb.free_y || 400 },
+    position: { x: sb.free_x ?? (500 + i * 200), y: sb.free_y ?? 400 },
+    zIndex: 0,
     data: {
       boardId: sb.id,
       name: sb.name,
@@ -348,6 +351,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       setCardHidden(rawId, hidden, board.id).catch(err => console.error('hide card failed:', err))
       setCards(prev => prev.map(c => c.id === rawId ? { ...c, hidden } : c))
     }
+    // Bust the router cache so navigating away and back sees the correct hidden
+    // state even within the 30 s stale window.
+    router.refresh()
   }
 
   function renameSubTab(boardId: string, name: string) {
@@ -882,6 +888,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool !== 'shape') return
     const pt = getOverlayPoint(e.clientX, e.clientY)
     if (!shapeAnchor) {
+      // If the click lands on an existing node, switch to select tool so the
+      // user can interact with it (type inside, resize, link) rather than
+      // accidentally starting a new shape on top of it.
+      const flowPt = overlayToFlow(pt.x, pt.y)
+      const hit = getIntersectingNodes({ x: flowPt.x - 4, y: flowPt.y - 4, width: 8, height: 8 })
+      if (hit.length > 0) { setTool('select'); return }
       setShapeAnchor(pt)
       setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
       return
@@ -962,7 +974,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
   }, [contextMenu])
 
-  // Keyboard: Ctrl+Z undo, Ctrl+X redo, H = hand tool — all ignored while typing
+  // Keyboard shortcuts — all ignored while typing in a text field
+  // Ctrl+Z = undo, Ctrl+X = redo
+  // V = select/cursor, H = hand, P = pen/draw, R = shape, F = portal
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const el = e.target as HTMLElement | null
@@ -971,9 +985,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       const mod = e.ctrlKey || e.metaKey
       if (mod && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undo(); return }
       if (mod && (e.key === 'x' || e.key === 'X')) { e.preventDefault(); redo(); return }
-      if (!mod && !e.altKey && (e.key === 'h' || e.key === 'H')) {
-        e.preventDefault()
-        setTool(prev => (prev === 'hand' ? 'select' : 'hand'))
+      if (!mod && !e.altKey) {
+        if (e.key === 'v' || e.key === 'V') { e.preventDefault(); setTool('select') }
+        else if (e.key === 'h' || e.key === 'H') { e.preventDefault(); setTool(prev => prev === 'hand' ? 'select' : 'hand') }
+        else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); setTool('draw') }
+        else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); setTool('shape') }
+        else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); setTool('portal') }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1200,7 +1217,14 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
               <button
                 key={t}
                 onClick={() => setTool(t)}
-                title={t === 'hand' ? 'Hand — pan (H)' : t.charAt(0).toUpperCase() + t.slice(1)}
+                title={
+                  t === 'select' ? 'Select (V)' :
+                  t === 'hand'   ? 'Hand — pan (H)' :
+                  t === 'draw'   ? 'Pen — draw (P)' :
+                  t === 'shape'  ? 'Shape (R)' :
+                  t === 'portal' ? 'Portal — frame (F)' :
+                  t.charAt(0).toUpperCase() + t.slice(1)
+                }
                 className={`p-2 rounded-lg transition-colors ${tool === t ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
               >
                 <Icon size={16} />
