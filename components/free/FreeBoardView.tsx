@@ -9,7 +9,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, deleteEdge, deleteBoard,
@@ -17,7 +17,7 @@ import {
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
 } from '@/app/actions'
-import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode } from './nodes'
+import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
 import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME } from '@/lib/files'
@@ -33,13 +33,14 @@ const nodeTypes: NodeTypes = {
   textFileNode: TextFileNode,
   folderLinkNode: FolderLinkNode,
   portalNode: PortalNode,
+  claudeNode: ClaudeNode,
 }
 
 const edgeTypes: EdgeTypes = {
   deletable: DeletableEdge,
 }
 
-type Tool = 'select' | 'hand' | 'draw' | 'shape' | 'text' | 'portal'
+type Tool = 'select' | 'hand' | 'draw' | 'shape' | 'text' | 'portal' | 'claude'
 
 const TOOL_ICONS: Record<Tool, LucideIcon> = {
   select: MousePointer2,
@@ -48,6 +49,7 @@ const TOOL_ICONS: Record<Tool, LucideIcon> = {
   shape: Square,
   text: Type,
   portal: Frame,
+  claude: Sparkles,
 }
 type ShapeType = 'rect' | 'circle' | 'diamond'
 
@@ -106,7 +108,7 @@ function buildNodes(
   }))
 
   const elementNodes: Node[] = elements.map(el => {
-    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : 'drawingNode'
+    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : el.type === 'claude' ? 'claudeNode' : 'drawingNode'
     const base: Node = {
       id: `el-${el.id}`,
       type,
@@ -128,6 +130,7 @@ function buildNodes(
       },
     }
     if (el.type === 'shape' || el.type === 'portal') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
+    if (el.type === 'claude') base.style = { width: el.width ?? 340, height: el.height ?? 420 }
     const opacity = typeof el.data.opacity === 'number' ? (el.data.opacity as number) : 1
     base.style = { ...(base.style ?? {}), opacity }
     base.zIndex = typeof el.data.z === 'number' ? el.data.z as number : 0
@@ -426,7 +429,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // ── Create a free-mode element (client-controlled id so undo can restore it) ──
   function addElement(
-    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink',
+    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink' | 'claude',
     x: number, y: number,
     data: Record<string, unknown>,
     w?: number, h?: number,
@@ -434,10 +437,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   ) {
     const id = crypto.randomUUID()
     const nodeId = `el-${id}`
-    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'folderlink' ? 'folderLinkNode' : type === 'portal' ? 'portalNode' : 'imageNode'
+    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'folderlink' ? 'folderLinkNode' : type === 'portal' ? 'portalNode' : type === 'claude' ? 'claudeNode' : 'imageNode'
     const node: Node = {
       id: nodeId, type: nodeType, position: { x, y },
-      ...(type === 'shape' || type === 'portal' ? { style: { width: w, height: h } } : {}),
+      ...(type === 'shape' || type === 'portal' || type === 'claude' ? { style: { width: w, height: h } } : {}),
       data: {
         ...data,
         onDelete: (i: string) => handleDeleteNode(i, 'element'),
@@ -561,15 +564,15 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }, [nodes, edges]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function reconcileDb(s: Snapshot) {
-    const elTypeOf = (t?: string) => t === 'shapeNode' ? 'shape' : t === 'drawingNode' ? 'drawing' : t === 'textNode' ? 'text' : t === 'portalNode' ? 'portal' : 'image'
+    const elTypeOf = (t?: string) => t === 'shapeNode' ? 'shape' : t === 'drawingNode' ? 'drawing' : t === 'textNode' ? 'text' : t === 'portalNode' ? 'portal' : t === 'claudeNode' ? 'claude' : 'image'
     const clean = (d: Record<string, unknown>) => Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v !== 'function'))
     const targetEls = s.nodes.filter(n => n.id.startsWith('el-'))
     const targetIds = new Set(targetEls.map(n => n.id.replace('el-', '')))
     // upsert everything in the target snapshot
     for (const n of targetEls) {
       const id = n.id.replace('el-', '')
-      const type = elTypeOf(n.type) as 'shape' | 'drawing' | 'text' | 'image' | 'portal'
-      const sized = type === 'shape' || type === 'portal'
+      const type = elTypeOf(n.type) as 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'claude'
+      const sized = type === 'shape' || type === 'portal' || type === 'claude'
       const w = sized ? (Number(n.style?.width) || (n.data.width as number) || null) : null
       const h = sized ? (Number(n.style?.height) || (n.data.height as number) || null) : null
       upsertElement(id, board.id, type, n.position.x, n.position.y, clean(n.data), w, h).catch(err => console.error('undo upsert failed:', err))
@@ -582,7 +585,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       const id = n.id.replace('el-', '')
       const existing = elementsRef.current.find(e => e.id === id)
       const type = elTypeOf(n.type) as BoardElement['type']
-      const sized = type === 'shape' || type === 'portal'
+      const sized = type === 'shape' || type === 'portal' || type === 'claude'
       return {
         id, board_id: board.id, type, x: n.position.x, y: n.position.y,
         width: sized ? (Number(n.style?.width) || (n.data.width as number) || null) : (existing?.width ?? null),
@@ -940,6 +943,26 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setTool('select')
   }
 
+  // ── Claude: draw a box (click, move, click) that becomes a live Claude chat ──
+  function onClaudePointerDown(e: React.PointerEvent<SVGSVGElement>) {
+    if (tool !== 'claude') return
+    const pt = getOverlayPoint(e.clientX, e.clientY)
+    if (!shapeAnchor) {
+      setShapeAnchor(pt)
+      setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
+      return
+    }
+    const x = Math.min(shapeAnchor.x, pt.x)
+    const y = Math.min(shapeAnchor.y, pt.y)
+    const w = Math.abs(pt.x - shapeAnchor.x) || 340
+    const h = Math.abs(pt.y - shapeAnchor.y) || 420
+    setShapeAnchor(null)
+    setShapePreview(null)
+    const flowPos = overlayToFlow(x, y)
+    addElement('claude', flowPos.x, flowPos.y, { boardId: board.id, width: w, height: h }, w, h)
+    setTool('select')
+  }
+
   // ── Text: click to drop a text box where you want, then type ──
   function onTextPointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'text') return
@@ -950,7 +973,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }
 
   function onShapePointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    if ((tool !== 'shape' && tool !== 'portal') || !shapeAnchor) return
+    if ((tool !== 'shape' && tool !== 'portal' && tool !== 'claude') || !shapeAnchor) return
     const pt = getOverlayPoint(e.clientX, e.clientY)
     setShapePreview({
       x: Math.min(shapeAnchor.x, pt.x),
@@ -962,7 +985,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // Reset any in-progress shape/stroke when leaving the relevant tool
   useEffect(() => {
-    if (tool !== 'shape' && tool !== 'portal') { setShapeAnchor(null); setShapePreview(null) }
+    if (tool !== 'shape' && tool !== 'portal' && tool !== 'claude') { setShapeAnchor(null); setShapePreview(null) }
     if (tool !== 'draw') { drawingRef.current = null; setCurrentPath('') }
   }, [tool])
 
@@ -1001,6 +1024,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         else if (e.key === 'p' || e.key === 'P') { e.preventDefault(); setTool('draw') }
         else if (e.key === 'r' || e.key === 'R') { e.preventDefault(); setTool('shape') }
         else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); setTool('portal') }
+        else if (e.key === 'c' || e.key === 'C') { e.preventDefault(); setTool('claude') }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -1093,7 +1117,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }, [setNodes, saveElement])
 
   // Overlay (draw/shape/text/portal) intercepts pointer input; hand & select do not
-  const overlayActive = tool === 'draw' || tool === 'shape' || tool === 'text' || tool === 'portal'
+  const overlayActive = tool === 'draw' || tool === 'shape' || tool === 'text' || tool === 'portal' || tool === 'claude'
 
   // ── Navigation that works regardless of the active tool ──
   function onOverlayWheel(e: React.WheelEvent<SVGSVGElement>) {
@@ -1119,6 +1143,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool === 'draw') onDrawPointerDown(e)
     else if (tool === 'shape') onShapePointerDown(e)
     else if (tool === 'portal') onPortalPointerDown(e)
+    else if (tool === 'claude') onClaudePointerDown(e)
     else if (tool === 'text') onTextPointerDown(e)
   }
 
@@ -1129,7 +1154,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       return
     }
     if (tool === 'draw') onDrawPointerMove(e)
-    else if (tool === 'shape' || tool === 'portal') onShapePointerMove(e)
+    else if (tool === 'shape' || tool === 'portal' || tool === 'claude') onShapePointerMove(e)
   }
 
   function onOverlayPointerUp(e: React.PointerEvent<SVGSVGElement>) {
@@ -1205,7 +1230,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         >
           {currentPath && <path d={currentPath} fill="none" stroke={drawColor} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />}
           {shapePreview && (
-            tool === 'portal' ? (
+            (tool === 'portal' || tool === 'claude') ? (
               <rect
                 x={shapePreview.x} y={shapePreview.y} width={shapePreview.w} height={shapePreview.h} rx={8}
                 fill="#d946ef" fillOpacity={0.15} stroke="#d946ef" strokeWidth={2} strokeDasharray="6 4"
@@ -1234,7 +1259,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       {/* Toolbar — rendered above the drawing overlay (z-20 > overlay z-10) so it stays clickable while drawing */}
       <div className="absolute top-3 right-3 z-20 bg-white rounded-xl shadow-lg p-2 flex flex-col gap-1.5">
         <div className="flex flex-col gap-1.5">
-          {(['select', 'hand', 'draw', 'shape', 'text', 'portal'] as Tool[]).map(t => {
+          {(['select', 'hand', 'draw', 'shape', 'text', 'portal', 'claude'] as Tool[]).map(t => {
             const Icon = TOOL_ICONS[t]
             return (
               <button
@@ -1246,6 +1271,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
                   t === 'draw'   ? 'Pen — draw (P)' :
                   t === 'shape'  ? 'Shape (R)' :
                   t === 'portal' ? 'Portal — frame (F)' :
+                  t === 'claude' ? 'Claude — chat on canvas (C)' :
                   t.charAt(0).toUpperCase() + t.slice(1)
                 }
                 className={`p-2 rounded-lg transition-colors ${tool === t ? 'bg-blue-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}

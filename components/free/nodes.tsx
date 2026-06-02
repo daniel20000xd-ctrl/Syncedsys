@@ -5,8 +5,9 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, Sparkles } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab } from '@/app/actions'
+import ClaudeChat from '@/components/claude/ClaudeChat'
 import { recurLabel } from '@/lib/recur'
 import { downloadTextFile, PORTAL_ITEM_MIME } from '@/lib/files'
 import { parseSheet, computeSheet, colToLetter, cellAddr, type SheetData } from '@/lib/spreadsheet'
@@ -676,6 +677,42 @@ export function SubTabNode({ id, data }: NodeProps) {
         >
           <X size={11} />
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ── Claude Node ──────────────────────────────────────────────────────────────
+// A resizable chat that lives on the canvas. Claude here is scoped to the board
+// it sits on (data.boardId) and everything reachable downward from it.
+
+export function ClaudeNode({ id, data, selected }: NodeProps) {
+  const boardId = data.boardId as string
+  return (
+    <div className="relative group w-full h-full">
+      <NodeResizer
+        minWidth={260}
+        minHeight={260}
+        isVisible={!!selected}
+        lineClassName="!border-fuchsia-400"
+        handleClassName="!bg-white !border-2 !border-fuchsia-400 !w-2.5 !h-2.5 !rounded-sm"
+      />
+      <SideHandles color="!bg-fuchsia-500" />
+      <div className="w-full h-full rounded-lg overflow-hidden shadow-lg ring-1 ring-fuchsia-400/40 bg-[#1d2125] flex flex-col">
+        {/* Drag handle / title bar (dragging here moves the node) */}
+        <div className="h-7 bg-black/40 flex items-center justify-between px-2 text-white/90 shrink-0">
+          <span className="flex items-center gap-1.5 text-[11px] font-medium"><Sparkles size={12} className="text-fuchsia-400" /> Claude</span>
+          <button
+            className="nodrag p-0.5 rounded hover:bg-red-500/50"
+            title="Remove Claude"
+            onClick={e => { e.stopPropagation(); (data.onDelete as (id: string) => void)(id) }}
+          >
+            <X size={11} />
+          </button>
+        </div>
+        {boardId
+          ? <ClaudeChat boardId={boardId} />
+          : <p className="text-white/40 text-xs p-4">No board context.</p>}
       </div>
     </div>
   )
