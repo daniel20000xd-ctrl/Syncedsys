@@ -1,16 +1,26 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Folder, FolderPlus, FileText, ArrowLeft, Trash2, X, Save, Download } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Folder, FolderPlus, FileText, ArrowLeft, Trash2, X, Save, Download, ChevronDown } from 'lucide-react'
 import type { Board, BoardElement } from '@/lib/types'
-import { createSubTab, renameBoard, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard, importFolderTree, moveBoardToParent } from '@/app/actions'
+import { createSubTab, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard, importFolderTree, moveBoardToParent } from '@/app/actions'
 import { collectEntries, readDroppedEntries, downloadTextFile } from '@/lib/files'
+import BoardPropertiesPanel from './BoardPropertiesPanel'
 
 const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁', spreadsheet: '📊' }
-// Custom drag types so internal moves are distinguishable from OS file drops.
 const FILE_MIME = 'application/x-syncedsys-fileid'
 const FOLDER_MIME = 'application/x-syncedsys-folderid'
+
+type CreateMode = 'folder' | 'classic' | 'trello' | 'text' | 'spreadsheet'
+const CREATE_OPTIONS: { mode: CreateMode; label: string; emoji: string; name: string }[] = [
+  { mode: 'folder', label: 'New folder', emoji: '📁', name: 'New folder' },
+  { mode: 'classic', label: 'New canvas', emoji: '🎨', name: 'New canvas' },
+  { mode: 'trello', label: 'New board', emoji: '🗂', name: 'New board' },
+  { mode: 'text', label: 'New document', emoji: '📝', name: 'New document' },
+  { mode: 'spreadsheet', label: 'New spreadsheet', emoji: '📊', name: 'New spreadsheet' },
+]
 
 export default function FolderBoardView({
   board,
@@ -25,38 +35,30 @@ export default function FolderBoardView({
   const [folders, setFolders] = useState<Board[]>(initialFolders)
   const [files, setFiles] = useState<BoardElement[]>(initialFiles)
   const [dragOver, setDragOver] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
   const [editing, setEditing] = useState<BoardElement | null>(null)
-  const [moveTargetId, setMoveTargetId] = useState<string | null>(null) // folder/back highlighted as a move target
+  const [moveTargetId, setMoveTargetId] = useState<string | null>(null)
   const [draggingFolderId, setDraggingFolderId] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const [createMenu, setCreateMenu] = useState<{ x: number; y: number } | null>(null)
+  const [folderPanel, setFolderPanel] = useState<{ boardId: string; rect: DOMRect } | null>(null)
+  const [fileMenu, setFileMenu] = useState<{ fileId: string; rect: DOMRect } | null>(null)
   const dragDepth = useRef(0)
+  const marqueeStart = useRef<{ x: number; y: number; moved: boolean } | null>(null)
 
-  // ── Move a file into another board (sub-folder, or up to the parent) ──
+  // ── Moving units (drag in/out) ──
   async function moveFileToBoard(fileId: string, targetBoardId: string) {
     if (!fileId || targetBoardId === board.id) return
-    setFiles(prev => prev.filter(f => f.id !== fileId))
-    setMoveTargetId(null)
+    setFiles(prev => prev.filter(f => f.id !== fileId)); setMoveTargetId(null)
     await moveElementToBoard(fileId, targetBoardId, board.id)
   }
-
-  // ── Move a folder into another folder (nest), or up to the parent (null = top level) ──
   async function moveFolderToBoard(folderId: string, targetBoardId: string | null) {
     if (!folderId || folderId === targetBoardId) return
     const moved = folders.find(f => f.id === folderId)
-    setFolders(prev => prev.filter(f => f.id !== folderId))
-    setMoveTargetId(null)
-    try {
-      await moveBoardToParent(folderId, targetBoardId, board.id)
-    } catch (err) {
-      console.error('Failed to move folder:', err)
-      if (moved) setFolders(prev => [...prev, moved]) // restore on rejection (e.g. cycle)
-      alert(err instanceof Error ? err.message : 'Could not move that folder.')
-    }
+    setFolders(prev => prev.filter(f => f.id !== folderId)); setMoveTargetId(null)
+    try { await moveBoardToParent(folderId, targetBoardId, board.id) }
+    catch (err) { if (moved) setFolders(prev => [...prev, moved]); alert(err instanceof Error ? err.message : 'Could not move that folder.') }
   }
-
-  // What the dragged item is, read on drop (FILE has priority).
   function handleTileDrop(e: React.DragEvent, targetBoardId: string | null) {
     e.preventDefault(); e.stopPropagation()
     const fileId = e.dataTransfer.getData(FILE_MIME)
@@ -65,85 +67,112 @@ export default function FolderBoardView({
     if (folderId) moveFolderToBoard(folderId, targetBoardId)
   }
 
-  // ── Folders ──
-  async function handleNewFolder() {
-    if (busy) return
-    setBusy(true)
-    try {
-      const sub = await createSubTab(board.id, 'New folder', board.color, 'folder')
-      setFolders(prev => [...prev, sub as Board])
-      setRenamingId(sub.id)
-      setRenameValue('New folder')
-    } finally {
-      setBusy(false)
-    }
+  // ── Creating units ──
+  async function createBoardUnit(mode: CreateMode, name: string) {
+    setCreateMenu(null)
+    const sub = await createSubTab(board.id, name, board.color, mode)
+    setFolders(prev => [...prev, sub as Board])
   }
-
-  async function commitRename(id: string) {
-    const name = renameValue.trim()
-    setRenamingId(null)
-    if (!name) return
-    setFolders(prev => prev.map(f => f.id === id ? { ...f, name } : f))
-    await renameBoard(id, name)
+  async function createFileUnit() {
+    setCreateMenu(null)
+    const el = await createTextFile(board.id, 'Untitled.txt', '')
+    setFiles(prev => [...prev, el as BoardElement])
+    setEditing(el as BoardElement)
+  }
+  async function handleNewFolder() {
+    const sub = await createSubTab(board.id, 'New folder', board.color, 'folder')
+    setFolders(prev => [...prev, sub as Board])
   }
 
   async function removeFolder(id: string) {
-    if (!confirm('Delete this folder and everything inside it?')) return
-    setFolders(prev => prev.filter(f => f.id !== id))
-    await deleteBoard(id)
+    setFolders(prev => prev.filter(f => f.id !== id)); await deleteBoard(id)
   }
-
-  // ── Files ──
   async function removeFile(id: string) {
-    setFiles(prev => prev.filter(f => f.id !== id))
-    await deleteElement(id)
+    setFiles(prev => prev.filter(f => f.id !== id)); await deleteElement(id)
   }
-
   async function saveEditing() {
     if (!editing) return
     const name = (editing.data.name as string) || 'Untitled.txt'
     const content = (editing.data.content as string) || ''
-    setFiles(prev => prev.map(f => f.id === editing.id ? editing : f))
-    setEditing(null)
+    setFiles(prev => prev.map(f => f.id === editing.id ? editing : f)); setEditing(null)
     await updateTextFile(editing.id, name, content, board.id)
   }
 
-  // ── Drag & drop ──
-  function onDragOver(e: React.DragEvent) {
-    if (!Array.from(e.dataTransfer.types).includes('Files')) return
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'copy'
+  // ── Selection: click to select, drag the background to marquee-select ──
+  function toggleSelect(id: string, additive: boolean) {
+    setSelected(prev => {
+      const next = new Set(additive ? prev : [])
+      if (additive && prev.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
   }
-  function onDragEnter(e: React.DragEvent) {
-    if (!Array.from(e.dataTransfer.types).includes('Files')) return
-    dragDepth.current++
-    setDragOver(true)
+  function onSurfaceMouseDown(e: React.MouseEvent) {
+    if (e.button !== 0) return
+    if ((e.target as HTMLElement).closest('[data-unit-id]')) return // tile handles itself
+    marqueeStart.current = { x: e.clientX, y: e.clientY, moved: false }
+    if (!e.shiftKey && !e.ctrlKey && !e.metaKey) setSelected(new Set())
   }
-  function onDragLeave() {
-    dragDepth.current = Math.max(0, dragDepth.current - 1)
-    if (dragDepth.current === 0) setDragOver(false)
-  }
+
+  useEffect(() => {
+    function move(e: MouseEvent) {
+      const s = marqueeStart.current; if (!s) return
+      const dx = e.clientX - s.x, dy = e.clientY - s.y
+      if (!s.moved && Math.hypot(dx, dy) < 5) return
+      s.moved = true
+      const x = Math.min(s.x, e.clientX), y = Math.min(s.y, e.clientY), w = Math.abs(dx), h = Math.abs(dy)
+      setMarquee({ x, y, w, h })
+      const next = new Set<string>()
+      document.querySelectorAll<HTMLElement>('[data-unit-id]').forEach(el => {
+        const r = el.getBoundingClientRect()
+        if (r.left < x + w && r.right > x && r.top < y + h && r.bottom > y) next.add(el.dataset.unitId!)
+      })
+      setSelected(next)
+    }
+    function up(e: MouseEvent) {
+      const s = marqueeStart.current; if (!s) return
+      marqueeStart.current = null; setMarquee(null)
+      if (!s.moved) setCreateMenu({ x: e.clientX, y: e.clientY }) // a click on empty space → create menu
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+    return () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up) }
+  }, [])
+
+  // Delete key removes the current selection
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      if (e.key !== 'Delete' || selected.size === 0 || editing) return
+      e.preventDefault()
+      const ids = [...selected]
+      const folderIds = ids.filter(id => folders.some(f => f.id === id))
+      const fileIds = ids.filter(id => files.some(f => f.id === id))
+      if (folderIds.length && !confirm(`Delete ${folderIds.length} folder(s) and everything inside?`)) return
+      setFolders(prev => prev.filter(f => !folderIds.includes(f.id)))
+      setFiles(prev => prev.filter(f => !fileIds.includes(f.id)))
+      setSelected(new Set())
+      folderIds.forEach(id => deleteBoard(id).catch(() => {}))
+      fileIds.forEach(id => deleteElement(id).catch(() => {}))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected, editing, folders, files])
+
+  // ── OS file/folder drop ──
+  function onDragOver(e: React.DragEvent) { if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' } }
+  function onDragEnter(e: React.DragEvent) { if (Array.from(e.dataTransfer.types).includes('Files')) { dragDepth.current++; setDragOver(true) } }
+  function onDragLeave() { dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragOver(false) }
   async function onDrop(e: React.DragEvent) {
-    dragDepth.current = 0
-    setDragOver(false)
-    // Internal move dropped on empty space — it already lives here, ignore.
+    dragDepth.current = 0; setDragOver(false)
     if (e.dataTransfer.getData(FILE_MIME) || e.dataTransfer.getData(FOLDER_MIME)) return
-    // Grab directory entries synchronously before any await.
     const entries = collectEntries(e.dataTransfer)
     if (!entries && !e.dataTransfer.files?.length) return
     e.preventDefault()
-    const { trees, files, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
-    for (const f of files) {
-      const el = await createTextFile(board.id, f.name, f.content)
-      setFiles(prev => [...prev, el as BoardElement])
-    }
-    for (const tree of trees) {
-      const top = await importFolderTree(board.id, tree, board.color)
-      setFolders(prev => [...prev, top as Board])
-    }
-    if (skipped.length && !files.length && !trees.length) {
-      alert('Only text files are supported for now (binary storage is coming later).')
-    }
+    const { trees, files: dropped, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
+    for (const f of dropped) { const el = await createTextFile(board.id, f.name, f.content); setFiles(prev => [...prev, el as BoardElement]) }
+    for (const tree of trees) { const top = await importFolderTree(board.id, tree, board.color); setFolders(prev => [...prev, top as Board]) }
+    if (skipped.length && !dropped.length && !trees.length) alert('Only text files are supported for now (binary storage is coming later).')
   }
 
   const isEmpty = folders.length === 0 && files.length === 0
@@ -162,7 +191,6 @@ export default function FolderBoardView({
           onClick={() => board.parent_id ? router.push(`/board/${board.parent_id}`) : router.push('/')}
           onDragOver={e => {
             const t = e.dataTransfer.types
-            // Files need a real parent board; folders can go up to the top level too.
             const canDrop = (t.includes(FILE_MIME) && board.parent_id) || t.includes(FOLDER_MIME)
             if (canDrop) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId('__back__') }
           }}
@@ -177,74 +205,51 @@ export default function FolderBoardView({
         <span className="text-sm font-medium text-gray-700">{board.name}</span>
         <span className="text-xs text-gray-400">· {folders.length + files.length} items</span>
         <div className="flex-1" />
-        <button
-          onClick={handleNewFolder}
-          disabled={busy}
-          className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50"
-        >
+        <button onClick={handleNewFolder} className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800">
           <FolderPlus size={14} /> New folder
         </button>
       </div>
 
-      {/* Grid */}
-      <div className="flex-1 overflow-auto p-4">
+      {/* Grid — click empty space for the create menu, drag to marquee-select */}
+      <div
+        className="flex-1 overflow-auto p-4"
+        onMouseDown={onSurfaceMouseDown}
+        onContextMenu={e => { if (!(e.target as HTMLElement).closest('[data-unit-id]')) { e.preventDefault(); setCreateMenu({ x: e.clientX, y: e.clientY }) } }}
+      >
         {isEmpty ? (
-          <div className="h-full flex flex-col items-center justify-center text-center text-gray-400">
+          <div className="h-full flex flex-col items-center justify-center text-center text-gray-400 pointer-events-none">
             <FileText size={40} className="mb-3 opacity-40" />
             <p className="text-sm">This folder is empty.</p>
-            <p className="text-xs mt-1">Drag in files or whole folders, or create a sub-folder.</p>
+            <p className="text-xs mt-1">Click anywhere to create · drag in files or folders.</p>
           </div>
         ) : (
           <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))' }}>
             {folders.map(f => (
               <div
                 key={f.id}
-                draggable={renamingId !== f.id}
+                data-unit-id={f.id}
+                draggable
                 onDragStart={e => { e.dataTransfer.setData(FOLDER_MIME, f.id); e.dataTransfer.effectAllowed = 'move'; setDraggingFolderId(f.id) }}
                 onDragEnd={() => { setDraggingFolderId(null); setMoveTargetId(null) }}
+                onClick={e => { e.stopPropagation(); toggleSelect(f.id, e.ctrlKey || e.metaKey || e.shiftKey) }}
                 onDoubleClick={() => router.push(`/board/${f.id}`)}
-                onDragOver={e => {
-                  const t = e.dataTransfer.types
-                  // Accept files and other folders, but not the folder being dragged onto itself.
-                  if ((t.includes(FILE_MIME) || t.includes(FOLDER_MIME)) && draggingFolderId !== f.id) {
-                    e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId(f.id)
-                  }
-                }}
+                onDragOver={e => { const t = e.dataTransfer.types; if ((t.includes(FILE_MIME) || t.includes(FOLDER_MIME)) && draggingFolderId !== f.id) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setMoveTargetId(f.id) } }}
                 onDragLeave={() => setMoveTargetId(prev => prev === f.id ? null : prev)}
                 onDrop={e => handleTileDrop(e, f.id)}
-                className={`group relative flex flex-col items-center gap-1.5 p-3 rounded-lg cursor-pointer ${moveTargetId === f.id ? 'bg-blue-100 ring-2 ring-blue-400' : 'hover:bg-blue-50'} ${draggingFolderId === f.id ? 'opacity-40' : ''}`}
-                title="Double-click to open · drag onto another folder to nest · drop items here to move them in"
+                className={`group relative flex flex-col items-center gap-1.5 p-3 rounded-lg cursor-pointer ${moveTargetId === f.id ? 'bg-blue-100 ring-2 ring-blue-400' : selected.has(f.id) ? 'bg-blue-100 ring-2 ring-blue-500' : 'hover:bg-blue-50'} ${draggingFolderId === f.id ? 'opacity-40' : ''}`}
+                title="Double-click to open · drag to move · click the chevron for settings"
               >
                 <div className="relative">
                   <Folder size={44} className="text-blue-400 fill-blue-100" />
-                  {f.mode !== 'folder' && (
-                    <span className="absolute -bottom-1 -right-1 text-[11px]">{MODE_EMOJI[f.mode] ?? ''}</span>
-                  )}
+                  {f.mode !== 'folder' && <span className="absolute -bottom-1 -right-1 text-[11px]">{MODE_EMOJI[f.mode] ?? ''}</span>}
                 </div>
-                {renamingId === f.id ? (
-                  <input
-                    autoFocus
-                    value={renameValue}
-                    onChange={e => setRenameValue(e.target.value)}
-                    onBlur={() => commitRename(f.id)}
-                    onKeyDown={e => { if (e.key === 'Enter') commitRename(f.id); if (e.key === 'Escape') setRenamingId(null) }}
-                    onDoubleClick={e => e.stopPropagation()}
-                    className="w-full text-[11px] text-center border border-blue-400 rounded px-1 focus:outline-none"
-                  />
-                ) : (
-                  <span
-                    className="text-[11px] text-gray-700 text-center break-words line-clamp-2 leading-tight"
-                    onClick={e => { e.stopPropagation(); setRenamingId(f.id); setRenameValue(f.name) }}
-                    title="Click to rename"
-                  >
-                    {f.name}
-                  </span>
-                )}
+                <span className="text-[11px] text-gray-700 text-center break-words line-clamp-2 leading-tight">{f.name}</span>
                 <button
-                  onClick={e => { e.stopPropagation(); removeFolder(f.id) }}
-                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-white shadow text-gray-400 hover:text-red-500"
+                  onClick={e => { e.stopPropagation(); const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setFileMenu(null); setFolderPanel({ boardId: f.id, rect }) }}
+                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-white shadow text-gray-400 hover:text-gray-700"
+                  title="Settings"
                 >
-                  <Trash2 size={11} />
+                  <ChevronDown size={12} />
                 </button>
               </div>
             ))}
@@ -252,37 +257,50 @@ export default function FolderBoardView({
             {files.map(file => (
               <div
                 key={file.id}
+                data-unit-id={file.id}
                 draggable
                 onDragStart={e => { e.dataTransfer.setData(FILE_MIME, file.id); e.dataTransfer.effectAllowed = 'move' }}
+                onClick={e => { e.stopPropagation(); toggleSelect(file.id, e.ctrlKey || e.metaKey || e.shiftKey) }}
                 onDoubleClick={() => setEditing(file)}
-                className="group relative flex flex-col items-center gap-1.5 p-3 rounded-lg hover:bg-indigo-50 cursor-pointer"
-                title="Double-click to open · drag onto a folder to move it"
+                className={`group relative flex flex-col items-center gap-1.5 p-3 rounded-lg cursor-pointer ${selected.has(file.id) ? 'bg-indigo-100 ring-2 ring-indigo-500' : 'hover:bg-indigo-50'}`}
+                title="Double-click to open · drag to move · click the chevron for settings"
               >
                 <FileText size={42} className="text-indigo-400" />
-                <span className="text-[11px] text-gray-700 text-center break-words line-clamp-2 leading-tight">
-                  {(file.data.name as string) || 'Untitled.txt'}
-                </span>
-                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 flex gap-0.5">
-                  <button
-                    onClick={e => { e.stopPropagation(); downloadTextFile((file.data.name as string) || 'file.txt', (file.data.content as string) || '') }}
-                    className="p-0.5 rounded bg-white shadow text-gray-400 hover:text-indigo-500"
-                    title="Download"
-                  >
-                    <Download size={11} />
-                  </button>
-                  <button
-                    onClick={e => { e.stopPropagation(); removeFile(file.id) }}
-                    className="p-0.5 rounded bg-white shadow text-gray-400 hover:text-red-500"
-                    title="Delete"
-                  >
-                    <Trash2 size={11} />
-                  </button>
-                </div>
+                <span className="text-[11px] text-gray-700 text-center break-words line-clamp-2 leading-tight">{(file.data.name as string) || 'Untitled.txt'}</span>
+                <button
+                  onClick={e => { e.stopPropagation(); const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setFolderPanel(null); setFileMenu({ fileId: file.id, rect }) }}
+                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 p-0.5 rounded bg-white shadow text-gray-400 hover:text-gray-700"
+                  title="Settings"
+                >
+                  <ChevronDown size={12} />
+                </button>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Marquee rectangle */}
+      {marquee && (
+        <div className="fixed z-30 border border-blue-400 bg-blue-400/15 pointer-events-none" style={{ left: marquee.x, top: marquee.y, width: marquee.w, height: marquee.h }} />
+      )}
+
+      {/* Create menu */}
+      {createMenu && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setCreateMenu(null)} onContextMenu={e => { e.preventDefault(); setCreateMenu(null) }} />
+          <div style={{ position: 'fixed', top: Math.min(createMenu.y, window.innerHeight - 230), left: Math.min(createMenu.x, window.innerWidth - 184), zIndex: 50 }} className="bg-white rounded-lg shadow-xl border border-gray-200 py-1 w-44 text-sm">
+            <p className="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Create</p>
+            <button onClick={createFileUnit} className="w-full flex items-center gap-2 px-3 py-1.5 text-gray-700 hover:bg-gray-100 text-left">📄 New text file</button>
+            {CREATE_OPTIONS.map(o => (
+              <button key={o.mode} onClick={() => createBoardUnit(o.mode, o.name)} className="w-full flex items-center gap-2 px-3 py-1.5 text-gray-700 hover:bg-gray-100 text-left">
+                {o.emoji} {o.label}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body
+      )}
 
       {/* Drop overlay */}
       {dragOver && (
@@ -290,6 +308,38 @@ export default function FolderBoardView({
           <p className="bg-white/90 text-indigo-600 text-sm font-medium px-4 py-2 rounded-lg shadow">Drop files or folders here</p>
         </div>
       )}
+
+      {/* Folder settings (name / colour / mode) */}
+      {folderPanel && (() => {
+        const f = folders.find(x => x.id === folderPanel.boardId)
+        if (!f) return null
+        return (
+          <BoardPropertiesPanel
+            board={f}
+            anchorRect={folderPanel.rect}
+            showAddSubTab={false}
+            onClose={() => setFolderPanel(null)}
+            onUpdate={updated => { setFolders(prev => prev.map(x => x.id === updated.id ? updated : x)); setFolderPanel(null) }}
+            onRemove={() => { setFolderPanel(null); removeFolder(f.id) }}
+          />
+        )
+      })()}
+
+      {/* File settings (rename / download / delete) */}
+      {fileMenu && (() => {
+        const f = files.find(x => x.id === fileMenu.fileId)
+        if (!f) return null
+        return (
+          <FileMenuPanel
+            file={f}
+            boardId={board.id}
+            anchorRect={fileMenu.rect}
+            onClose={() => setFileMenu(null)}
+            onSaved={updated => { setFiles(prev => prev.map(x => x.id === updated.id ? updated : x)); setFileMenu(null) }}
+            onDeleted={() => { setFileMenu(null); removeFile(f.id) }}
+          />
+        )
+      })()}
 
       {/* File editor */}
       {editing && (
@@ -303,16 +353,10 @@ export default function FolderBoardView({
                 className="flex-1 text-sm font-medium text-gray-800 focus:outline-none"
                 placeholder="filename.txt"
               />
-              <button
-                onClick={() => downloadTextFile((editing.data.name as string) || 'file.txt', (editing.data.content as string) || '')}
-                className="flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-600 px-2 py-1 rounded hover:bg-gray-100"
-                title="Download"
-              >
+              <button onClick={() => downloadTextFile((editing.data.name as string) || 'file.txt', (editing.data.content as string) || '')} className="flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-600 px-2 py-1 rounded hover:bg-gray-100" title="Download">
                 <Download size={13} /> Download
               </button>
-              <button onClick={saveEditing} className="flex items-center gap-1 text-xs bg-indigo-500 hover:bg-indigo-600 text-white px-2.5 py-1 rounded">
-                <Save size={12} /> Save
-              </button>
+              <button onClick={saveEditing} className="flex items-center gap-1 text-xs bg-indigo-500 hover:bg-indigo-600 text-white px-2.5 py-1 rounded"><Save size={12} /> Save</button>
               <button onClick={() => setEditing(null)} className="p-1 text-gray-400 hover:text-gray-700"><X size={16} /></button>
             </div>
             <textarea
@@ -326,5 +370,40 @@ export default function FolderBoardView({
         </div>
       )}
     </div>
+  )
+}
+
+// ── Per-file settings menu ──
+function FileMenuPanel({ file, boardId, anchorRect, onClose, onSaved, onDeleted }: {
+  file: BoardElement; boardId: string; anchorRect: DOMRect; onClose: () => void; onSaved: (f: BoardElement) => void; onDeleted: () => void
+}) {
+  const [name, setName] = useState((file.data.name as string) || '')
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    function onClick(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) onClose() }
+    setTimeout(() => document.addEventListener('mousedown', onClick), 0)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [onClose])
+
+  async function save() {
+    const finalName = name.trim() || 'Untitled.txt'
+    const content = (file.data.content as string) || ''
+    await updateTextFile(file.id, finalName, content, boardId)
+    onSaved({ ...file, data: { ...file.data, name: finalName } })
+  }
+
+  return createPortal(
+    <div ref={ref} style={{ position: 'fixed', top: anchorRect.bottom + 6, left: Math.min(anchorRect.left, window.innerWidth - 232), zIndex: 9999 }} className="bg-white rounded-lg shadow-xl border border-gray-200 p-3 w-56">
+      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">File</p>
+      <input autoFocus value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') save() }} className="w-full border border-gray-300 rounded px-2 py-1 text-sm mb-2 focus:outline-none focus:border-blue-500" placeholder="filename.txt" />
+      <button onClick={save} className="w-full bg-[#0079bf] hover:bg-[#026aa7] text-white text-sm py-1.5 rounded mb-1.5">Save</button>
+      <button onClick={() => downloadTextFile((file.data.name as string) || 'file.txt', (file.data.content as string) || '')} className="w-full flex items-center justify-center gap-1.5 text-xs text-gray-600 hover:bg-gray-100 py-1.5 rounded mb-1">
+        <Download size={12} /> Download
+      </button>
+      <button onClick={onDeleted} className="w-full flex items-center justify-center gap-1.5 text-xs text-red-600 hover:bg-red-50 py-1.5 rounded">
+        <Trash2 size={12} /> Delete
+      </button>
+    </div>,
+    document.body
   )
 }
