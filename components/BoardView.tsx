@@ -109,13 +109,18 @@ export default function BoardView({
     startTransition(() => reorderCards(updates, board.id))
   }
 
-  async function handleAddList() {
-    if (!newListName.trim()) return
-    const created = await createList(board.id, newListName.trim())
-    setLists(prev => [...prev, created])
-    setCards(prev => prev)
+  function handleAddList() {
+    const name = newListName.trim()
+    if (!name) return
+    const id = crypto.randomUUID()
+    const optimistic: List = {
+      id, board_id: board.id, name, position: lists.length, x: 0, y: 0,
+      is_widget: false, widget_position: 0, deadline: null, hidden: false, created_at: new Date().toISOString(),
+    }
+    setLists(prev => [...prev, optimistic])
     setNewListName('')
     setAddingList(false)
+    createList(board.id, name, id).catch(err => console.error('create list failed', err))
   }
 
   function updateCardLocal(updated: Card) {

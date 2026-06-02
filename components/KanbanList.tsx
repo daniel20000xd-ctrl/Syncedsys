@@ -96,12 +96,19 @@ export default function KanbanList({
 
   const { setNodeRef, isOver } = useDroppable({ id: list.id })
 
-  async function handleAddCard() {
-    if (!newCardTitle.trim()) return
-    const card = await createCard(list.id, newCardTitle.trim(), boardId)
-    onCardAdded(card)
+  function handleAddCard() {
+    const title = newCardTitle.trim()
+    if (!title) return
+    const id = crypto.randomUUID()
+    const optimistic: Card = {
+      id, list_id: list.id, title, description: null, position: cards.length,
+      x: 0, y: 0, done: false, done_at: null, deadline: null, recur_interval_minutes: null,
+      hidden: false, created_at: new Date().toISOString(),
+    }
+    onCardAdded(optimistic)
     setNewCardTitle('')
     setAddingCard(false)
+    createCard(list.id, title, boardId, id).catch(err => console.error('create card failed', err))
   }
 
   async function handleRename() {

@@ -225,13 +225,11 @@ export async function layoutBoardGrid(boardId: string) {
     })
   })
 
-  await Promise.all(updates)
-  revalidatePath(`/board/${boardId}`)
-}
+  await Promise.all(updates)}
 
 // ── Lists ────────────────────────────────────────────────────────────────────
 
-export async function createList(boardId: string, name: string) {
+export async function createList(boardId: string, name: string, id?: string) {
   const supabase = await createClient()
 
   const { data: existing } = await supabase
@@ -245,48 +243,37 @@ export async function createList(boardId: string, name: string) {
 
   const { data, error } = await supabase
     .from('lists')
-    .insert({ board_id: boardId, name, position })
+    .insert({ ...(id ? { id } : {}), board_id: boardId, name, position })
     .select()
     .single()
 
   if (error) throw error
-  revalidatePath(`/board/${boardId}`)
   return data
 }
 
 export async function deleteList(listId: string, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('lists').delete().eq('id', listId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('lists').delete().eq('id', listId)}
 
 export async function renameList(listId: string, name: string, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('lists').update({ name }).eq('id', listId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('lists').update({ name }).eq('id', listId)}
 
 export async function setListWidget(listId: string, isWidget: boolean, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('lists').update({ is_widget: isWidget }).eq('id', listId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('lists').update({ is_widget: isWidget }).eq('id', listId)}
 
 export async function setListDeadline(listId: string, deadline: string | null, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('lists').update({ deadline }).eq('id', listId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('lists').update({ deadline }).eq('id', listId)}
 
 export async function setListHidden(listId: string, hidden: boolean, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('lists').update({ hidden }).eq('id', listId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('lists').update({ hidden }).eq('id', listId)}
 
 // ── Cards ────────────────────────────────────────────────────────────────────
 
-export async function createCard(listId: string, title: string, boardId: string) {
+export async function createCard(listId: string, title: string, boardId: string, id?: string) {
   const supabase = await createClient()
 
   const { data: existing } = await supabase
@@ -300,42 +287,33 @@ export async function createCard(listId: string, title: string, boardId: string)
 
   const { data, error } = await supabase
     .from('cards')
-    .insert({ list_id: listId, title, position })
+    .insert({ ...(id ? { id } : {}), list_id: listId, title, position })
     .select()
     .single()
 
   if (error) throw error
-  revalidatePath(`/board/${boardId}`)
   return data
 }
 
 export async function deleteCard(cardId: string, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('cards').delete().eq('id', cardId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('cards').delete().eq('id', cardId)}
 
 export async function updateCard(cardId: string, updates: { title?: string; description?: string }, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('cards').update(updates).eq('id', cardId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('cards').update(updates).eq('id', cardId)}
 
 export async function updateCardDone(cardId: string, done: boolean, boardId: string) {
   const supabase = await createClient()
   // Stamp done_at so recurring cards know when the current cycle started.
-  await supabase.from('cards').update({ done, done_at: done ? new Date().toISOString() : null }).eq('id', cardId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('cards').update({ done, done_at: done ? new Date().toISOString() : null }).eq('id', cardId)}
 
 export async function setCardDeadline(cardId: string, deadline: string | null, boardId: string) {
   const supabase = await createClient()
   // Expiry and recurrence are mutually exclusive — setting an expiry clears recurrence.
   const updates: Record<string, unknown> = { deadline }
   if (deadline) updates.recur_interval_minutes = null
-  await supabase.from('cards').update(updates).eq('id', cardId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('cards').update(updates).eq('id', cardId)}
 
 // Set (or clear, with null) a recurrence interval in minutes. When a card
 // recurs, checking it off resets to undone after the interval elapses.
@@ -344,15 +322,11 @@ export async function setCardRecur(cardId: string, intervalMinutes: number | nul
   const updates: Record<string, unknown> = { recur_interval_minutes: intervalMinutes }
   // Recurrence and expiry are mutually exclusive.
   if (intervalMinutes != null) updates.deadline = null
-  await supabase.from('cards').update(updates).eq('id', cardId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('cards').update(updates).eq('id', cardId)}
 
 export async function setCardHidden(cardId: string, hidden: boolean, boardId: string) {
   const supabase = await createClient()
-  await supabase.from('cards').update({ hidden }).eq('id', cardId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('cards').update({ hidden }).eq('id', cardId)}
 
 export async function moveCard(
   cardId: string,
@@ -361,9 +335,7 @@ export async function moveCard(
   boardId: string
 ) {
   const supabase = await createClient()
-  await supabase.from('cards').update({ list_id: newListId, position: newPosition }).eq('id', cardId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('cards').update({ list_id: newListId, position: newPosition }).eq('id', cardId)}
 
 export async function reorderCards(
   updates: { id: string; list_id: string; position: number }[],
@@ -374,9 +346,7 @@ export async function reorderCards(
     updates.map(u =>
       supabase.from('cards').update({ list_id: u.list_id, position: u.position }).eq('id', u.id)
     )
-  )
-  revalidatePath(`/board/${boardId}`)
-}
+  )}
 
 // ── Free mode: positions ──────────────────────────────────────────────────────
 
@@ -471,7 +441,6 @@ export async function createTextFile(boardId: string, name: string, content: str
     .insert({ board_id: boardId, type: 'textfile', x, y, data: { name, content } })
     .select().single()
   if (error) throw error
-  revalidatePath(`/board/${boardId}`)
   return data
 }
 
@@ -652,9 +621,7 @@ export async function updateTextFile(elementId: string, name: string, content: s
   // Preserve any other data keys (e.g. hidden/opacity from the canvas view).
   const { data: existing } = await supabase.from('board_elements').select('data').eq('id', elementId).single()
   const merged = { ...(existing?.data ?? {}), name, content }
-  await supabase.from('board_elements').update({ data: merged }).eq('id', elementId)
-  revalidatePath(`/board/${boardId}`)
-}
+  await supabase.from('board_elements').update({ data: merged }).eq('id', elementId)}
 
 // Ensure the target board has a portal pointing back to the source board (mirror)
 export async function ensureMirrorPortal(targetBoardId: string, backBoardId: string) {
