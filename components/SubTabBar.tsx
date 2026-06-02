@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import { Plus, ChevronDown } from 'lucide-react'
 import type { Board } from '@/lib/types'
@@ -45,6 +45,11 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
       router.refresh()
     }
   }
+
+  // Prefetch all sibling and child tabs immediately so clicking feels instant.
+  useEffect(() => {
+    allBoards.filter(b => b.parent_id).forEach(b => router.prefetch(`/board/${b.id}`))
+  }, [allBoards, router])
 
   const boardId = pathname.match(/\/board\/([^/]+)/)?.[1] ?? null
   if (!boardId) return null

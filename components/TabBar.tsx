@@ -35,6 +35,11 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
 
   useEffect(() => { setBoards(initialBoards) }, [initialBoards])
 
+  // Prefetch every board page as soon as the tab bar is visible so clicking any tab is instant.
+  useEffect(() => {
+    initialBoards.forEach(b => { if (!b.parent_id) router.prefetch(`/board/${b.id}`) })
+  }, [initialBoards, router])
+
   // A membership only counts if its group still exists and is actually a group.
   // Otherwise the tab falls back to the top level — never orphaned/invisible.
   const groupIds = new Set(boards.filter(b => b.is_group).map(b => b.id))
