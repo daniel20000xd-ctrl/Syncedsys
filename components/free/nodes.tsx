@@ -373,18 +373,18 @@ export function TextNode({ id, data }: NodeProps) {
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
           placeholder="Type…"
-          className="nodrag min-w-[120px] bg-white/90 rounded px-1.5 py-1 resize-none focus:outline-none shadow-sm"
+          className="nodrag min-w-[120px] bg-white rounded-lg px-2 py-1.5 resize-none focus:outline-none shadow-md border border-blue-400 caret-gray-900"
           style={{ color, fontSize, fontWeight: 500 }}
           rows={2}
         />
       ) : (
         <div
           onClick={() => setEditing(true)}
-          className="whitespace-pre-wrap px-1.5 py-1 cursor-text min-w-[40px]"
+          className="whitespace-pre-wrap px-2 py-1.5 cursor-text min-w-[40px] bg-white/80 rounded-lg shadow-sm border border-white/40 backdrop-blur-sm"
           style={{ color, fontSize, fontWeight: 500 }}
           title="Click to edit"
         >
-          {text || 'Text'}
+          {text || <span className="opacity-40 text-sm">Text</span>}
         </div>
       )}
       <button
@@ -1142,7 +1142,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
 
         return (
           <div
-            className="nodrag absolute top-6 right-0 z-50 bg-white rounded-lg shadow-xl border border-gray-200 py-1 w-52 max-h-64 overflow-y-auto"
+            className="nodrag nowheel absolute top-6 right-0 z-50 bg-white rounded-lg shadow-xl border border-gray-200 py-1 w-52 max-h-64 overflow-y-auto"
             onWheel={e => { e.stopPropagation(); e.nativeEvent.stopImmediatePropagation() }}
             onClick={e => e.stopPropagation()}
           >

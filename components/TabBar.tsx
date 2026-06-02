@@ -88,17 +88,14 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     }
   }
 
-  async function doMove(groupId: string | null, beforeId: string | null) {
+  function doMove(groupId: string | null, beforeId: string | null) {
     const id = draggingRef.current
     endDrag()
     if (!id || id === groupId) return
-    try {
-      await moveTab(id, groupId, beforeId)
-      router.refresh()
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Could not move that tab.')
-      router.refresh()
-    }
+    // Fire-and-forget: the drag animation is done; persist + refresh in the background.
+    moveTab(id, groupId, beforeId)
+      .then(() => router.refresh())
+      .catch(err => { alert(err instanceof Error ? err.message : 'Could not move that tab.'); router.refresh() })
   }
 
   const isAllBoards = pathname === '/boards'

@@ -245,6 +245,14 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const elementsRef = useRef(elements)
   useEffect(() => { elementsRef.current = elements }, [elements])
 
+  // Debounced router.refresh() after any drag/save so the 30 s RSC cache is
+  // busted before the user navigates away and back.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current)
+    refreshTimer.current = setTimeout(() => router.refresh(), 1500)
+  }, [router])
+
   const saveElement = useCallback((nodeId: string, dataObj: Record<string, unknown>, w?: number, h?: number) => {
     const rawId = nodeId.replace('el-', '')
     const clean = Object.fromEntries(Object.entries(dataObj).filter(([, v]) => typeof v !== 'function'))
@@ -735,8 +743,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     else if (node.id.startsWith('card-')) updateCardPosition(node.id.replace('card-', ''), x, y)
     else if (node.id.startsWith('el-')) updateElement(node.id.replace('el-', ''), { x, y })
     else if (node.id.startsWith('sub-')) updateBoardFreePosition(node.id.replace('sub-', ''), x, y)
+    // Bust the router cache so the updated position is visible on next visit.
+    scheduleRefresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [scheduleRefresh])
 
   async function handleAddCard(listId: string) {
     const list = lists.find(l => l.id === listId)
@@ -1043,6 +1053,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   useEffect(() => () => unitsStore.clear(), [])
 
+  // Restore z-ordering from localStorage so layer order survives tab switches.
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`zmap-${board.id}`)
+      if (!stored) return
+      const zmap = JSON.parse(stored) as Record<string, number>
+      setNodes(prev => prev.map(n => zmap[n.id] != null ? { ...n, zIndex: zmap[n.id] } : n))
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board.id])
+
   // Handlers the sidebar can call back into
   useEffect(() => {
     unitsStore.setHandlers({
@@ -1054,10 +1075,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         const total = orderedTopFirst.length
         const zById = new Map(orderedTopFirst.map((id, i) => [id, total - i]))
         setNodes(prev => prev.map(n => zById.has(n.id) ? { ...n, zIndex: zById.get(n.id) } : n))
+        // Persist z to DB for element nodes; persist full map to localStorage for all node types.
         for (const n of nodesRef.current) {
           const z = zById.get(n.id)
           if (z != null && n.id.startsWith('el-')) saveElement(n.id, { ...n.data, z }, n.data.width as number | undefined, n.data.height as number | undefined)
         }
+        try { localStorage.setItem(`zmap-${board.id}`, JSON.stringify(Object.fromEntries(zById))) } catch {}
       },
       setOpacity: (id, opacity) => {
         setNodes(prev => prev.map(n => n.id === id ? { ...n, style: { ...n.style, opacity } } : n))
