@@ -112,7 +112,7 @@ export default function ClaudeChat({ boardId }: { boardId: string }) {
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}>
             {m.role === 'assistant' && <ClaudeMark size={20} animate={streaming && i === messages.length - 1} />}
-            <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#D97757] text-white' : 'bg-white text-[#2d2a26] shadow-sm border border-black/5'}`}>
+            <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#D97757] text-white' : 'bg-[#E2DDD4] text-[#2d2a26] shadow-sm'}`}>
               {m.content || (streaming && i === messages.length - 1 ? <span className="text-[#b8b2a6]">…</span> : '')}
             </div>
           </div>

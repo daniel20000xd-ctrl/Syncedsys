@@ -460,6 +460,27 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // ── Drag & drop OS text files onto the canvas ──
   const [fileDragOver, setFileDragOver] = useState(false)
+  const dragCountRef = useRef(0)
+
+  // Use a counter so entering child elements doesn't flicker the overlay off.
+  // The counter is also reset by a global 'dragend' listener so an abandoned drag
+  // (pointer released outside the window) never leaves the overlay stuck.
+  useEffect(() => {
+    const reset = () => { dragCountRef.current = 0; setFileDragOver(false) }
+    window.addEventListener('dragend', reset)
+    // Also clear if the drag leaves the whole document
+    document.addEventListener('dragleave', (e: DragEvent) => { if (!e.relatedTarget) reset() })
+    return () => {
+      window.removeEventListener('dragend', reset)
+    }
+  }, [])
+
+  function onCanvasDragEnter(e: React.DragEvent) {
+    const types = Array.from(e.dataTransfer.types)
+    if (!types.includes('Files') && !types.includes(PORTAL_ITEM_MIME)) return
+    dragCountRef.current++
+    if (types.includes('Files')) setFileDragOver(true)
+  }
 
   function onCanvasDragOver(e: React.DragEvent) {
     const types = Array.from(e.dataTransfer.types)
@@ -468,7 +489,6 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (!isFiles && !isPortalItem) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
-    if (isFiles && !fileDragOver) setFileDragOver(true) // big overlay only for OS files
   }
 
   async function onCanvasDrop(e: React.DragEvent) {
@@ -478,6 +498,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const entries = collectEntries(e.dataTransfer)
     if (!portalRaw && !entries && !e.dataTransfer.files?.length) return
     e.preventDefault()
+    dragCountRef.current = 0
     setFileDragOver(false)
     const origin = screenToFlowPosition({ x: e.clientX, y: e.clientY })
 
@@ -1173,8 +1194,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       className="relative flex-1 h-full"
       style={{ backgroundColor: board.color }}
       onMouseUp={handleWrapperMouseUp}
+      onDragEnter={onCanvasDragEnter}
       onDragOver={onCanvasDragOver}
-      onDragLeave={e => { if (e.currentTarget === e.target) setFileDragOver(false) }}
+      onDragLeave={e => {
+        dragCountRef.current = Math.max(0, dragCountRef.current - 1)
+        if (dragCountRef.current === 0) setFileDragOver(false)
+      }}
       onDrop={onCanvasDrop}
     >
       <ReactFlow
