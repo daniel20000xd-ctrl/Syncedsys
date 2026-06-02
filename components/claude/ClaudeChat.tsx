@@ -113,11 +113,11 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Messages — warm Claude cream background, dark readable text */}
-      <div ref={scrollRef} className="nodrag nowheel flex-1 overflow-y-auto px-3.5 py-4 space-y-3.5 bg-[#F0EEE6]">
+      <div ref={scrollRef} className="nodrag nowheel flex-1 overflow-y-auto px-3.5 py-4 space-y-3.5 bg-[#1e1d1b]">
         {messages.length === 0 && (
           <div className="flex flex-col items-center text-center mt-8 px-4 gap-3">
             <ClaudeMark size={40} animate />
-            <p className="text-[15px] text-[#3d3a34] leading-relaxed">
+            <p className="text-[15px] text-[#a09a91] leading-relaxed">
               Ask me about this tab, or tell me to create lists, cards, notes, files, or sub-tabs inside it.
             </p>
           </div>
@@ -125,18 +125,18 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}>
             {m.role === 'assistant' && <ClaudeMark size={20} animate={streaming && i === messages.length - 1} />}
-            <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#D97757] text-white' : 'bg-[#E2DDD4] text-[#2d2a26] shadow-sm'}`}>
+            <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#D97757] text-white' : 'bg-[#2d2c29] text-[#e8e3db] shadow-sm'}`}>
               {m.content || (streaming && i === messages.length - 1 ? <span className="text-[#b8b2a6]">…</span> : '')}
             </div>
           </div>
         ))}
         {activity && (
-          <div className="flex items-center gap-2 text-[13px] font-medium text-[#a8553a]">
+          <div className="flex items-center gap-2 text-[13px] font-medium text-[#D97757]">
             <ClaudeMark size={15} animate /> {activity}
           </div>
         )}
         {error && (
-          <div className="text-[13px] text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2 flex items-start gap-1.5">
+          <div className="text-[13px] text-red-300 bg-red-950/60 border border-red-800/50 rounded-xl px-3 py-2 flex items-start gap-1.5">
             {error}
             {error.includes('Settings') && <a href="/settings" className="underline shrink-0 inline-flex items-center">Settings <ArrowUpRight size={12} /></a>}
           </div>
