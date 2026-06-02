@@ -623,6 +623,35 @@ export async function updateTextFile(elementId: string, name: string, content: s
   const merged = { ...(existing?.data ?? {}), name, content }
   await supabase.from('board_elements').update({ data: merged }).eq('id', elementId)}
 
+// Reorder items inside a folder view. folderIds / fileIds are the full ordered
+// lists of board ids / element ids currently in this folder. Bulk-updates
+// tab_position (boards) and position (board_elements) to match the new order.
+export async function reorderFolderItems(
+  parentBoardId: string,
+  folderIds: string[],
+  fileIds: string[],
+) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  // For files we store sort order as folder_position inside the data JSONB blob
+  // so no schema migration is needed.
+  const fileUpdates = fileIds.map(async (id, i) => {
+    const { data: existing } = await supabase.from('board_elements').select('data').eq('id', id).single()
+    const merged = { ...(existing?.data ?? {}), folder_position: i }
+    return supabase.from('board_elements').update({ data: merged }).eq('id', id)
+  })
+
+  await Promise.all([
+    ...folderIds.map((id, i) =>
+      supabase.from('boards').update({ tab_position: i }).eq('id', id).eq('user_id', user.id)
+    ),
+    ...fileUpdates,
+  ])
+  // No revalidatePath — the caller holds the source of truth in local state.
+}
+
 // Ensure the target board has a portal pointing back to the source board (mirror)
 export async function ensureMirrorPortal(targetBoardId: string, backBoardId: string) {
   const supabase = await createClient()
