@@ -1,12 +1,16 @@
 import { notFound } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { createClient } from '@/lib/supabase/server'
 import type { Board, List, Card, BoardElement, BoardEdge } from '@/lib/types'
-import BoardView from '@/components/BoardView'
-import FreeBoardView from '@/components/free/FreeBoardView'
-import TextBoardView from '@/components/TextBoardView'
-import FolderBoardView from '@/components/FolderBoardView'
-import SpreadsheetBoardView from '@/components/SpreadsheetBoardView'
 import { resetDueRecurringCards } from '@/lib/recur'
+
+// Code-split each board view so a tab only ships the JS for its own mode —
+// notably, the heavy React Flow canvas bundle loads only for classic boards.
+const BoardView = dynamic(() => import('@/components/BoardView'))
+const FreeBoardView = dynamic(() => import('@/components/free/FreeBoardView'))
+const TextBoardView = dynamic(() => import('@/components/TextBoardView'))
+const FolderBoardView = dynamic(() => import('@/components/FolderBoardView'))
+const SpreadsheetBoardView = dynamic(() => import('@/components/SpreadsheetBoardView'))
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params

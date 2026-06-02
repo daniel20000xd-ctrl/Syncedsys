@@ -6,28 +6,34 @@ import SubTabBar from '@/components/SubTabBar'
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
 
-  if (!user) redirect('/login')
+  // Middleware already validated/refreshed the session for this request, so read
+  // identity from the JWT locally (no extra auth-server round trip) and run the
+  // two board queries in parallel.
+  const { data: claimsData } = await supabase.auth.getClaims()
+  const claims = claimsData?.claims as { sub?: string; email?: string } | undefined
+  if (!claims?.sub) redirect('/login')
+  const userId = claims.sub
 
-  const { data: allBoards } = await supabase
-    .from('boards')
-    .select('*')
-    .eq('user_id', user.id)
-    .order('tab_position', { ascending: true })
-    .order('created_at', { ascending: true })
+  const [{ data: allBoards }, { data: devices }] = await Promise.all([
+    supabase
+      .from('boards')
+      .select('*')
+      .eq('user_id', userId)
+      .order('tab_position', { ascending: true })
+      .order('created_at', { ascending: true }),
+    supabase
+      .from('device_links')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true }),
+  ])
 
-  const { data: devices } = await supabase
-    .from('device_links')
-    .select('*')
-    .eq('user_id', user.id)
-    .order('created_at', { ascending: true })
-
-  const isAdmin = user.email === process.env.ADMIN_EMAIL
+  const isAdmin = claims.email === process.env.ADMIN_EMAIL
 
   return (
     <div className="flex h-full min-h-screen">
-      <Sidebar boards={allBoards ?? []} userId={user.id} isAdmin={isAdmin} devices={devices ?? []} />
+      <Sidebar boards={allBoards ?? []} userId={userId} isAdmin={isAdmin} devices={devices ?? []} />
       <div className="flex-1 flex flex-col overflow-hidden">
         <TabBar boards={allBoards ?? []} />
         <SubTabBar allBoards={allBoards ?? []} />
