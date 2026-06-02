@@ -5,8 +5,8 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download } from 'lucide-react'
-import { updateBoardContent, ensureMirrorPortal } from '@/app/actions'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft } from 'lucide-react'
+import { updateBoardContent, ensureMirrorPortal, updateTextFile } from '@/app/actions'
 import { recurLabel } from '@/lib/recur'
 import { downloadTextFile } from '@/lib/files'
 
@@ -707,6 +707,12 @@ function PortalEdges({ content }: { content: PortalContent }) {
   )
 }
 
+type FolderContent = {
+  folders: { id: string; name: string; color: string; mode: string }[]
+  files: { id: string; name: string; content: string }[]
+}
+const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
+
 export function PortalNode({ id, data, selected }: NodeProps) {
   const targetBoardId = (data.targetBoardId as string | null) ?? null
   const home = (data.home as string | null) ?? null
@@ -720,20 +726,41 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const [choosing, setChoosing] = useState(false)
   const [boards, setBoards] = useState<{ id: string; name: string; color: string }[]>([])
   const [content, setContent] = useState<PortalContent | null>(null)
-  const [targetMode, setTargetMode] = useState<string>('classic')
+  const [folderContent, setFolderContent] = useState<FolderContent | null>(null)
+  const [viewMode, setViewMode] = useState<string>('classic')
+  const [viewName, setViewName] = useState<string>('')
+  const [viewColor, setViewColor] = useState<string>('#0079bf')
   const [text, setText] = useState('')
+  // Internal navigation: a stack of board ids browsed into (base target excluded),
+  // plus an optionally-open text file. The "out" button pops these.
+  const [stack, setStack] = useState<string[]>([])
+  const [openFile, setOpenFile] = useState<{ id: string; name: string; content: string } | null>(null)
   const [pan, setPan] = useState({ x: (data.vx as number) ?? 20, y: (data.vy as number) ?? 20 })
   const [zoom, setZoom] = useState((data.zoom as number) ?? 0.4)
   const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
   const fittedRef = useRef<string | null>(null)
   const textTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const fileTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const contentElRef = useRef<HTMLDivElement>(null)
+
+  const viewId = stack.length ? stack[stack.length - 1] : targetBoardId
+  const isBase = viewId === targetBoardId
+  const isText = viewMode === 'text'
+  const isFolder = viewMode === 'folder'
+  const isPannable = !isText && !isFolder
+  const canGoBack = !!openFile || stack.length > 0
+
+  function navInto(boardId: string) { setOpenFile(null); setStack(prev => [...prev, boardId]) }
+  function navOut() { if (openFile) { setOpenFile(null); return } setStack(prev => prev.slice(0, -1)) }
 
   function persist(patch: Record<string, unknown>) {
     const next = { targetBoardId, home, vx: pan.x, vy: pan.y, zoom, width: data.width, height: data.height, ...patch }
     updateNodeData(id, next)
     onSave?.(id, next, data.width as number | undefined, data.height as number | undefined)
   }
+
+  // Reset internal navigation whenever the base target changes.
+  useEffect(() => { setStack([]); setOpenFile(null) }, [targetBoardId])
 
   useEffect(() => {
     let cancel = false
@@ -743,27 +770,48 @@ export function PortalNode({ id, data, selected }: NodeProps) {
     return () => { cancel = true }
   }, [])
 
+  // Load whatever board is currently being viewed (base target or navigated-into).
   useEffect(() => {
-    if (!targetBoardId) { setContent(null); return }
+    if (!viewId) { setContent(null); setFolderContent(null); return }
     let cancel = false
     import('@/lib/supabase/client').then(async ({ createClient }) => {
       const s = createClient()
-      const { data: bd } = await s.from('boards').select('mode,content').eq('id', targetBoardId).single()
-      if (!cancel) { setTargetMode((bd?.mode as string) ?? 'classic'); setText((bd?.content as string) ?? '') }
-      if ((bd?.mode as string) === 'text') { if (!cancel) setContent({ lists: [], cards: [], elements: [], edges: [] }); return }
+      const { data: bd } = await s.from('boards').select('mode,content,name,color').eq('id', viewId).single()
+      if (cancel) return
+      const mode = (bd?.mode as string) ?? 'classic'
+      setViewMode(mode); setViewName((bd?.name as string) ?? ''); setViewColor((bd?.color as string) ?? '#0079bf'); setText((bd?.content as string) ?? '')
+
+      if (mode === 'text') { setContent(null); setFolderContent(null); return }
+
+      if (mode === 'folder') {
+        const [{ data: subs }, { data: els }] = await Promise.all([
+          s.from('boards').select('id,name,color,mode').eq('parent_id', viewId).order('tab_position', { ascending: true }),
+          s.from('board_elements').select('id,data').eq('board_id', viewId).eq('type', 'textfile').order('created_at', { ascending: true }),
+        ])
+        if (cancel) return
+        setFolderContent({
+          folders: subs ?? [],
+          files: (els ?? []).map(e => ({ id: e.id, name: ((e.data as Record<string, unknown>)?.name as string) ?? 'Untitled', content: ((e.data as Record<string, unknown>)?.content as string) ?? '' })),
+        })
+        setContent(null)
+        return
+      }
+
+      // classic / trello → pannable mini canvas
       const [{ data: lists }, { data: elements }, { data: edges }] = await Promise.all([
-        s.from('lists').select('id,name,x,y').eq('board_id', targetBoardId),
-        s.from('board_elements').select('id,type,x,y,width,height,data').eq('board_id', targetBoardId),
-        s.from('board_edges').select('id,source,target').eq('board_id', targetBoardId),
+        s.from('lists').select('id,name,x,y').eq('board_id', viewId),
+        s.from('board_elements').select('id,type,x,y,width,height,data').eq('board_id', viewId),
+        s.from('board_edges').select('id,source,target').eq('board_id', viewId),
       ])
       const listIds = (lists ?? []).map(l => l.id)
       const cardsRes = listIds.length ? await s.from('cards').select('id,list_id,title,x,y').in('list_id', listIds) : { data: [] }
       if (cancel) return
       const c: PortalContent = { lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [], edges: edges ?? [] }
-      setContent(c)
-      // Auto-fit once to frame the content — never when locked or already fitted/saved
-      if (!locked && !fitted && fittedRef.current !== targetBoardId) {
-        fittedRef.current = targetBoardId
+      setContent(c); setFolderContent(null)
+      // Auto-fit once per viewed board. The base view respects a saved/locked view.
+      const shouldFit = isBase ? (!locked && !fitted && fittedRef.current !== viewId) : fittedRef.current !== viewId
+      if (shouldFit) {
+        fittedRef.current = viewId
         const xs: number[] = [], ys: number[] = [], xe: number[] = [], ye: number[] = []
         c.lists.forEach(l => { xs.push(l.x); ys.push(l.y); xe.push(l.x + 208); ye.push(l.y + 60) })
         c.cards.forEach(cd => { xs.push(cd.x); ys.push(cd.y); xe.push(cd.x + 176); ye.push(cd.y + 50) })
@@ -775,30 +823,29 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           const nx = (pw - (maxX - minX) * fit) / 2 - minX * fit
           const ny = (ph - (maxY - minY) * fit) / 2 - minY * fit + 24
           setZoom(fit); setPan({ x: nx, y: ny })
-          persist({ vx: nx, vy: ny, zoom: fit, fitted: true })
+          if (isBase) persist({ vx: nx, vy: ny, zoom: fit, fitted: true })
         }
       }
     })
     return () => { cancel = true }
-  }, [targetBoardId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [viewId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const target = boards.find(b => b.id === targetBoardId)
-  const isText = targetMode === 'text'
 
-  // Scroll to zoom inside a (non-text) portal without zooming the main board
+  // Scroll to zoom inside a pannable view without zooming the main board
   useEffect(() => {
     const el = contentElRef.current
-    if (!el || isText || locked) return
+    if (!el || !isPannable || locked) return
     function onWheel(e: WheelEvent) {
       e.preventDefault(); e.stopPropagation()
       setZoom(z => Math.max(0.05, Math.min(3, z * (e.deltaY > 0 ? 0.9 : 1.1))))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
-  }, [targetBoardId, isText, locked])
+  }, [viewId, isPannable, locked])
 
   function onContentPointerDown(e: React.PointerEvent) {
-    if (isText || locked) return
+    if (!isPannable || locked) return
     e.stopPropagation()
     ;(e.currentTarget as Element).setPointerCapture?.(e.pointerId)
     panRef.current = { sx: e.clientX, sy: e.clientY, vx: pan.x, vy: pan.y }
@@ -812,18 +859,25 @@ export function PortalNode({ id, data, selected }: NodeProps) {
     if (!panRef.current) return
     e.stopPropagation()
     panRef.current = null
-    persist({ vx: pan.x, vy: pan.y, zoom })
+    if (isBase) persist({ vx: pan.x, vy: pan.y, zoom })
   }
 
   function onTextChange(value: string) {
     setText(value)
-    if (!targetBoardId) return
+    if (!viewId) return
     if (textTimer.current) clearTimeout(textTimer.current)
-    textTimer.current = setTimeout(() => { updateBoardContent(targetBoardId, value).catch(() => {}) }, 600)
+    textTimer.current = setTimeout(() => { updateBoardContent(viewId, value).catch(() => {}) }, 600)
+  }
+
+  function onFileChange(value: string) {
+    if (!openFile || !viewId) return
+    const { id: fid, name } = openFile
+    setOpenFile({ id: fid, name, content: value })
+    if (fileTimer.current) clearTimeout(fileTimer.current)
+    fileTimer.current = setTimeout(() => { updateTextFile(fid, name, value, viewId).catch(() => {}) }, 600)
   }
 
   function toggleLock() {
-    // Save the exact current view together with the new lock state
     persist({ locked: !locked, vx: pan.x, vy: pan.y, zoom, fitted: true })
   }
 
@@ -840,7 +894,19 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       <SideHandles color="!bg-fuchsia-500" />
 
       <div className="w-full h-full rounded-lg overflow-hidden shadow-lg ring-1 ring-fuchsia-400/40 bg-[#1d2125] relative">
-        {targetBoardId && isText && (
+        {/* Open file viewer (inside a folder) */}
+        {targetBoardId && openFile && (
+          <textarea
+            value={openFile.content}
+            onChange={e => onFileChange(e.target.value)}
+            onPointerDown={e => e.stopPropagation()}
+            placeholder="Empty file"
+            className="nodrag nowheel absolute inset-0 pt-7 px-3 pb-3 w-full h-full resize-none focus:outline-none bg-white text-gray-800 text-[13px] font-mono leading-5"
+          />
+        )}
+
+        {/* Text board */}
+        {targetBoardId && !openFile && isText && (
           <textarea
             value={text}
             onChange={e => onTextChange(e.target.value)}
@@ -851,11 +917,39 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           />
         )}
 
-        {targetBoardId && !isText && (
+        {/* Folder explorer — browse freely */}
+        {targetBoardId && !openFile && isFolder && (
+          <div className="nodrag nowheel absolute inset-0 pt-7 overflow-auto bg-gray-50" onPointerDown={e => e.stopPropagation()}>
+            {folderContent && folderContent.folders.length === 0 && folderContent.files.length === 0 ? (
+              <p className="text-center text-gray-400 text-xs mt-6">Empty folder</p>
+            ) : (
+              <div className="grid gap-1 p-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(60px, 1fr))' }}>
+                {folderContent?.folders.map(f => (
+                  <button key={f.id} onClick={e => { e.stopPropagation(); navInto(f.id) }} className="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-blue-100" title={f.name}>
+                    <span className="relative">
+                      <Folder size={30} className="text-blue-400 fill-blue-100" />
+                      {f.mode !== 'folder' && <span className="absolute -bottom-1 -right-1 text-[9px]">{MODE_EMOJI[f.mode] ?? ''}</span>}
+                    </span>
+                    <span className="text-[9px] text-gray-700 text-center leading-tight line-clamp-2 break-words">{f.name}</span>
+                  </button>
+                ))}
+                {folderContent?.files.map(file => (
+                  <button key={file.id} onClick={e => { e.stopPropagation(); setOpenFile(file) }} className="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-indigo-100" title={file.name}>
+                    <FileText size={28} className="text-indigo-400" />
+                    <span className="text-[9px] text-gray-700 text-center leading-tight line-clamp-2 break-words">{file.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Classic / Trello mini-canvas */}
+        {targetBoardId && !openFile && isPannable && (
           <div
             ref={contentElRef}
             className={`nodrag nowheel absolute inset-0 ${locked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing'}`}
-            style={{ backgroundColor: target?.color ?? '#0079bf' }}
+            style={{ backgroundColor: viewColor }}
             onPointerDown={onContentPointerDown}
             onPointerMove={onContentPointerMove}
             onPointerUp={onContentPointerUp}
@@ -886,9 +980,20 @@ export function PortalNode({ id, data, selected }: NodeProps) {
 
         {/* top bar: drag handle to move the portal + actions */}
         <div className="absolute top-0 left-0 right-0 h-6 bg-black/40 flex items-center justify-between px-1.5 text-white/80 text-[10px]">
-          <span className="truncate">{target ? `↪ ${target.name}` : 'Portal'}</span>
-          <div className="flex items-center gap-0.5">
-            {targetBoardId && (
+          <div className="flex items-center gap-1 min-w-0">
+            {canGoBack && (
+              <button
+                className="nodrag p-0.5 rounded hover:bg-white/20 shrink-0"
+                title="Out / back"
+                onClick={e => { e.stopPropagation(); navOut() }}
+              >
+                <ArrowLeft size={11} />
+              </button>
+            )}
+            <span className="truncate">{openFile ? openFile.name : (canGoBack ? (viewName || 'Folder') : (target ? `↪ ${target.name}` : 'Portal'))}</span>
+          </div>
+          <div className="flex items-center gap-0.5 shrink-0">
+            {targetBoardId && isBase && !openFile && isPannable && (
               <button
                 className={`nodrag p-0.5 rounded hover:bg-white/20 ${locked ? 'text-fuchsia-300' : ''}`}
                 title={locked ? 'Unlock view (allow pan/zoom)' : 'Lock to this view'}
@@ -897,11 +1002,11 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 {locked ? <Lock size={11} /> : <LockOpen size={11} />}
               </button>
             )}
-            {targetBoardId && !locked && (
+            {targetBoardId && isBase && !locked && (
               <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Change tab" onClick={e => { e.stopPropagation(); setChoosing(v => !v) }}><ChevronDown size={11} /></button>
             )}
-            {targetBoardId && (
-              <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Open this tab fully" onClick={e => { e.stopPropagation(); onOpenFully?.(targetBoardId) }}><Maximize2 size={11} /></button>
+            {viewId && !openFile && (
+              <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Open this tab fully" onClick={e => { e.stopPropagation(); onOpenFully?.(viewId) }}><Maximize2 size={11} /></button>
             )}
             <button className="nodrag p-0.5 rounded hover:bg-red-500/50" title="Remove portal" onClick={e => { e.stopPropagation(); (data.onDelete as (id: string) => void)(id) }}><X size={11} /></button>
           </div>
@@ -913,13 +1018,17 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             {boards.filter(b => b.id !== home).map(b => (
               <button
                 key={b.id}
-                onClick={e => {
+                onClick={async e => {
                   e.stopPropagation()
                   setChoosing(false)
                   fittedRef.current = null // re-fit to the new target
                   persist({ targetBoardId: b.id })
-                  // Mirror a portal back on the target tab
-                  if (home) ensureMirrorPortal(b.id, home).catch(() => {})
+                  // Mirror a portal back on the target ONLY for canvas tabs.
+                  if (home) {
+                    const { createClient } = await import('@/lib/supabase/client')
+                    const { data: bd } = await createClient().from('boards').select('mode').eq('id', b.id).single()
+                    if (((bd?.mode as string) ?? 'classic') === 'classic') ensureMirrorPortal(b.id, home).catch(() => {})
+                  }
                 }}
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 text-left"
               >
