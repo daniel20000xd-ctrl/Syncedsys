@@ -221,3 +221,7 @@ create index on cards(list_id);
 -- alter table cards add column if not exists hidden boolean not null default false;
 -- alter table cards add column if not exists done_at timestamptz;
 -- alter table cards add column if not exists recur_interval_minutes integer;
+-- Tab groups (symbolic groupings; deleting a group never deletes members):
+-- alter table boards add column if not exists is_group boolean not null default false;
+-- alter table boards add column if not exists group_id uuid references boards(id) on delete set null;
+-- create index if not exists boards_group_idx on boards(group_id);

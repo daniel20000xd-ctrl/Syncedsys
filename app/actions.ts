@@ -44,20 +44,78 @@ export async function createBoard(name: string, color: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
 
-  const maxPos = await supabase
-    .from('boards')
-    .select('id')
-    .eq('user_id', user.id)
+  // Append to the end of the top-level tab order.
+  const { data: last } = await supabase
+    .from('boards').select('tab_position').eq('user_id', user.id).is('parent_id', null).is('group_id', null)
+    .order('tab_position', { ascending: false }).limit(1)
+  const tab_position = last && last.length > 0 ? last[0].tab_position + 1 : 0
 
   const { data, error } = await supabase
     .from('boards')
-    .insert({ name, color, user_id: user.id })
+    .insert({ name, color, user_id: user.id, tab_position })
     .select()
     .single()
 
   if (error) throw error
   revalidatePath('/', 'layout')
   return data
+}
+
+// ── Tab groups (symbolic groupings in the tab bar) ────────────────────────────
+
+// A group is a board with is_group=true; members link via group_id (soft —
+// deleting the group nulls members' group_id, never deletes them).
+export async function createGroup(name: string, color: string, mode: 'folder' | 'classic', parentGroupId: string | null = null) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  if (parentGroupId) {
+    const { data: parent } = await supabase.from('boards').select('group_id').eq('id', parentGroupId).single()
+    if (parent?.group_id) throw new Error('Groups can only be nested two levels deep')
+  }
+
+  let posQ = supabase.from('boards').select('tab_position').eq('user_id', user.id).is('parent_id', null)
+  posQ = parentGroupId ? posQ.eq('group_id', parentGroupId) : posQ.is('group_id', null)
+  const { data: last } = await posQ.order('tab_position', { ascending: false }).limit(1)
+  const tab_position = last && last.length > 0 ? last[0].tab_position + 1 : 0
+
+  const { data, error } = await supabase
+    .from('boards')
+    .insert({ name, color, user_id: user.id, is_group: true, mode, group_id: parentGroupId, tab_position })
+    .select().single()
+  if (error) throw error
+  revalidatePath('/', 'layout')
+  return data
+}
+
+// Move a tab (board or group) into a container (a group, or top level when
+// newGroupId is null) and reorder it before `beforeBoardId` (or to the end).
+export async function moveTab(boardId: string, newGroupId: string | null, beforeBoardId: string | null) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  if (boardId === newGroupId) return
+
+  const { data: moving } = await supabase.from('boards').select('is_group').eq('id', boardId).single()
+  if (moving?.is_group && newGroupId) {
+    // A group may only live inside a top-level group (max two levels).
+    const { data: target } = await supabase.from('boards').select('group_id, is_group').eq('id', newGroupId).single()
+    if (!target?.is_group) throw new Error('Can only group into a group')
+    if (target.group_id) throw new Error('Groups can only be nested two levels deep')
+  }
+
+  await supabase.from('boards').update({ group_id: newGroupId }).eq('id', boardId).eq('user_id', user.id)
+
+  let q = supabase.from('boards').select('id').eq('user_id', user.id).is('parent_id', null)
+  q = newGroupId ? q.eq('group_id', newGroupId) : q.is('group_id', null)
+  const { data: sibs } = await q.order('tab_position', { ascending: true }).order('created_at', { ascending: true })
+  const ids = (sibs ?? []).map(s => s.id).filter(id => id !== boardId)
+  let idx = beforeBoardId ? ids.indexOf(beforeBoardId) : ids.length
+  if (idx < 0) idx = ids.length
+  ids.splice(idx, 0, boardId)
+  await Promise.all(ids.map((id, i) => supabase.from('boards').update({ tab_position: i }).eq('id', id)))
+  revalidatePath('/', 'layout')
 }
 
 export async function updateBoardFreePosition(boardId: string, x: number, y: number) {

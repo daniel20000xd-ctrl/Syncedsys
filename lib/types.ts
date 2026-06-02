@@ -8,6 +8,8 @@ export type Board = {
   content: string | null
   parent_id: string | null
   tab_position: number
+  group_id: string | null
+  is_group: boolean
   free_x: number
   free_y: number
   synced: boolean
