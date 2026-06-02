@@ -8,18 +8,30 @@ import { encryptSecret } from '@/lib/crypto'
 
 // Save (or replace) the user's Anthropic API key. The plaintext key is encrypted
 // server-side and never stored or returned in the clear.
-export async function saveAnthropicKey(key: string) {
+// Returns a structured result rather than throwing, so the real failure reason
+// survives to the client even in production (where Next.js strips thrown
+// server-action error messages into a generic digest).
+export async function saveAnthropicKey(key: string): Promise<{ ok: boolean; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('Not authenticated')
+  if (!user) return { ok: false, error: 'Not authenticated' }
   const trimmed = key.trim()
-  if (!trimmed.startsWith('sk-ant-')) throw new Error('That does not look like an Anthropic API key (it should start with "sk-ant-").')
-  const encrypted = encryptSecret(trimmed)
+  if (!trimmed.startsWith('sk-ant-')) return { ok: false, error: 'That does not look like an Anthropic API key (it should start with "sk-ant-").' }
+
+  let encrypted: string
+  try {
+    encrypted = encryptSecret(trimmed)
+  } catch (e) {
+    return { ok: false, error: `Encryption failed: ${e instanceof Error ? e.message : 'unknown'}. (Is APP_ENCRYPTION_KEY set on the server?)` }
+  }
+
   const { error } = await supabase
     .from('user_secrets')
     .upsert({ user_id: user.id, anthropic_key_encrypted: encrypted, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
-  if (error) throw error
+  if (error) return { ok: false, error: `Database error: ${error.message}` }
+
   revalidatePath('/settings')
+  return { ok: true }
 }
 
 export async function removeAnthropicKey() {

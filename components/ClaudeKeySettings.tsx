@@ -17,7 +17,8 @@ export default function ClaudeKeySettings({ initialHasKey, initialAutoApply }: {
     setError(null); setSaved(false)
     startTransition(async () => {
       try {
-        await saveAnthropicKey(key)
+        const res = await saveAnthropicKey(key)
+        if (!res.ok) { setError(res.error ?? 'Could not save key'); return }
         setHasKey(true); setKey(''); setSaved(true)
         setTimeout(() => setSaved(false), 2500)
       } catch (e) {
