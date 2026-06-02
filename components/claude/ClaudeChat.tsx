@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { Send, ArrowUpRight } from 'lucide-react'
 import { ClaudeMark } from './ClaudeMark'
+import { claudeDropRegistry } from '@/lib/claudeDropRegistry'
 
 export type Msg = { role: 'user' | 'assistant'; content: string }
 
@@ -22,7 +23,7 @@ const TOOL_LABEL: Record<string, string> = {
 // The shared chat core. Fills its parent (h-full flex column). Used by both the
 // floating ClaudeAgent panel and the on-canvas ClaudeNode. Interactive areas are
 // marked nodrag/nowheel so it behaves correctly when embedded in a React Flow node.
-export default function ClaudeChat({ boardId }: { boardId: string }) {
+export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeId?: string }) {
   const router = useRouter()
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState('')
@@ -31,6 +32,18 @@ export default function ClaudeChat({ boardId }: { boardId: string }) {
   const [error, setError] = useState<string | null>(null)
   const didWrite = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Register this chat instance so FreeBoardView can inject dropped-file text.
+  useEffect(() => {
+    if (!nodeId) return
+    claudeDropRegistry.register(nodeId, (text, filename) => {
+      setInput(prev => {
+        const block = `[File: ${filename}]\n${text}`
+        return prev.trim() ? `${prev.trim()}\n\n${block}` : block
+      })
+    })
+    return () => { claudeDropRegistry.unregister(nodeId) }
+  }, [nodeId])
 
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }) }, [messages, activity])
 

@@ -712,7 +712,7 @@ export function ClaudeNode({ id, data, selected }: NodeProps) {
           </button>
         </div>
         {boardId
-          ? <ClaudeChat boardId={boardId} />
+          ? <ClaudeChat boardId={boardId} nodeId={id} />
           : <p className="text-white/40 text-xs p-4">No board context.</p>}
       </div>
     </div>

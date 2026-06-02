@@ -22,6 +22,7 @@ import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
 import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME } from '@/lib/files'
+import { claudeDropRegistry } from '@/lib/claudeDropRegistry'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -461,14 +462,16 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // ── Drag & drop OS text files onto the canvas ──
   const [fileDragOver, setFileDragOver] = useState(false)
   const dragCountRef = useRef(0)
+  // Which node (claude or subtab) the drag is magnetically hovering over
+  const [dropTarget, setDropTarget] = useState<{ nodeId: string; type: 'claude' | 'subtab' } | null>(null)
+  const MAGNETIC_RADIUS = 120 // flow-space units
 
   // Use a counter so entering child elements doesn't flicker the overlay off.
   // The counter is also reset by a global 'dragend' listener so an abandoned drag
   // (pointer released outside the window) never leaves the overlay stuck.
   useEffect(() => {
-    const reset = () => { dragCountRef.current = 0; setFileDragOver(false) }
+    const reset = () => { dragCountRef.current = 0; setFileDragOver(false); setDropTarget(null) }
     window.addEventListener('dragend', reset)
-    // Also clear if the drag leaves the whole document
     document.addEventListener('dragleave', (e: DragEvent) => { if (!e.relatedTarget) reset() })
     return () => {
       window.removeEventListener('dragend', reset)
@@ -489,6 +492,22 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (!isFiles && !isPortalItem) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
+
+    // Magnetic targeting — find nearest claude/subtab node within MAGNETIC_RADIUS
+    const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+    let closest: { nodeId: string; type: 'claude' | 'subtab'; dist: number } | null = null
+    for (const n of nodesRef.current) {
+      if (n.type !== 'claudeNode' && n.type !== 'subTabNode') continue
+      const w = n.measured?.width ?? (n.type === 'claudeNode' ? 340 : 150)
+      const h = n.measured?.height ?? (n.type === 'claudeNode' ? 420 : 60)
+      const cx = n.position.x + w / 2
+      const cy = n.position.y + h / 2
+      const dist = Math.hypot(flowPos.x - cx, flowPos.y - cy)
+      if (dist < MAGNETIC_RADIUS && (!closest || dist < closest.dist)) {
+        closest = { nodeId: n.id, type: n.type === 'claudeNode' ? 'claude' : 'subtab', dist }
+      }
+    }
+    setDropTarget(closest ? { nodeId: closest.nodeId, type: closest.type } : null)
   }
 
   async function onCanvasDrop(e: React.DragEvent) {
@@ -500,13 +519,25 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     e.preventDefault()
     dragCountRef.current = 0
     setFileDragOver(false)
+    const currentDropTarget = dropTarget
+    setDropTarget(null)
     const origin = screenToFlowPosition({ x: e.clientX, y: e.clientY })
 
     if (portalRaw) {
       try {
         const item = JSON.parse(portalRaw) as { kind: 'file'; name: string; content: string } | { kind: 'folder'; boardId: string; name: string }
         if (item.kind === 'file') {
-          addElement('textfile', origin.x, origin.y, { name: item.name, content: item.content })
+          // Route portal file to drop target if one is active
+          if (currentDropTarget?.type === 'claude') {
+            claudeDropRegistry.inject(currentDropTarget.nodeId, item.content, item.name)
+          } else if (currentDropTarget?.type === 'subtab') {
+            const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
+            const id = crypto.randomUUID()
+            upsertElement(id, targetBoardId, 'textfile', 20, 20, { name: item.name, content: item.content }, null, null)
+              .catch(err => console.error('Failed to drop file into sub-tab:', err))
+          } else {
+            addElement('textfile', origin.x, origin.y, { name: item.name, content: item.content })
+          }
         } else if (item.kind === 'folder') {
           // Default: a live link to the original folder (decouple later to copy).
           addElement('folderlink', origin.x, origin.y, { targetBoardId: item.boardId, name: item.name }, undefined, undefined, {
@@ -521,10 +552,27 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
 
     const { trees, files, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
-    files.forEach((f, i) => {
-      addElement('textfile', origin.x + i * 24, origin.y + i * 24, { name: f.name, content: f.content })
-    })
-    // Each dropped folder becomes a sub-tab (folder board) node on the canvas.
+
+    if (currentDropTarget?.type === 'claude') {
+      // Inject all text files directly into the chat composer (append one after another)
+      files.forEach(f => claudeDropRegistry.inject(currentDropTarget.nodeId, f.content, f.name))
+    } else if (currentDropTarget?.type === 'subtab') {
+      // Drop files into the sub-tab's board (silent — they appear when you navigate there)
+      const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
+      files.forEach((f, i) => {
+        const id = crypto.randomUUID()
+        upsertElement(id, targetBoardId, 'textfile', 20 + i * 24, 20 + i * 24, { name: f.name, content: f.content }, null, null)
+          .catch(err => console.error('Failed to drop file into sub-tab:', err))
+      })
+    } else {
+      // Default: place on this canvas
+      files.forEach((f, i) => {
+        addElement('textfile', origin.x + i * 24, origin.y + i * 24, { name: f.name, content: f.content })
+      })
+    }
+
+    // Each dropped folder becomes a sub-tab (folder board) node on the canvas,
+    // regardless of drop target (folders are complex structures — always import here).
     for (let i = 0; i < trees.length; i++) {
       const x = origin.x + (files.length + i) * 28, y = origin.y + (files.length + i) * 28
       const top = await importFolderTree(board.id, trees[i], board.color)
@@ -1198,7 +1246,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       onDragOver={onCanvasDragOver}
       onDragLeave={e => {
         dragCountRef.current = Math.max(0, dragCountRef.current - 1)
-        if (dragCountRef.current === 0) setFileDragOver(false)
+        if (dragCountRef.current === 0) { setFileDragOver(false); setDropTarget(null) }
       }}
       onDrop={onCanvasDrop}
     >
@@ -1242,6 +1290,33 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           <p className="bg-white/90 text-indigo-600 text-sm font-medium px-4 py-2 rounded-lg shadow">Drop files or folders to add them to the canvas</p>
         </div>
       )}
+
+      {/* Magnetic drop-target highlight — a pulsing ring drawn over the active target node */}
+      {dropTarget && (() => {
+        const n = nodesRef.current.find(x => x.id === dropTarget.nodeId)
+        if (!n) return null
+        const vp = getViewport()
+        const w = (n.measured?.width ?? (dropTarget.type === 'claude' ? 340 : 150)) * vp.zoom
+        const h = (n.measured?.height ?? (dropTarget.type === 'claude' ? 420 : 60)) * vp.zoom
+        const sx = n.position.x * vp.zoom + vp.x
+        const sy = n.position.y * vp.zoom + vp.y
+        const ringColor = dropTarget.type === 'claude' ? '#D97757' : '#6366f1'
+        const label = dropTarget.type === 'claude' ? 'Drop into Claude chat' : 'Drop into sub-tab'
+        return (
+          <div
+            className="absolute pointer-events-none rounded-xl transition-all duration-150 flex items-end justify-center pb-1"
+            style={{ left: sx - 4, top: sy - 4, width: w + 8, height: h + 8, zIndex: 18,
+              outline: `2.5px solid ${ringColor}`,
+              boxShadow: `0 0 0 4px ${ringColor}33, 0 0 16px ${ringColor}55`,
+            }}
+          >
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full mb-1"
+              style={{ background: ringColor, color: '#fff', opacity: 0.92 }}>
+              {label}
+            </span>
+          </div>
+        )
+      })()}
 
       {overlayActive && (
         <svg
