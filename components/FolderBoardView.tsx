@@ -7,6 +7,7 @@ import { Folder, FolderPlus, FileText, ArrowLeft, Trash2, X, Save, Download, Che
 import type { Board, BoardElement } from '@/lib/types'
 import { createSubTab, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard, importFolderTree, moveBoardToParent } from '@/app/actions'
 import { collectEntries, readDroppedEntries, downloadTextFile } from '@/lib/files'
+import { folderUnitsStore } from '@/lib/folderUnitsStore'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
 const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁', spreadsheet: '📊' }
@@ -158,6 +159,23 @@ export default function FolderBoardView({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [selected, editing, folders, files])
+
+  // ── Publish contents to the sidebar dashboard ──
+  useEffect(() => {
+    folderUnitsStore.publish([
+      ...folders.map(f => ({ id: f.id, name: f.name, kind: 'folder' as const, mode: f.mode })),
+      ...files.map(f => ({ id: f.id, name: (f.data.name as string) || 'Untitled.txt', kind: 'file' as const })),
+    ])
+  }, [folders, files])
+  useEffect(() => {
+    folderUnitsStore.setHandlers({
+      open: (id, kind) => {
+        if (kind === 'folder') router.push(`/board/${id}`)
+        else { const file = files.find(x => x.id === id); if (file) setEditing(file) }
+      },
+    })
+  }, [files, router])
+  useEffect(() => () => folderUnitsStore.clear(), [])
 
   // ── OS file/folder drop ──
   function onDragOver(e: React.DragEvent) { if (Array.from(e.dataTransfer.types).includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' } }

@@ -8,13 +8,21 @@ import {
   parseSheet, serializeSheet, computeSheet, cellAddr, colToLetter, numericValue,
   type SheetData,
 } from '@/lib/spreadsheet'
+import { parseDocTabs, serializeDocTabs, newDocTab, type DocTabs } from '@/lib/doctabs'
+import { docTabsStore } from '@/lib/docTabsStore'
 
 const COL_W = 100
 const ROW_H = 26
 const HEAD_W = 46
 
 export default function SpreadsheetBoardView({ board }: { board: Board }) {
-  const [data, setData] = useState<SheetData>(() => parseSheet(board.content))
+  const [dt, setDt] = useState<DocTabs>(() => parseDocTabs(board.content, 'Sheet 1'))
+  const [activeId, setActiveId] = useState<string>(dt.active)
+  const activeIdRef = useRef(activeId)
+  activeIdRef.current = activeId
+  const activeBody = (dt.tabs.find(t => t.id === activeId) ?? dt.tabs[0])?.body ?? ''
+
+  const [data, setData] = useState<SheetData>(() => parseSheet(activeBody))
   const [active, setActive] = useState({ r: 0, c: 0 })
   const [anchor, setAnchor] = useState({ r: 0, c: 0 })
   const [editing, setEditing] = useState(false)
@@ -29,24 +37,69 @@ export default function SpreadsheetBoardView({ board }: { board: Board }) {
   const raw = (r: number, c: number) => data.cells[cellAddr(r, c)] ?? ''
   const disp = (r: number, c: number) => computed[cellAddr(r, c)]?.display ?? ''
 
+  // Persist the active sheet's grid into its doc-tab body.
   const save = useCallback((next: SheetData) => {
-    if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => { updateBoardContent(board.id, serializeSheet(next)).catch(err => console.error('save failed', err)) }, 500)
+    const body = serializeSheet(next)
+    setDt(prev => {
+      const ndt = { ...prev, tabs: prev.tabs.map(t => t.id === activeIdRef.current ? { ...t, body } : t) }
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => { updateBoardContent(board.id, serializeDocTabs(ndt)).catch(err => console.error('save failed', err)) }, 500)
+      return ndt
+    })
   }, [board.id])
 
-  function writeCells(updates: { r: number; c: number; v: string }[], grow = true) {
-    setData(prev => {
-      const cells = { ...prev.cells }
-      let rows = prev.rows, cols = prev.cols
-      for (const u of updates) {
-        const a = cellAddr(u.r, u.c)
-        if (u.v === '') delete cells[a]; else cells[a] = u.v
-        if (grow) { rows = Math.max(rows, u.r + 1); cols = Math.max(cols, u.c + 1) }
-      }
-      const next = { rows, cols, cells }
-      save(next)
-      return next
+  // Switch sheets: load that tab's grid, reset selection.
+  function switchSheet(id: string) {
+    const body = dt.tabs.find(t => t.id === id)?.body ?? ''
+    setActiveId(id)
+    setDt(prev => ({ ...prev, active: id }))
+    setData(parseSheet(body))
+    setActive({ r: 0, c: 0 }); setAnchor({ r: 0, c: 0 }); setEditing(false)
+    updateBoardContent(board.id, serializeDocTabs({ ...dt, active: id })).catch(() => {})
+  }
+
+  // Publish sheets + wire sidebar handlers
+  useEffect(() => { docTabsStore.publish(dt.tabs.map(t => ({ id: t.id, name: t.name })), activeId, 'spreadsheet') }, [dt, activeId])
+  useEffect(() => {
+    docTabsStore.setHandlers({
+      select: id => { if (id !== activeIdRef.current) switchSheet(id) },
+      add: () => {
+        const t = newDocTab(`Sheet ${dt.tabs.length + 1}`, serializeSheet({ rows: 60, cols: 26, cells: {} }))
+        const ndt = { tabs: [...dt.tabs, t], active: t.id }
+        setDt(ndt); setActiveId(t.id); setData(parseSheet(t.body))
+        setActive({ r: 0, c: 0 }); setAnchor({ r: 0, c: 0 })
+        updateBoardContent(board.id, serializeDocTabs(ndt)).catch(() => {})
+      },
+      rename: (id, name) => setDt(prev => { const ndt = { ...prev, tabs: prev.tabs.map(t => t.id === id ? { ...t, name } : t) }; updateBoardContent(board.id, serializeDocTabs(ndt)).catch(() => {}); return ndt }),
+      remove: id => setDt(prev => {
+        if (prev.tabs.length <= 1) return prev
+        const tabs = prev.tabs.filter(t => t.id !== id)
+        const nextActive = activeIdRef.current === id ? tabs[0].id : activeIdRef.current
+        const ndt = { tabs, active: nextActive }
+        if (activeIdRef.current === id) { setActiveId(nextActive); setData(parseSheet(tabs[0].body)) }
+        updateBoardContent(board.id, serializeDocTabs(ndt)).catch(() => {})
+        return ndt
+      }),
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dt, board.id])
+  useEffect(() => () => docTabsStore.clear(), [])
+
+  const dataRef = useRef(data)
+  dataRef.current = data
+
+  function writeCells(updates: { r: number; c: number; v: string }[], grow = true) {
+    const prev = dataRef.current
+    const cells = { ...prev.cells }
+    let rows = prev.rows, cols = prev.cols
+    for (const u of updates) {
+      const a = cellAddr(u.r, u.c)
+      if (u.v === '') delete cells[a]; else cells[a] = u.v
+      if (grow) { rows = Math.max(rows, u.r + 1); cols = Math.max(cols, u.c + 1) }
+    }
+    const next = { rows, cols, cells }
+    setData(next)
+    save(next)
   }
 
   function focusGrid() { requestAnimationFrame(() => gridRef.current?.focus()) }
@@ -231,10 +284,10 @@ export default function SpreadsheetBoardView({ board }: { board: Board }) {
 
           {/* Add rows / columns */}
           <div className="flex gap-2 p-2">
-            <button onClick={() => setData(prev => { const n = { ...prev, rows: prev.rows + 20 }; save(n); return n })} className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-600 border border-gray-200 rounded px-2 py-1">
+            <button onClick={() => { const n = { ...dataRef.current, rows: dataRef.current.rows + 20 }; setData(n); save(n) }} className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-600 border border-gray-200 rounded px-2 py-1">
               <Plus size={12} /> 20 rows
             </button>
-            <button onClick={() => setData(prev => { const n = { ...prev, cols: prev.cols + 5 }; save(n); return n })} className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-600 border border-gray-200 rounded px-2 py-1">
+            <button onClick={() => { const n = { ...dataRef.current, cols: dataRef.current.cols + 5 }; setData(n); save(n) }} className="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-600 border border-gray-200 rounded px-2 py-1">
               <Plus size={12} /> 5 columns
             </button>
           </div>

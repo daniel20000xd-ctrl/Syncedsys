@@ -5,8 +5,12 @@ import { usePathname, useRouter } from 'next/navigation'
 import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid, Smartphone, Plus, X } from 'lucide-react'
 import type { Board, List as ListType, DeviceLink } from '@/lib/types'
 import { useUnits } from '@/lib/unitsStore'
+import { useDocTabs } from '@/lib/docTabsStore'
+import { useFolderUnits } from '@/lib/folderUnitsStore'
 import { createDeviceLink, removeDeviceLink } from '@/app/actions'
 import UnitsPanel from './UnitsPanel'
+import DocTabsPanel from './DocTabsPanel'
+import FolderUnitsPanel from './FolderUnitsPanel'
 
 export default function Sidebar({ boards, isAdmin, devices = [] }: { boards: Board[]; userId: string; isAdmin?: boolean; devices?: DeviceLink[] }) {
   const pathname = usePathname()
@@ -19,7 +23,11 @@ export default function Sidebar({ boards, isAdmin, devices = [] }: { boards: Boa
   const boardId = pathname.match(/\/board\/([^/]+)/)?.[1] ?? null
   const activeBoard = boards.find(b => b.id === boardId)
   const units = useUnits()
+  const docTabs = useDocTabs()
+  const folderUnits = useFolderUnits()
   const showUnits = units.length > 0
+  const showDocTabs = !showUnits && docTabs.tabs.length > 0
+  const showFolderUnits = !showUnits && !showDocTabs && folderUnits.length > 0
   useEffect(() => {
     if (!boardId) { setLists([]); return }
     import('@/lib/supabase/client').then(({ createClient }) => {
@@ -81,20 +89,25 @@ export default function Sidebar({ boards, isAdmin, devices = [] }: { boards: Boa
         {!collapsed && (
           <div className="px-3 py-1 mb-1">
             <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">
-              {showUnits ? `${activeBoard?.name ?? 'Board'} · units` : (activeBoard ? activeBoard.name : 'Lists')}
+              {showUnits ? `${activeBoard?.name ?? 'Board'} · units`
+                : showDocTabs ? `${activeBoard?.name ?? 'Board'} · ${docTabs.kind === 'spreadsheet' ? 'sheets' : 'pages'}`
+                : showFolderUnits ? `${activeBoard?.name ?? 'Board'} · items`
+                : (activeBoard ? activeBoard.name : 'Lists')}
             </span>
           </div>
         )}
 
         {!collapsed && showUnits && <UnitsPanel />}
+        {!collapsed && showDocTabs && <DocTabsPanel />}
+        {!collapsed && showFolderUnits && <FolderUnitsPanel />}
 
-        {!collapsed && !showUnits && lists.length === 0 && boardId && (
+        {!collapsed && !showUnits && !showDocTabs && !showFolderUnits && lists.length === 0 && boardId && (
           <p className="px-3 py-1 text-xs text-white/30">No lists yet</p>
         )}
-        {!collapsed && !showUnits && lists.length === 0 && !boardId && (
+        {!collapsed && !showUnits && !showDocTabs && !showFolderUnits && lists.length === 0 && !boardId && (
           <p className="px-3 py-1 text-xs text-white/30">Open a board</p>
         )}
-        {!collapsed && !showUnits && lists.map(list => (
+        {!collapsed && !showUnits && !showDocTabs && !showFolderUnits && lists.map(list => (
           <button
             key={list.id}
             onClick={() => scrollToList(list.id)}

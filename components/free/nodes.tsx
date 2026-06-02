@@ -10,6 +10,7 @@ import { updateBoardContent, ensureMirrorPortal, updateTextFile } from '@/app/ac
 import { recurLabel } from '@/lib/recur'
 import { downloadTextFile, PORTAL_ITEM_MIME } from '@/lib/files'
 import { parseSheet, computeSheet, colToLetter, cellAddr, type SheetData } from '@/lib/spreadsheet'
+import { activeDocBody, withActiveBody } from '@/lib/doctabs'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
@@ -827,6 +828,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const textTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const fileTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const contentElRef = useRef<HTMLDivElement>(null)
+  const rawContentRef = useRef<string>('') // raw boards.content for the viewed text board
 
   const viewId = stack.length ? stack[stack.length - 1] : targetBoardId
   const isBase = viewId === targetBoardId
@@ -865,11 +867,13 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       const { data: bd } = await s.from('boards').select('mode,content,name,color').eq('id', viewId).single()
       if (cancel) return
       const mode = (bd?.mode as string) ?? 'classic'
-      setViewMode(mode); setViewName((bd?.name as string) ?? ''); setViewColor((bd?.color as string) ?? '#0079bf'); setText((bd?.content as string) ?? '')
+      setViewMode(mode); setViewName((bd?.name as string) ?? ''); setViewColor((bd?.color as string) ?? '#0079bf')
+      rawContentRef.current = (bd?.content as string) ?? ''
+      setText(activeDocBody(bd?.content as string))
 
       if (mode === 'text') { setContent(null); setFolderContent(null); setSheet(null); return }
 
-      if (mode === 'spreadsheet') { setSheet(parseSheet((bd?.content as string) ?? '')); setContent(null); setFolderContent(null); return }
+      if (mode === 'spreadsheet') { setSheet(parseSheet(activeDocBody(bd?.content as string))); setContent(null); setFolderContent(null); return }
 
       if (mode === 'folder') {
         const [{ data: subs }, { data: els }] = await Promise.all([
@@ -953,8 +957,11 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   function onTextChange(value: string) {
     setText(value)
     if (!viewId) return
+    // Write back into the active doc-tab body so multi-page docs aren't clobbered.
+    const merged = withActiveBody(rawContentRef.current, value)
+    rawContentRef.current = merged
     if (textTimer.current) clearTimeout(textTimer.current)
-    textTimer.current = setTimeout(() => { updateBoardContent(viewId, value).catch(() => {}) }, 600)
+    textTimer.current = setTimeout(() => { updateBoardContent(viewId, merged).catch(() => {}) }, 600)
   }
 
   function onFileChange(value: string) {
