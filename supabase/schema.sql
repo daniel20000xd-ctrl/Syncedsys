@@ -190,6 +190,23 @@ create policy "admin view linked boards"
     )
   );
 
+-- Per-user secrets & AI settings (Anthropic API key, encrypted at rest)
+create table if not exists user_secrets (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  anthropic_key_encrypted text,          -- AES-256-GCM ciphertext; never returned to the client
+  claude_auto_apply boolean not null default false,  -- when true, Claude may make changes (writes)
+  updated_at timestamptz not null default now()
+);
+
+alter table user_secrets enable row level security;
+
+-- A user may read/update the row's NON-secret fields (the app only ever selects
+-- claude_auto_apply / a presence flag client-side; the encrypted key is read
+-- exclusively server-side). The encrypted value is useless without the
+-- server-only APP_ENCRYPTION_KEY, so RLS scoping to the owner is sufficient.
+create policy "users manage their own secrets" on user_secrets for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
 -- Indexes
 create index on boards(user_id);
 create index on boards(parent_id);
@@ -225,3 +242,13 @@ create index on cards(list_id);
 -- alter table boards add column if not exists is_group boolean not null default false;
 -- alter table boards add column if not exists group_id uuid references boards(id) on delete set null;
 -- create index if not exists boards_group_idx on boards(group_id);
+-- Per-user secrets (Anthropic key + Claude settings):
+-- create table if not exists user_secrets (
+--   user_id uuid primary key references auth.users(id) on delete cascade,
+--   anthropic_key_encrypted text,
+--   claude_auto_apply boolean not null default false,
+--   updated_at timestamptz not null default now()
+-- );
+-- alter table user_secrets enable row level security;
+-- create policy "users manage their own secrets" on user_secrets for all
+--   using (user_id = auth.uid()) with check (user_id = auth.uid());

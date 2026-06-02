@@ -2,6 +2,59 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { encryptSecret } from '@/lib/crypto'
+
+// ── Claude / AI settings ──────────────────────────────────────────────────────
+
+// Save (or replace) the user's Anthropic API key. The plaintext key is encrypted
+// server-side and never stored or returned in the clear.
+export async function saveAnthropicKey(key: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  const trimmed = key.trim()
+  if (!trimmed.startsWith('sk-ant-')) throw new Error('That does not look like an Anthropic API key (it should start with "sk-ant-").')
+  const encrypted = encryptSecret(trimmed)
+  const { error } = await supabase
+    .from('user_secrets')
+    .upsert({ user_id: user.id, anthropic_key_encrypted: encrypted, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+  if (error) throw error
+  revalidatePath('/settings')
+}
+
+export async function removeAnthropicKey() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  await supabase.from('user_secrets').update({ anthropic_key_encrypted: null }).eq('user_id', user.id)
+  revalidatePath('/settings')
+}
+
+// Toggle whether Claude is allowed to make changes (write actions). When false,
+// Claude is read-only. Scope (down-only board access) is always enforced.
+export async function setClaudeAutoApply(enabled: boolean) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  const { error } = await supabase
+    .from('user_secrets')
+    .upsert({ user_id: user.id, claude_auto_apply: enabled, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+  if (error) throw error
+  revalidatePath('/settings')
+}
+
+// Status for the settings UI — never returns the key itself, only whether one exists.
+export async function getClaudeStatus(): Promise<{ hasKey: boolean; autoApply: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { hasKey: false, autoApply: false }
+  const { data } = await supabase
+    .from('user_secrets')
+    .select('anthropic_key_encrypted, claude_auto_apply')
+    .eq('user_id', user.id)
+    .maybeSingle()
+  return { hasKey: !!data?.anthropic_key_encrypted, autoApply: !!data?.claude_auto_apply }
+}
 
 // ── iOS sync / device links ──────────────────────────────────────────────────
 

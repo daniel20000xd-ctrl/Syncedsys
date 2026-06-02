@@ -11,6 +11,7 @@ const FreeBoardView = dynamic(() => import('@/components/free/FreeBoardView'))
 const TextBoardView = dynamic(() => import('@/components/TextBoardView'))
 const FolderBoardView = dynamic(() => import('@/components/FolderBoardView'))
 const SpreadsheetBoardView = dynamic(() => import('@/components/SpreadsheetBoardView'))
+const ClaudeAgent = dynamic(() => import('@/components/claude/ClaudeAgent'))
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -43,8 +44,9 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   // Recurring cards: reset any whose interval has elapsed since completion.
   await resetDueRecurringCards(supabase, cards)
 
+  let view
   if (board.mode === 'classic' || (board.mode as string) === 'free') {
-    return (
+    view = (
       <FreeBoardView
         board={board}
         initialLists={lists}
@@ -54,26 +56,21 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
         initialSubBoards={subBoards}
       />
     )
-  }
-
-  if (board.mode === 'text') {
-    return <TextBoardView board={board} />
-  }
-
-  if (board.mode === 'spreadsheet') {
-    return <SpreadsheetBoardView board={board} />
-  }
-
-  if (board.mode === 'folder') {
+  } else if (board.mode === 'text') {
+    view = <TextBoardView board={board} />
+  } else if (board.mode === 'spreadsheet') {
+    view = <SpreadsheetBoardView board={board} />
+  } else if (board.mode === 'folder') {
     const fileElements = elements.filter(e => e.type === 'textfile')
-    return (
-      <FolderBoardView
-        board={board}
-        initialFolders={subBoards}
-        initialFiles={fileElements}
-      />
-    )
+    view = <FolderBoardView board={board} initialFolders={subBoards} initialFiles={fileElements} />
+  } else {
+    view = <BoardView board={board} initialLists={lists} initialCards={cards} />
   }
 
-  return <BoardView board={board} initialLists={lists} initialCards={cards} />
+  return (
+    <>
+      {view}
+      <ClaudeAgent boardId={board.id} />
+    </>
+  )
 }

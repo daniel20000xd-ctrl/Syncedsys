@@ -1,9 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
+import { getClaudeStatus } from '@/app/actions'
+import ClaudeKeySettings from '@/components/ClaudeKeySettings'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   const isAdmin = user?.email === process.env.ADMIN_EMAIL
+  const claude = await getClaudeStatus()
 
   return (
     <div className="p-8 bg-gray-100 min-h-screen">
@@ -18,6 +21,8 @@ export default async function SettingsPage() {
             </span>
           )}
         </section>
+
+        <ClaudeKeySettings initialHasKey={claude.hasKey} initialAutoApply={claude.autoApply} />
       </div>
     </div>
   )
