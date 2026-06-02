@@ -1359,8 +1359,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       )}
 
       {/* Toolbar — rendered above the drawing overlay (z-20 > overlay z-10) so it stays clickable while drawing */}
-      <div className="absolute top-3 right-3 z-20 bg-white rounded-xl shadow-lg p-2 flex flex-col gap-1.5">
-        <div className="flex flex-col gap-1.5">
+      <div className="absolute top-3 right-3 z-20 bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center">
+        <div className="flex flex-col gap-1">
           {(['select', 'hand', 'draw', 'shape', 'text', 'portal', 'claude'] as Tool[]).map(t => {
             const Icon = TOOL_ICONS[t]
             return (
@@ -1376,7 +1376,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
                   t === 'claude' ? 'Claude — chat on canvas (C)' :
                   t.charAt(0).toUpperCase() + t.slice(1)
                 }
-                className={`p-2 rounded-lg transition-colors ${
+                className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
                   tool === t
                     ? (t === 'claude' ? 'bg-[#D97757] text-white' : 'bg-blue-500 text-white')
                     : 'text-gray-600 hover:bg-gray-100'
@@ -1388,40 +1388,33 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           })}
         </div>
         {tool === 'text' && (
-          <p className="text-[9px] text-gray-400 text-center w-16 leading-tight mt-1 pt-1 border-t border-gray-100">Click to place text</p>
+          <p className="text-[8px] text-gray-400 text-center leading-tight mt-0.5 pt-1 border-t border-gray-100 w-full">place text</p>
         )}
         {tool === 'select' && selectedColorable.length > 0 && (
-          <div className="flex flex-col items-center gap-1 mt-1 pt-1 border-t border-gray-100">
-            <p className="text-[8px] text-gray-400 text-center leading-tight">Recolor {selectedColorable.length} selected</p>
+          <div className="flex flex-col items-center gap-1 mt-0.5 pt-1 border-t border-gray-100 w-full">
+            <p className="text-[7px] text-gray-400 text-center leading-tight">recolor</p>
             {SHAPE_COLORS.map(c => (
               <button key={c} onClick={() => recolorSelected(c)} className="w-5 h-5 rounded border-2 border-transparent hover:border-gray-800" style={{ backgroundColor: c }} />
             ))}
           </div>
         )}
-        {tool === 'select' && selectedColorable.length === 0 && (
-          <p className="text-[8px] text-gray-300 text-center w-16 leading-tight mt-1 pt-1 border-t border-gray-100">Drag = select box · H = hand</p>
-        )}
-        {tool !== 'select' && (
-          <p className="text-[8px] text-gray-300 text-center w-16 leading-tight">Scroll = zoom · middle-drag = pan</p>
-        )}
         {tool === 'draw' && (
-          <div className="flex flex-col items-center gap-1 mt-1 pt-1 border-t border-gray-100">
+          <div className="flex flex-col items-center gap-1 mt-0.5 pt-1 border-t border-gray-100 w-full">
             {SHAPE_COLORS.map(c => (
               <button key={c} onClick={() => setDrawColor(c)} className={`w-5 h-5 rounded-full border-2 ${drawColor === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
             ))}
           </div>
         )}
         {tool === 'shape' && (
-          <div className="flex flex-col gap-1 mt-1 pt-1 border-t border-gray-100">
+          <div className="flex flex-col gap-1 mt-0.5 pt-1 border-t border-gray-100 w-full items-center">
             {(['rect', 'circle', 'diamond'] as ShapeType[]).map(s => (
-              <button key={s} onClick={() => setSelectedShape(s)} className={`text-[10px] px-2 py-1 rounded border ${selectedShape === s ? 'bg-blue-100 border-blue-400' : 'border-gray-200 text-gray-600'}`}>{s}</button>
+              <button key={s} onClick={() => setSelectedShape(s)} className={`text-[9px] px-1.5 py-0.5 rounded border w-full text-center ${selectedShape === s ? 'bg-blue-100 border-blue-400' : 'border-gray-200 text-gray-600'}`}>{s}</button>
             ))}
-            <div className="flex flex-col items-center gap-1 mt-1">
+            <div className="flex flex-col items-center gap-1 mt-0.5">
               {SHAPE_COLORS.map(c => (
                 <button key={c} onClick={() => setShapeColorPicker(c)} className={`w-5 h-5 rounded border-2 ${shapeColorPicker === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
               ))}
             </div>
-            <p className="text-[9px] text-gray-400 text-center w-16 leading-tight">Click, move, click to size</p>
           </div>
         )}
       </div>
