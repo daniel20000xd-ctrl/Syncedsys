@@ -5,7 +5,7 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal, updateTextFile } from '@/app/actions'
 import { recurLabel } from '@/lib/recur'
 import { downloadTextFile, PORTAL_ITEM_MIME } from '@/lib/files'
@@ -504,6 +504,59 @@ export function TextFileNode({ id, data }: NodeProps) {
       >
         <Clock size={11} />
       </button>
+    </div>
+  )
+}
+
+// ── Folder-link Node (a live shortcut to a folder board on the canvas) ────────
+
+export function FolderLinkNode({ id, data }: NodeProps) {
+  const name = (data.name as string) || 'Folder'
+  const targetBoardId = data.targetBoardId as string
+  const onNavigate = data.onNavigate as ((boardId: string) => void) | undefined
+  const onDecouple = data.onDecouple as ((nodeId: string) => void) | undefined
+
+  return (
+    <div className="relative group select-none">
+      <SideHandles color="!bg-fuchsia-500" />
+      <div
+        onDoubleClick={() => targetBoardId && onNavigate?.(targetBoardId)}
+        className="bg-white rounded-xl shadow-lg border-l-4 border-fuchsia-400 w-40 p-3 cursor-pointer hover:shadow-xl transition-shadow"
+        title="Linked folder — double-click to open"
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="relative shrink-0">
+            <Folder size={22} className="text-blue-400 fill-blue-100" />
+            <Link2 size={10} className="absolute -bottom-1 -right-1 text-fuchsia-500 bg-white rounded-full" />
+          </span>
+          <span className="text-sm font-medium text-gray-700 truncate flex-1">{name}</span>
+        </div>
+        <p className="text-[9px] text-fuchsia-500 mt-1">Linked folder · live</p>
+      </div>
+
+      <div className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 flex gap-0.5">
+        <button
+          className="bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-fuchsia-600"
+          title="Decouple — turn this into an independent copy"
+          onClick={e => { e.stopPropagation(); onDecouple?.(id) }}
+        >
+          <Unlink size={11} />
+        </button>
+        <button
+          className="bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-gray-600"
+          title="Hide (unhide from dashboard)"
+          onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
+        >
+          <EyeOff size={11} />
+        </button>
+        <button
+          className="bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500"
+          title="Remove link (keeps the original folder)"
+          onClick={e => { e.stopPropagation(); (data.onDelete as (id: string) => void)(id) }}
+        >
+          <X size={11} />
+        </button>
+      </div>
     </div>
   )
 }

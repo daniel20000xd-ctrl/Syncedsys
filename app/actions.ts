@@ -376,7 +376,7 @@ export async function upsertEdge(id: string, boardId: string, source: string, ta
 
 export async function createElement(
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number, height?: number
@@ -620,7 +620,7 @@ export async function ensureMirrorPortal(targetBoardId: string, backBoardId: str
 export async function upsertElement(
   id: string,
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number | null, height?: number | null

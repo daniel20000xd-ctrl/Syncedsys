@@ -17,7 +17,7 @@ import {
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
 } from '@/app/actions'
-import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, DeletableEdge, PortalNode } from './nodes'
+import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
 import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME } from '@/lib/files'
@@ -31,6 +31,7 @@ const nodeTypes: NodeTypes = {
   subTabNode: SubTabNode,
   textNode: TextNode,
   textFileNode: TextFileNode,
+  folderLinkNode: FolderLinkNode,
   portalNode: PortalNode,
 }
 
@@ -65,6 +66,7 @@ function buildNodes(
   onToggleDone: (id: string, done: boolean) => void,
   onSetExpiry: (nodeId: string) => void,
   onHide: (nodeId: string) => void,
+  onDecouple: (nodeId: string) => void,
 ): Node[] {
   const listNodes: Node[] = lists.map((l, i) => ({
     id: `list-${l.id}`,
@@ -102,7 +104,7 @@ function buildNodes(
   }))
 
   const elementNodes: Node[] = elements.map(el => {
-    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'portal' ? 'portalNode' : 'drawingNode'
+    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : 'drawingNode'
     const base: Node = {
       id: `el-${el.id}`,
       type,
@@ -118,8 +120,9 @@ function buildNodes(
         onSetExpiry: (nodeId: string) => onSetExpiry(nodeId),
         onHide: (nodeId: string) => onHide(nodeId),
         ...(el.type === 'portal' ? { onOpenFully: onNavigate } : {}),
-        // Text/files manage their own interaction; everything else scales on hold+scroll
-        ...(el.type === 'text' || el.type === 'textfile' ? {} : { onHold }),
+        ...(el.type === 'folderlink' ? { onNavigate, onDecouple } : {}),
+        // Text/files/links manage their own interaction; everything else scales on hold+scroll
+        ...(el.type === 'text' || el.type === 'textfile' || el.type === 'folderlink' ? {} : { onHold }),
       },
     }
     if (el.type === 'shape' || el.type === 'portal') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
@@ -305,6 +308,27 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setExpiryPanel(nodeId)
   }
 
+  // Turn a linked folder into an independent copy (a real child board).
+  async function decoupleFolderLink(nodeId: string) {
+    const elId = nodeId.replace('el-', '')
+    const el = elements.find(e => e.id === elId)
+    if (!el) return
+    const targetBoardId = el.data.targetBoardId as string
+    const x = el.x, y = el.y
+    try {
+      const top = await copyBoardInto(targetBoardId, board.id, x, y)
+      setElements(prev => prev.filter(e => e.id !== elId))
+      setSubBoards(prev => [...prev, { ...top, free_x: x, free_y: y } as Board])
+      setNodes(prev => prev.filter(n => n.id !== nodeId).concat({
+        id: `sub-${top.id}`, type: 'subTabNode', position: { x, y },
+        data: { boardId: top.id, name: top.name, color: top.color, mode: top.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
+      }))
+      deleteElement(elId).catch(err => console.error('Failed to remove link after decouple:', err))
+    } catch (err) {
+      console.error('Failed to decouple folder link:', err)
+    }
+  }
+
   function hideUnit(nodeId: string, hidden: boolean) {
     setNodes(prev => prev.map(n =>
       n.id === nodeId ? { ...n, hidden, data: { ...n.data, hidden } } : n
@@ -337,7 +361,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }
 
   const [nodes, setNodes, onNodesChange] = useNodesState(
-    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel, toggleCardDone, openExpiryPanel, (id) => hideUnit(id, true))
+    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel, toggleCardDone, openExpiryPanel, (id) => hideUnit(id, true), (id) => decoupleFolderLink(id))
   )
   const removeEdgeRef = useRef<(id: string) => void>(() => {})
   const reshapeEdgeRef = useRef<(id: string, offset: { cx: number; cy: number }) => void>(() => {})
@@ -388,7 +412,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // ── Create a free-mode element (client-controlled id so undo can restore it) ──
   function addElement(
-    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile',
+    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink',
     x: number, y: number,
     data: Record<string, unknown>,
     w?: number, h?: number,
@@ -396,7 +420,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   ) {
     const id = crypto.randomUUID()
     const nodeId = `el-${id}`
-    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'portal' ? 'portalNode' : 'imageNode'
+    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'folderlink' ? 'folderLinkNode' : type === 'portal' ? 'portalNode' : 'imageNode'
     const node: Node = {
       id: nodeId, type: nodeType, position: { x, y },
       ...(type === 'shape' || type === 'portal' ? { style: { width: w, height: h } } : {}),
@@ -406,7 +430,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onSave: saveElement,
         onHide: (i: string) => hideUnit(i, true),
         onSetExpiry: (i: string) => openExpiryPanel(i),
-        ...(type === 'text' || type === 'textfile' ? {} : { onHold: holdNode }),
+        ...(type === 'text' || type === 'textfile' || type === 'folderlink' ? {} : { onHold: holdNode }),
         ...extraNodeData,
       },
     }
@@ -445,13 +469,11 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         if (item.kind === 'file') {
           addElement('textfile', origin.x, origin.y, { name: item.name, content: item.content })
         } else if (item.kind === 'folder') {
-          const top = await copyBoardInto(item.boardId, board.id, origin.x, origin.y)
-          const newSub = { ...top, free_x: origin.x, free_y: origin.y } as Board
-          setSubBoards(prev => [...prev, newSub])
-          setNodes(prev => [...prev, {
-            id: `sub-${top.id}`, type: 'subTabNode', position: { x: origin.x, y: origin.y },
-            data: { boardId: top.id, name: top.name, color: top.color, mode: top.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
-          }])
+          // Default: a live link to the original folder (decouple later to copy).
+          addElement('folderlink', origin.x, origin.y, { targetBoardId: item.boardId, name: item.name }, undefined, undefined, {
+            onNavigate: navigate,
+            onDecouple: (nid: string) => decoupleFolderLink(nid),
+          })
         }
       } catch (err) {
         console.error('Failed to copy portal item:', err)
@@ -967,6 +989,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (n.type === 'drawingNode') return 'drawing'
     if (n.type === 'textNode') return 'text'
     if (n.type === 'textFileNode') return 'file'
+    if (n.type === 'folderLinkNode') return 'subtab'
     if (n.type === 'imageNode') return 'image'
     if (n.type === 'portalNode') return 'portal'
     return 'unknown'
