@@ -7,7 +7,7 @@ import type { Board, BoardElement } from '@/lib/types'
 import { createSubTab, renameBoard, deleteBoard, createTextFile, updateTextFile, deleteElement, moveElementToBoard, importFolderTree, moveBoardToParent } from '@/app/actions'
 import { collectEntries, readDroppedEntries, downloadTextFile } from '@/lib/files'
 
-const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
+const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁', spreadsheet: '📊' }
 // Custom drag types so internal moves are distinguishable from OS file drops.
 const FILE_MIME = 'application/x-syncedsys-fileid'
 const FOLDER_MIME = 'application/x-syncedsys-folderid'

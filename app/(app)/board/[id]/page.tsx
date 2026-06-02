@@ -4,6 +4,7 @@ import BoardView from '@/components/BoardView'
 import FreeBoardView from '@/components/free/FreeBoardView'
 import TextBoardView from '@/components/TextBoardView'
 import FolderBoardView from '@/components/FolderBoardView'
+import SpreadsheetBoardView from '@/components/SpreadsheetBoardView'
 import { resetDueRecurringCards } from '@/lib/recur'
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
@@ -67,6 +68,10 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
 
   if (board.mode === 'text') {
     return <TextBoardView board={board} />
+  }
+
+  if (board.mode === 'spreadsheet') {
+    return <SpreadsheetBoardView board={board} />
   }
 
   if (board.mode === 'folder') {

@@ -4,11 +4,12 @@ import {
   Handle, Position, NodeProps, useReactFlow, NodeResizer,
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal, updateTextFile } from '@/app/actions'
 import { recurLabel } from '@/lib/recur'
 import { downloadTextFile, PORTAL_ITEM_MIME } from '@/lib/files'
+import { parseSheet, computeSheet, colToLetter, cellAddr, type SheetData } from '@/lib/spreadsheet'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
@@ -626,7 +627,7 @@ export function SubTabNode({ id, data }: NodeProps) {
   const onHold = data.onHold as ((id: string) => void) | undefined
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(name)
-  const modeIcon = mode === 'classic' ? '🎨' : mode === 'text' ? '📝' : mode === 'folder' ? '📁' : '🗂'
+  const modeIcon = mode === 'classic' ? '🎨' : mode === 'text' ? '📝' : mode === 'folder' ? '📁' : mode === 'spreadsheet' ? '📊' : '🗂'
 
   function commitName() {
     setEditing(false)
@@ -764,7 +765,37 @@ type FolderContent = {
   folders: { id: string; name: string; color: string; mode: string }[]
   files: { id: string; name: string; content: string }[]
 }
-const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
+const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁', spreadsheet: '📊' }
+
+// Read-only spreadsheet preview shown inside a portal (capped for size).
+function SheetPreview({ data }: { data: SheetData }) {
+  const computed = useMemo(() => computeSheet(data), [data])
+  const rows = Math.min(data.rows, 40), cols = Math.min(data.cols, 12)
+  return (
+    <table className="border-collapse text-[10px]">
+      <thead>
+        <tr>
+          <th className="sticky left-0 bg-gray-100 border border-gray-200 w-8" />
+          {Array.from({ length: cols }, (_, c) => (
+            <th key={c} className="bg-gray-100 border border-gray-200 font-semibold text-gray-500 px-1" style={{ minWidth: 64 }}>{colToLetter(c)}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {Array.from({ length: rows }, (_, r) => (
+          <tr key={r}>
+            <td className="sticky left-0 bg-gray-100 border border-gray-200 text-center font-semibold text-gray-500">{r + 1}</td>
+            {Array.from({ length: cols }, (_, c) => {
+              const cell = computed[cellAddr(r, c)]
+              const err = typeof cell?.value === 'object'
+              return <td key={c} className={`border border-gray-200 px-1 whitespace-nowrap overflow-hidden ${err ? 'text-red-500' : 'text-gray-800'}`} style={{ maxWidth: 90 }}>{cell?.display ?? ''}</td>
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
 
 export function PortalNode({ id, data, selected }: NodeProps) {
   const targetBoardId = (data.targetBoardId as string | null) ?? null
@@ -780,6 +811,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const [boards, setBoards] = useState<{ id: string; name: string; color: string }[]>([])
   const [content, setContent] = useState<PortalContent | null>(null)
   const [folderContent, setFolderContent] = useState<FolderContent | null>(null)
+  const [sheet, setSheet] = useState<SheetData | null>(null)
   const [viewMode, setViewMode] = useState<string>('classic')
   const [viewName, setViewName] = useState<string>('')
   const [viewColor, setViewColor] = useState<string>('#0079bf')
@@ -800,7 +832,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const isBase = viewId === targetBoardId
   const isText = viewMode === 'text'
   const isFolder = viewMode === 'folder'
-  const isPannable = !isText && !isFolder
+  const isSheet = viewMode === 'spreadsheet'
+  const isPannable = !isText && !isFolder && !isSheet
   const canGoBack = !!openFile || stack.length > 0
 
   function navInto(boardId: string) { setOpenFile(null); setStack(prev => [...prev, boardId]) }
@@ -834,7 +867,9 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       const mode = (bd?.mode as string) ?? 'classic'
       setViewMode(mode); setViewName((bd?.name as string) ?? ''); setViewColor((bd?.color as string) ?? '#0079bf'); setText((bd?.content as string) ?? '')
 
-      if (mode === 'text') { setContent(null); setFolderContent(null); return }
+      if (mode === 'text') { setContent(null); setFolderContent(null); setSheet(null); return }
+
+      if (mode === 'spreadsheet') { setSheet(parseSheet((bd?.content as string) ?? '')); setContent(null); setFolderContent(null); return }
 
       if (mode === 'folder') {
         const [{ data: subs }, { data: els }] = await Promise.all([
@@ -846,7 +881,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           folders: subs ?? [],
           files: (els ?? []).map(e => ({ id: e.id, name: ((e.data as Record<string, unknown>)?.name as string) ?? 'Untitled', content: ((e.data as Record<string, unknown>)?.content as string) ?? '' })),
         })
-        setContent(null)
+        setContent(null); setSheet(null)
         return
       }
 
@@ -860,7 +895,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       const cardsRes = listIds.length ? await s.from('cards').select('id,list_id,title,x,y').in('list_id', listIds) : { data: [] }
       if (cancel) return
       const c: PortalContent = { lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [], edges: edges ?? [] }
-      setContent(c); setFolderContent(null)
+      setContent(c); setFolderContent(null); setSheet(null)
       // Auto-fit once per viewed board. The base view respects a saved/locked view.
       const shouldFit = isBase ? (!locked && !fitted && fittedRef.current !== viewId) : fittedRef.current !== viewId
       if (shouldFit) {
@@ -1008,6 +1043,13 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Spreadsheet preview (read-only) */}
+        {targetBoardId && !openFile && isSheet && sheet && (
+          <div className="nodrag nowheel absolute inset-0 pt-7 overflow-auto bg-white" onPointerDown={e => e.stopPropagation()}>
+            <SheetPreview data={sheet} />
           </div>
         )}
 
