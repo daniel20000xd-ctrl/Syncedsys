@@ -94,6 +94,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
       <div
         key={board.id}
         draggable
+        onMouseEnter={() => router.prefetch(`/board/${board.id}`)}
         onDragStart={e => { e.stopPropagation(); startDrag(e, board.id) }}
         onDragEnd={endDrag}
         onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (draggingRef.current && draggingRef.current !== board.id) setDragOverId(board.id) }}

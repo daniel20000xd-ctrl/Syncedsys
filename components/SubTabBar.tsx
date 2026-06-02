@@ -88,6 +88,7 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
             return (
               <div key={tab.id} className="relative group/tab shrink-0">
                 <button
+                  onMouseEnter={() => router.prefetch(`/board/${tab.id}`)}
                   onClick={() => router.push(`/board/${tab.id}`)}
                   className={`flex items-center gap-1.5 px-2.5 pr-6 py-1 text-xs whitespace-nowrap border-b-2 transition-colors mr-0.5 rounded-t ${
                     isCurrent ? 'text-white border-[#579dff] bg-white/10'
