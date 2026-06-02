@@ -15,12 +15,12 @@ import {
   createList, createFreeCard, deleteEdge, deleteBoard,
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
-  updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree,
+  updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, DeletableEdge, PortalNode } from './nodes'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
-import { collectEntries, readDroppedEntries } from '@/lib/files'
+import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME } from '@/lib/files'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -420,19 +420,45 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [fileDragOver, setFileDragOver] = useState(false)
 
   function onCanvasDragOver(e: React.DragEvent) {
-    if (!Array.from(e.dataTransfer.types).includes('Files')) return
+    const types = Array.from(e.dataTransfer.types)
+    const isFiles = types.includes('Files')
+    const isPortalItem = types.includes(PORTAL_ITEM_MIME)
+    if (!isFiles && !isPortalItem) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
-    if (!fileDragOver) setFileDragOver(true)
+    if (isFiles && !fileDragOver) setFileDragOver(true) // big overlay only for OS files
   }
 
   async function onCanvasDrop(e: React.DragEvent) {
+    // A unit dragged out of a portal → copy it onto this canvas.
+    const portalRaw = e.dataTransfer.getData(PORTAL_ITEM_MIME)
     // Capture directory entries synchronously before any await.
     const entries = collectEntries(e.dataTransfer)
-    if (!entries && !e.dataTransfer.files?.length) return
+    if (!portalRaw && !entries && !e.dataTransfer.files?.length) return
     e.preventDefault()
     setFileDragOver(false)
     const origin = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+
+    if (portalRaw) {
+      try {
+        const item = JSON.parse(portalRaw) as { kind: 'file'; name: string; content: string } | { kind: 'folder'; boardId: string; name: string }
+        if (item.kind === 'file') {
+          addElement('textfile', origin.x, origin.y, { name: item.name, content: item.content })
+        } else if (item.kind === 'folder') {
+          const top = await copyBoardInto(item.boardId, board.id, origin.x, origin.y)
+          const newSub = { ...top, free_x: origin.x, free_y: origin.y } as Board
+          setSubBoards(prev => [...prev, newSub])
+          setNodes(prev => [...prev, {
+            id: `sub-${top.id}`, type: 'subTabNode', position: { x: origin.x, y: origin.y },
+            data: { boardId: top.id, name: top.name, color: top.color, mode: top.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
+          }])
+        }
+      } catch (err) {
+        console.error('Failed to copy portal item:', err)
+      }
+      return
+    }
+
     const { trees, files, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
     files.forEach((f, i) => {
       addElement('textfile', origin.x + i * 24, origin.y + i * 24, { name: f.name, content: f.content })

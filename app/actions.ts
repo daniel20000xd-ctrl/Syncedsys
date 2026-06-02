@@ -453,6 +453,93 @@ export async function importFolderTree(parentBoardId: string, tree: ImportNode, 
   return top
 }
 
+// Deep-copy a board subtree (board + lists/cards/elements/edges + descendant
+// boards) under a destination parent. Used to drag a folder out of a portal
+// onto a canvas. Returns the new top-level board. Edge endpoints are remapped
+// to the cloned node ids so connections survive the copy.
+export async function copyBoardInto(sourceBoardId: string, destParentBoardId: string, freeX = 100, freeY = 100) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data: src } = await supabase.from('boards').select('id').eq('id', sourceBoardId).eq('user_id', user.id).single()
+  if (!src) throw new Error('Source board not found')
+  const { data: dst } = await supabase.from('boards').select('id').eq('id', destParentBoardId).eq('user_id', user.id).single()
+  if (!dst) throw new Error('Destination board not found')
+
+  async function cloneSubtree(srcId: string, parentId: string, tabPos: number, fx?: number, fy?: number) {
+    const { data: b } = await supabase.from('boards').select('*').eq('id', srcId).single()
+    if (!b) throw new Error('Board missing')
+    const { data: nb, error } = await supabase.from('boards').insert({
+      name: b.name, color: b.color, mode: b.mode, content: b.content, user_id: user!.id,
+      parent_id: parentId, tab_position: tabPos, free_x: fx ?? b.free_x, free_y: fy ?? b.free_y, deadline: b.deadline ?? null,
+    }).select().single()
+    if (error) throw error
+
+    const { data: lists } = await supabase.from('lists').select('*').eq('board_id', srcId)
+    const listMap = new Map<string, string>()
+    for (const l of lists ?? []) {
+      const { data: nl } = await supabase.from('lists').insert({
+        board_id: nb.id, name: l.name, position: l.position, x: l.x, y: l.y,
+        is_widget: l.is_widget, widget_position: l.widget_position, deadline: l.deadline, hidden: l.hidden,
+      }).select('id').single()
+      if (nl) listMap.set(l.id, nl.id)
+    }
+
+    const listIds = (lists ?? []).map(l => l.id)
+    const cardMap = new Map<string, string>()
+    if (listIds.length) {
+      const { data: cards } = await supabase.from('cards').select('*').in('list_id', listIds)
+      for (const c of cards ?? []) {
+        const newListId = listMap.get(c.list_id)
+        if (!newListId) continue
+        const { data: nc } = await supabase.from('cards').insert({
+          list_id: newListId, title: c.title, description: c.description, position: c.position, x: c.x, y: c.y,
+          done: c.done, done_at: c.done_at, deadline: c.deadline, recur_interval_minutes: c.recur_interval_minutes, hidden: c.hidden,
+        }).select('id').single()
+        if (nc) cardMap.set(c.id, nc.id)
+      }
+    }
+
+    const { data: els } = await supabase.from('board_elements').select('*').eq('board_id', srcId)
+    const elMap = new Map<string, string>()
+    for (const el of els ?? []) {
+      const { data: ne } = await supabase.from('board_elements').insert({
+        board_id: nb.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height, data: el.data, deadline: el.deadline,
+      }).select('id').single()
+      if (ne) elMap.set(el.id, ne.id)
+    }
+
+    const remap = (ep: string) => {
+      const i = ep.indexOf('-'); if (i < 0) return ep
+      const p = ep.slice(0, i), oid = ep.slice(i + 1)
+      if (p === 'list') return `list-${listMap.get(oid) ?? oid}`
+      if (p === 'card') return `card-${cardMap.get(oid) ?? oid}`
+      if (p === 'el') return `el-${elMap.get(oid) ?? oid}`
+      return ep
+    }
+    const { data: edges } = await supabase.from('board_edges').select('*').eq('board_id', srcId)
+    for (const e of edges ?? []) {
+      await supabase.from('board_edges').insert({
+        board_id: nb.id, source: remap(e.source), target: remap(e.target),
+        source_handle: e.source_handle, target_handle: e.target_handle, data: e.data,
+      })
+    }
+
+    const { data: kids } = await supabase.from('boards').select('id').eq('parent_id', srcId).order('tab_position', { ascending: true })
+    for (let i = 0; i < (kids ?? []).length; i++) {
+      await cloneSubtree(kids![i].id, nb.id, i)
+    }
+    return nb
+  }
+
+  const { data: existing } = await supabase.from('boards').select('tab_position').eq('parent_id', destParentBoardId).order('tab_position', { ascending: false }).limit(1)
+  const tabPos = existing && existing.length > 0 ? existing[0].tab_position + 1 : 0
+  const top = await cloneSubtree(sourceBoardId, destParentBoardId, tabPos, freeX, freeY)
+  revalidatePath(`/board/${destParentBoardId}`)
+  return top
+}
+
 // Re-parent a folder (board) under another board, or to the top level (null).
 // Guards against moving a folder into itself or into one of its own
 // descendants, which would create a cycle.

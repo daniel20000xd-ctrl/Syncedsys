@@ -11,6 +11,9 @@ const TEXT_EXTENSIONS = [
 
 const MAX_BYTES = 1_000_000 // 1 MB — generous for text, keeps the DB row sane
 
+// Drag payload used when dragging a unit out of a portal onto the canvas.
+export const PORTAL_ITEM_MIME = 'application/x-syncedsys-portalitem'
+
 // Trigger a browser download of text content as a file.
 export function downloadTextFile(name: string, content: string) {
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })

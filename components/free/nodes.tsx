@@ -8,7 +8,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal, updateTextFile } from '@/app/actions'
 import { recurLabel } from '@/lib/recur'
-import { downloadTextFile } from '@/lib/files'
+import { downloadTextFile, PORTAL_ITEM_MIME } from '@/lib/files'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
 
@@ -925,7 +925,14 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             ) : (
               <div className="grid gap-1 p-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(60px, 1fr))' }}>
                 {folderContent?.folders.map(f => (
-                  <button key={f.id} onClick={e => { e.stopPropagation(); navInto(f.id) }} className="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-blue-100" title={f.name}>
+                  <button
+                    key={f.id}
+                    draggable
+                    onDragStart={e => { e.dataTransfer.setData(PORTAL_ITEM_MIME, JSON.stringify({ kind: 'folder', boardId: f.id, name: f.name })); e.dataTransfer.effectAllowed = 'copy' }}
+                    onClick={e => { e.stopPropagation(); navInto(f.id) }}
+                    className="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-blue-100"
+                    title={`${f.name} — drag onto the canvas to copy`}
+                  >
                     <span className="relative">
                       <Folder size={30} className="text-blue-400 fill-blue-100" />
                       {f.mode !== 'folder' && <span className="absolute -bottom-1 -right-1 text-[9px]">{MODE_EMOJI[f.mode] ?? ''}</span>}
@@ -934,7 +941,14 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                   </button>
                 ))}
                 {folderContent?.files.map(file => (
-                  <button key={file.id} onClick={e => { e.stopPropagation(); setOpenFile(file) }} className="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-indigo-100" title={file.name}>
+                  <button
+                    key={file.id}
+                    draggable
+                    onDragStart={e => { e.dataTransfer.setData(PORTAL_ITEM_MIME, JSON.stringify({ kind: 'file', name: file.name, content: file.content })); e.dataTransfer.effectAllowed = 'copy' }}
+                    onClick={e => { e.stopPropagation(); setOpenFile(file) }}
+                    className="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-indigo-100"
+                    title={`${file.name} — drag onto the canvas to copy`}
+                  >
                     <FileText size={28} className="text-indigo-400" />
                     <span className="text-[9px] text-gray-700 text-center leading-tight line-clamp-2 break-words">{file.name}</span>
                   </button>
