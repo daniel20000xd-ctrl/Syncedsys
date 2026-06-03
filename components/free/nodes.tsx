@@ -773,7 +773,7 @@ export function ClaudeNode({ id, data, selected }: NodeProps) {
         handleClassName="!bg-white !border-2 !border-[#D97757] !w-2.5 !h-2.5 !rounded-sm"
       />
       <SideHandles color="!bg-[#D97757]" />
-      <div className="w-full h-full rounded-xl overflow-hidden shadow-lg ring-1 ring-[#D97757]/50 bg-[#30302E] flex flex-col">
+      <div className="claude-node-glow w-full h-full rounded-xl overflow-hidden ring-1 ring-[#D97757]/40 bg-[#30302E] flex flex-col">
         {/* Drag handle / title bar (dragging here moves the node) */}
         <div className="h-8 bg-[#262624] flex items-center justify-between px-2.5 text-[#F0EEE6] shrink-0">
           <span className="flex items-center gap-1.5 text-xs font-medium"><ClaudeMark size={14} animate /> Claude</span>

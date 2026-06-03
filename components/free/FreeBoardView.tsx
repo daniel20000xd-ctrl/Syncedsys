@@ -248,6 +248,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // Middle-mouse panning while a tool overlay is active
   const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
 
+  // Tracks whether the user is currently dragging a connection so the
+  // proximity handler and CSS can treat handles differently.
+  const isConnectingRef = useRef(false)
+
   // Latest elements for persistence callbacks
   const elementsRef = useRef(elements)
   useEffect(() => { elementsRef.current = elements }, [elements])
@@ -778,6 +782,41 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     return () => el.removeEventListener('wheel', handleWheel, { capture: true } as EventListenerOptions)
   }, [])
 
+  // ── Proximity-based handle reveal ─────────────────────────────────────────
+  // Each mousemove samples the distance from the cursor to every handle's
+  // centre and writes opacity directly as an inline style. The CSS baseline
+  // (opacity:0 + transition:0.18s) provides the smooth fade-in and the
+  // mouseleave fade-out; during connecting this entire path is skipped so
+  // the CSS .rf-connecting rule can take over.
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+
+    function onMouseMove(e: MouseEvent) {
+      if (isConnectingRef.current) return // CSS handles visibility during active connection drag
+      const handles = el!.querySelectorAll<HTMLElement>('.react-flow__handle')
+      for (const h of handles) {
+        const r = h.getBoundingClientRect()
+        const dist = Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2))
+        // Full opacity within 22 px, invisible beyond 110 px — linear ramp between
+        const opacity = Math.max(0, Math.min(1, 1 - (dist - 22) / 88))
+        h.style.opacity = String(Math.round(opacity * 100) / 100)
+      }
+    }
+
+    function onMouseLeave() {
+      // Remove inline override → CSS baseline (opacity:0, transition) fades handles out
+      el!.querySelectorAll<HTMLElement>('.react-flow__handle').forEach(h => { h.style.opacity = '' })
+    }
+
+    el.addEventListener('mousemove', onMouseMove)
+    el.addEventListener('mouseleave', onMouseLeave)
+    return () => {
+      el.removeEventListener('mousemove', onMouseMove)
+      el.removeEventListener('mouseleave', onMouseLeave)
+    }
+  }, []) // stable — uses refs only
+
   function handleWrapperMouseUp() {
     if (!heldNodeRef.current) return
     const heldId = heldNodeRef.current
@@ -1282,6 +1321,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onConnectStart={() => {
+          isConnectingRef.current = true
+          wrapperRef.current?.classList.add('rf-connecting')
+          // Clear inline opacity so the CSS .rf-connecting rule takes full control
+          wrapperRef.current?.querySelectorAll<HTMLElement>('.react-flow__handle')
+            .forEach(h => { h.style.opacity = '' })
+        }}
+        onConnectEnd={() => {
+          isConnectingRef.current = false
+          wrapperRef.current?.classList.remove('rf-connecting')
+        }}
         onEdgesDelete={onEdgesDelete}
         onNodesDelete={onNodesDelete}
         onNodeDragStop={onNodeDragStop}
