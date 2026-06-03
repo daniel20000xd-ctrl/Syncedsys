@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
+// Never cache — the iOS app needs fresh data on every poll.
+export const dynamic = 'force-dynamic'
+
 // The iOS app calls this with `Authorization: Bearer <token>` (from pairing).
 // Returns the user's synced boards plus their lists/cards/elements/content.
 export async function GET(req: NextRequest) {
@@ -17,33 +20,56 @@ export async function GET(req: NextRequest) {
 
   if (!link) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
 
-  await admin.from('device_links').update({ last_seen: new Date().toISOString() }).eq('id', link.id)
+  // Update last-seen timestamp (fire-and-forget, don't await)
+  admin.from('device_links').update({ last_seen: new Date().toISOString() }).eq('id', link.id).then(() => {})
 
+  // Fetch all boards the user has explicitly marked for sync.
+  // Include sub-boards (parent_id not null) that are themselves marked synced.
   const { data: boards } = await admin
     .from('boards')
     .select('*')
     .eq('user_id', link.user_id)
     .eq('synced', true)
     .order('tab_position', { ascending: true })
+    .order('created_at', { ascending: true })
 
   const boardIds = (boards ?? []).map(b => b.id)
-  const [lists, elements] = boardIds.length
+
+  const [listsRes, elementsRes] = boardIds.length
     ? await Promise.all([
-        admin.from('lists').select('*').in('board_id', boardIds),
-        admin.from('board_elements').select('*').in('board_id', boardIds),
+        admin.from('lists')
+          .select('*')
+          .in('board_id', boardIds)
+          .order('position', { ascending: true }),
+        admin.from('board_elements')
+          .select('*')
+          .in('board_id', boardIds),
       ])
     : [{ data: [] }, { data: [] }]
 
-  const listIds = (lists.data ?? []).map(l => l.id)
+  const listIds = (listsRes.data ?? []).map((l: { id: string }) => l.id)
   const cards = listIds.length
-    ? (await admin.from('cards').select('*').in('list_id', listIds)).data ?? []
+    ? ((await admin
+        .from('cards')
+        .select('*')
+        .in('list_id', listIds)
+        .order('position', { ascending: true })
+      ).data ?? [])
     : []
 
-  return NextResponse.json({
-    syncedAt: new Date().toISOString(),
-    boards: boards ?? [],
-    lists: lists.data ?? [],
-    cards,
-    elements: elements.data ?? [],
-  })
+  return NextResponse.json(
+    {
+      syncedAt: new Date().toISOString(),
+      boards:   boards ?? [],
+      lists:    listsRes.data ?? [],
+      cards,
+      elements: elementsRes.data ?? [],
+    },
+    {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Pragma': 'no-cache',
+      },
+    }
+  )
 }
