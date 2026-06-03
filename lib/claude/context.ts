@@ -144,7 +144,7 @@ async function renderContext(
           (excerpt.trim() ? `:\n${indent}      text: ${JSON.stringify(excerpt)}` : ' (no extractable text)')
       }
       else if (e.type === 'portal') {
-        if (d.viewer_context) {
+        if (d.viewerKind && d.viewer_context) {
           // Viewer portal: include the full live data block so Claude has zero info loss
           lines.push(`${indent}    element[${e.id}]: viewer-portal (${d.viewerKind ?? 'unknown'})`)
           lines.push(`${indent}    ---BEGIN VIEWER DATA---`)

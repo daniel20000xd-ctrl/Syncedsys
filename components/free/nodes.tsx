@@ -1336,8 +1336,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         async function pickBoard(boardId: string) {
           setChoosing(false)
           fittedRef.current = null
-          // Clear any viewer mode when switching to a board tab
-          persist({ targetBoardId: boardId, viewerKind: null, viewerConfig: null })
+          // Clear viewer mode + context when switching to a board tab
+          persist({ targetBoardId: boardId, viewerKind: null, viewerConfig: null, viewer_context: null })
           if (home) {
             const { createClient } = await import('@/lib/supabase/client')
             const { data: bd } = await createClient().from('boards').select('mode').eq('id', boardId).single()
@@ -1428,7 +1428,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                   const homeBoard = boards.find(b => b.id === home)
                   const sub = await createSubTab(home, 'New tab', homeBoard?.color ?? '#0079bf', 'classic')
                   fittedRef.current = null
-                  persist({ targetBoardId: sub.id, viewerKind: null, viewerConfig: null })
+                  persist({ targetBoardId: sub.id, viewerKind: null, viewerConfig: null, viewer_context: null })
                 }}
                 className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 text-left border-t border-gray-100 mt-0.5"
               >
