@@ -1742,7 +1742,6 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       className="absolute overflow-hidden"
       style={{
         inset: 48,
-        borderRadius: 16,
         boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3)',
         backgroundColor: board.color,
       }}
