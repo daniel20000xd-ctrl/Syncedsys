@@ -1741,7 +1741,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         deleteKeyCode="Delete"
         nodesDraggable={tool === 'select'}
         selectionOnDrag={allowMarqueeSelection && tool === 'select'}
-        panOnDrag={tool === 'hand' ? true : (tool === 'select' && !allowMarqueeSelection) ? true : false}
+        panOnDrag={
+          tool === 'hand' ? [0, 1, 2] :
+          tool === 'select' && allowMarqueeSelection ? [1, 2] :
+          tool === 'select' ? [0, 1, 2] :
+          false
+        }
+        zoomOnDoubleClick={false}
         zoomOnScroll
         zoomOnPinch
         onPaneClick={e => {
