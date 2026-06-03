@@ -61,7 +61,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   } else if (board.mode === 'spreadsheet') {
     view = <SpreadsheetBoardView board={board} />
   } else if (board.mode === 'folder') {
-    const fileElements = elements.filter(e => e.type === 'textfile')
+    const fileElements = elements.filter(e => e.type === 'textfile' || e.type === 'pdf')
     view = <FolderBoardView board={board} initialFolders={subBoards} initialFiles={fileElements} />
   } else {
     view = <BoardView board={board} initialLists={lists} initialCards={cards} />

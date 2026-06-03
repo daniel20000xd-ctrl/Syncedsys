@@ -51,7 +51,8 @@ export async function POST(req: NextRequest) {
   const system = [
     'You are an assistant embedded inside a visual workspace app, living inside one board ("tab").',
     'Boards have a mode: classic (freeform canvas), trello (kanban), text (document), folder (file explorer), or spreadsheet.',
-    'Boards can contain lists, cards, and elements (text notes, shapes, files, portals).',
+    'Boards can contain lists, cards, and elements (text notes, shapes, files, PDFs, portals).',
+    'PDF elements include extracted text — an excerpt is shown inline; call get_board to read the full text of a PDF on a given board.',
     writesEnabled
       ? 'You can MAKE CHANGES using the provided write tools. Prefer doing what the user asks directly. When you create things, briefly say what you made.'
       : 'You are in READ-ONLY mode — you can read and explain but cannot make changes. If the user asks you to create or modify something, tell them to enable "Let Claude make changes" in Settings.',

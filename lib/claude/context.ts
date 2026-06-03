@@ -138,6 +138,11 @@ async function renderContext(
       if (e.type === 'text') label = `text: ${JSON.stringify(String(d.text ?? '').slice(0, 120))}`
       else if (e.type === 'shape') label = `shape(${d.shape ?? 'rect'}) "${d.label ?? ''}"`
       else if (e.type === 'textfile') label = `file "${d.name ?? 'untitled'}"`
+      else if (e.type === 'pdf') {
+        const excerpt = String(d.text ?? '').slice(0, 6000)
+        label = `pdf "${d.name ?? 'document'}" (${d.pageCount ?? '?'} pages)` +
+          (excerpt.trim() ? `:\n${indent}      text: ${JSON.stringify(excerpt)}` : ' (no extractable text)')
+      }
       else if (e.type === 'portal') label = `portal → ${d.targetBoardId ?? '(unset)'}`
       else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
       lines.push(`${indent}    element[${e.id}]: ${label}`)

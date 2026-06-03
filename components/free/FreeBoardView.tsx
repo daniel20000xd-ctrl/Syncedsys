@@ -17,8 +17,9 @@ import {
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
 } from '@/app/actions'
-import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode } from './nodes'
+import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode, PdfNode } from './nodes'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
+import { uploadPdf, extractPdfText } from '@/lib/pdf'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
 import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME } from '@/lib/files'
@@ -36,6 +37,7 @@ const nodeTypes: NodeTypes = {
   folderLinkNode: FolderLinkNode,
   portalNode: PortalNode,
   claudeNode: ClaudeNode,
+  pdfNode: PdfNode,
 }
 
 const edgeTypes: EdgeTypes = {
@@ -110,7 +112,7 @@ function buildNodes(
   }))
 
   const elementNodes: Node[] = elements.map(el => {
-    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : el.type === 'claude' ? 'claudeNode' : 'drawingNode'
+    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'pdf' ? 'pdfNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : el.type === 'claude' ? 'claudeNode' : 'drawingNode'
     const base: Node = {
       id: `el-${el.id}`,
       type,
@@ -128,7 +130,7 @@ function buildNodes(
         ...(el.type === 'portal' ? { onOpenFully: onNavigate } : {}),
         ...(el.type === 'folderlink' ? { onNavigate, onDecouple } : {}),
         // Text/files/links manage their own interaction; everything else scales on hold+scroll
-        ...(el.type === 'text' || el.type === 'textfile' || el.type === 'folderlink' ? {} : { onHold }),
+        ...(el.type === 'text' || el.type === 'textfile' || el.type === 'pdf' || el.type === 'folderlink' ? {} : { onHold }),
       },
     }
     if (el.type === 'shape' || el.type === 'portal') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
@@ -431,7 +433,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // ── Create a free-mode element (client-controlled id so undo can restore it) ──
   function addElement(
-    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink' | 'claude',
+    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf',
     x: number, y: number,
     data: Record<string, unknown>,
     w?: number, h?: number,
@@ -439,7 +441,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   ) {
     const id = crypto.randomUUID()
     const nodeId = `el-${id}`
-    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'folderlink' ? 'folderLinkNode' : type === 'portal' ? 'portalNode' : type === 'claude' ? 'claudeNode' : 'imageNode'
+    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'pdf' ? 'pdfNode' : type === 'folderlink' ? 'folderLinkNode' : type === 'portal' ? 'portalNode' : type === 'claude' ? 'claudeNode' : 'imageNode'
     const node: Node = {
       id: nodeId, type: nodeType, position: { x, y },
       ...(type === 'shape' || type === 'portal' || type === 'claude' ? { style: { width: w, height: h } } : {}),
@@ -449,7 +451,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onSave: saveElement,
         onHide: (i: string) => hideUnit(i, true),
         onSetExpiry: (i: string) => openExpiryPanel(i),
-        ...(type === 'text' || type === 'textfile' || type === 'folderlink' ? {} : { onHold: holdNode }),
+        ...(type === 'text' || type === 'textfile' || type === 'pdf' || type === 'folderlink' ? {} : { onHold: holdNode }),
         ...extraNodeData,
       },
     }
@@ -551,7 +553,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       return
     }
 
-    const { trees, files, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
+    const { trees, files, pdfs, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
 
     if (currentDropTarget?.type === 'claude') {
       // Inject all text files directly into the chat composer (append one after another)
@@ -571,6 +573,29 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       })
     }
 
+    // PDFs: upload the binary to storage + extract text (so Claude can read it),
+    // then route the same way as text files.
+    for (let i = 0; i < pdfs.length; i++) {
+      const pdf = pdfs[i]
+      try {
+        const [storagePath, { text, pageCount }] = await Promise.all([uploadPdf(pdf), extractPdfText(pdf)])
+        const pdfData = { name: pdf.name, storagePath, text, pageCount }
+        if (currentDropTarget?.type === 'claude') {
+          claudeDropRegistry.inject(currentDropTarget.nodeId, text || '(no extractable text in this PDF)', pdf.name)
+        } else if (currentDropTarget?.type === 'subtab') {
+          const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
+          const id = crypto.randomUUID()
+          upsertElement(id, targetBoardId, 'pdf', 20 + i * 24, 20 + i * 24, pdfData, null, null)
+            .catch(err => console.error('Failed to drop PDF into sub-tab:', err))
+        } else {
+          addElement('pdf', origin.x + (files.length + i) * 24, origin.y + (files.length + i) * 24, pdfData)
+        }
+      } catch (err) {
+        console.error('Failed to add PDF:', err)
+        alert(`Could not add "${pdf.name}". ${err instanceof Error ? err.message : ''}`)
+      }
+    }
+
     // Each dropped folder becomes a sub-tab (folder board) node on the canvas,
     // regardless of drop target (folders are complex structures — always import here).
     for (let i = 0; i < trees.length; i++) {
@@ -584,8 +609,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         data: { boardId: top.id, name: top.name, color: top.color, mode: top.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
       }])
     }
-    if (skipped.length && !files.length && !trees.length) {
-      alert('Only text files are supported for now (binary storage is coming later).')
+    if (skipped.length && !files.length && !trees.length && !pdfs.length) {
+      alert('Only text and PDF files are supported for now.')
     }
   }
 
@@ -634,14 +659,14 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }, [nodes, edges]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function reconcileDb(s: Snapshot) {
-    const elTypeOf = (t?: string) => t === 'shapeNode' ? 'shape' : t === 'drawingNode' ? 'drawing' : t === 'textNode' ? 'text' : t === 'portalNode' ? 'portal' : t === 'claudeNode' ? 'claude' : 'image'
+    const elTypeOf = (t?: string) => t === 'shapeNode' ? 'shape' : t === 'drawingNode' ? 'drawing' : t === 'textNode' ? 'text' : t === 'textFileNode' ? 'textfile' : t === 'pdfNode' ? 'pdf' : t === 'folderLinkNode' ? 'folderlink' : t === 'portalNode' ? 'portal' : t === 'claudeNode' ? 'claude' : 'image'
     const clean = (d: Record<string, unknown>) => Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v !== 'function'))
     const targetEls = s.nodes.filter(n => n.id.startsWith('el-'))
     const targetIds = new Set(targetEls.map(n => n.id.replace('el-', '')))
     // upsert everything in the target snapshot
     for (const n of targetEls) {
       const id = n.id.replace('el-', '')
-      const type = elTypeOf(n.type) as 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'claude'
+      const type = elTypeOf(n.type) as BoardElement['type']
       const sized = type === 'shape' || type === 'portal' || type === 'claude'
       const w = sized ? (Number(n.style?.width) || (n.data.width as number) || null) : null
       const h = sized ? (Number(n.style?.height) || (n.data.height as number) || null) : null
@@ -1110,6 +1135,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (n.type === 'drawingNode') return 'drawing'
     if (n.type === 'textNode') return 'text'
     if (n.type === 'textFileNode') return 'file'
+    if (n.type === 'pdfNode') return 'file'
     if (n.type === 'folderLinkNode') return 'subtab'
     if (n.type === 'imageNode') return 'image'
     if (n.type === 'portalNode') return 'portal'

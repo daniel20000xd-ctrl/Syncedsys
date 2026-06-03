@@ -5,8 +5,8 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink } from 'lucide-react'
-import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab } from '@/app/actions'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, FileType } from 'lucide-react'
+import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab, getPdfUrl } from '@/app/actions'
 import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
@@ -479,6 +479,80 @@ export function TextFileNode({ id, data }: NodeProps) {
           </p>
         </div>
       )}
+      <button
+        className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500 z-10"
+        onClick={() => (data.onDelete as (id: string) => void)(id)}
+      >
+        <X size={11} />
+      </button>
+      <button
+        className="absolute -top-2 right-3 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-gray-600 z-10"
+        title="Hide (unhide from dashboard)"
+        onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
+      >
+        <EyeOff size={11} />
+      </button>
+      <button
+        className="absolute -top-2 -left-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow z-10"
+        style={{ color: expired ? '#ef4444' : '#9ca3af' }}
+        title={data.deadline ? `Expires ${new Date(data.deadline as string).toLocaleDateString()}` : 'Set expiry'}
+        onClick={e => { e.stopPropagation(); (data.onSetExpiry as (id: string) => void)?.(id) }}
+      >
+        <Clock size={11} />
+      </button>
+    </div>
+  )
+}
+
+// ── PDF Node (a file block that opens the stored PDF in a new tab) ────────────
+
+export function PdfNode({ id, data }: NodeProps) {
+  const name = (data.name as string) || 'Document.pdf'
+  const storagePath = data.storagePath as string | undefined
+  const pageCount = data.pageCount as number | undefined
+  const expired = data.deadline ? new Date(data.deadline as string) < new Date() : false
+  const [opening, setOpening] = useState(false)
+
+  async function open() {
+    if (!storagePath || opening) return
+    setOpening(true)
+    // Open a blank tab synchronously (before the await) so popup blockers allow it,
+    // then point it at the freshly-signed URL.
+    const w = window.open('', '_blank')
+    try {
+      const res = await getPdfUrl(storagePath)
+      if (res.ok && res.url && w) w.location.href = res.url
+      else if (w) w.close()
+    } catch {
+      if (w) w.close()
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  return (
+    <div className="relative group">
+      <SideHandles color="!bg-red-400" />
+      <div
+        className="nodrag bg-white rounded-lg shadow border border-gray-200 w-44 select-none cursor-pointer overflow-hidden hover:border-red-300 transition-colors"
+        onDoubleClick={open}
+        title="Double-click to open the PDF in a new tab"
+      >
+        <div className="flex items-center gap-1.5 px-2 py-1.5 bg-red-50 border-b border-red-100">
+          <FileType size={13} className="text-red-500 shrink-0" />
+          <span className="text-[11px] font-medium text-gray-700 truncate">{name}</span>
+        </div>
+        <div className="px-2 py-2 flex items-center justify-between">
+          <span className="text-[10px] text-gray-400">{pageCount ? `${pageCount} page${pageCount === 1 ? '' : 's'}` : 'PDF'}</span>
+          <button
+            onClick={e => { e.stopPropagation(); open() }}
+            disabled={opening || !storagePath}
+            className="flex items-center gap-1 text-[10px] text-red-500 hover:text-red-700 disabled:opacity-40"
+          >
+            <ExternalLink size={11} /> {opening ? 'Opening…' : 'Open'}
+          </button>
+        </div>
+      </div>
       <button
         className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500 z-10"
         onClick={() => (data.onDelete as (id: string) => void)(id)}

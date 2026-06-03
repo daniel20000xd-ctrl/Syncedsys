@@ -3,13 +3,15 @@
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createPortal } from 'react-dom'
-import { Folder, FolderPlus, FileText, ArrowLeft, Trash2, X, Save, Download, ChevronDown } from 'lucide-react'
+import { Folder, FolderPlus, FileText, FileType, ArrowLeft, Trash2, X, Save, Download, ChevronDown } from 'lucide-react'
 import type { Board, BoardElement } from '@/lib/types'
 import {
   createSubTab, deleteBoard, createTextFile, updateTextFile, deleteElement,
   moveElementToBoard, importFolderTree, moveBoardToParent, reorderFolderItems,
+  createElement, getPdfUrl,
 } from '@/app/actions'
 import { collectEntries, readDroppedEntries, downloadTextFile } from '@/lib/files'
+import { uploadPdf, extractPdfText } from '@/lib/pdf'
 import { folderUnitsStore } from '@/lib/folderUnitsStore'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
@@ -330,10 +332,26 @@ export default function FolderBoardView({
     const entries = collectEntries(e.dataTransfer)
     if (!entries && !e.dataTransfer.files?.length) return
     e.preventDefault()
-    const { trees, files: dropped, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
+    const { trees, files: dropped, pdfs, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
     for (const f of dropped) { const el = await createTextFile(board.id, f.name, f.content); setFiles(prev => [...prev, el as BoardElement]) }
+    for (const pdf of pdfs) {
+      try {
+        const [storagePath, { text, pageCount }] = await Promise.all([uploadPdf(pdf), extractPdfText(pdf)])
+        const el = await createElement(board.id, 'pdf', 0, 0, { name: pdf.name, storagePath, text, pageCount })
+        setFiles(prev => [...prev, el as BoardElement])
+      } catch (err) { console.error('Failed to add PDF:', err) }
+    }
     for (const tree of trees) { const top = await importFolderTree(board.id, tree, board.color); setFolders(prev => [...prev, top as Board]) }
-    if (skipped.length && !dropped.length && !trees.length) alert('Only text files are supported for now (binary storage is coming later).')
+    if (skipped.length && !dropped.length && !trees.length && !pdfs.length) alert('Only text and PDF files are supported for now.')
+  }
+
+  async function openPdf(path: string) {
+    const w = window.open('', '_blank')
+    try {
+      const res = await getPdfUrl(path)
+      if (res.ok && res.url && w) w.location.href = res.url
+      else if (w) w.close()
+    } catch { if (w) w.close() }
   }
 
   const isEmpty = folders.length === 0 && files.length === 0
@@ -487,13 +505,15 @@ export default function FolderBoardView({
                 onDragLeave={() => { if (insertAt?.id === file.id) setInsertAt(null) }}
                 onDrop={e => handleTileDrop(e, file.id)}
                 onClick={e => { e.stopPropagation(); toggleSelect(file.id, e.ctrlKey || e.metaKey || e.shiftKey) }}
-                onDoubleClick={() => setEditing(file)}
+                onDoubleClick={() => file.type === 'pdf' ? openPdf(file.data.storagePath as string) : setEditing(file)}
                 className={fileTileClass(file)}
-                title="Double-click to open · drag to reorder · click ⌄ for settings"
+                title={file.type === 'pdf' ? 'Double-click to open the PDF in a new tab' : 'Double-click to open · drag to reorder · click ⌄ for settings'}
               >
-                <FileText size={42} className="text-indigo-400" />
+                {file.type === 'pdf'
+                  ? <FileType size={42} className="text-red-400" />
+                  : <FileText size={42} className="text-indigo-400" />}
                 <span className="text-[11px] text-gray-700 text-center break-words line-clamp-2 leading-tight">
-                  {(file.data.name as string) || 'Untitled.txt'}
+                  {(file.data.name as string) || (file.type === 'pdf' ? 'Document.pdf' : 'Untitled.txt')}
                 </span>
                 <button
                   onClick={e => {

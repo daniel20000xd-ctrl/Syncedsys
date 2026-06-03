@@ -465,11 +465,24 @@ export async function upsertEdge(id: string, boardId: string, source: string, ta
   if (error) throw error
 }
 
+// ── PDFs ─────────────────────────────────────────────────────────────────────
+
+// Mint a short-lived signed URL for a stored PDF so it can be opened in a new
+// tab. RLS on storage.objects ensures a user can only sign their own files.
+export async function getPdfUrl(path: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated' }
+  const { data, error } = await supabase.storage.from('pdfs').createSignedUrl(path, 3600)
+  if (error || !data) return { ok: false, error: error?.message ?? 'Could not open PDF.' }
+  return { ok: true, url: data.signedUrl }
+}
+
 // ── Free mode: elements (shapes, images, drawings) ───────────────────────────
 
 export async function createElement(
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number, height?: number
@@ -739,7 +752,7 @@ export async function ensureMirrorPortal(targetBoardId: string, backBoardId: str
 export async function upsertElement(
   id: string,
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number | null, height?: number | null

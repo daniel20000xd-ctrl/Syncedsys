@@ -38,6 +38,11 @@ export function isTextFile(file: File): boolean {
 
 export type DroppedTextFile = { name: string; content: string }
 
+function isPdf(file: File): boolean {
+  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+}
+const MAX_PDF_BYTES = 25_000_000
+
 // A folder tree read from a drop: a folder with its text files and sub-folders.
 export type ImportNode = { name: string; files: DroppedTextFile[]; dirs: ImportNode[] }
 
@@ -90,34 +95,41 @@ async function entryToTree(dir: FileSystemDirectoryEntry, skipped: string[]): Pr
 export async function readDroppedEntries(
   entries: FileSystemEntry[] | null,
   fallbackFiles: FileList | File[] | null,
-): Promise<{ trees: ImportNode[]; files: DroppedTextFile[]; skipped: string[] }> {
+): Promise<{ trees: ImportNode[]; files: DroppedTextFile[]; pdfs: File[]; skipped: string[] }> {
   if (!entries) {
-    const { accepted, skipped } = await readDroppedTextFiles(fallbackFiles ?? [])
-    return { trees: [], files: accepted, skipped }
+    const { accepted, pdfs, skipped } = await readDroppedTextFiles(fallbackFiles ?? [])
+    return { trees: [], files: accepted, pdfs, skipped }
   }
   const trees: ImportNode[] = []
   const files: DroppedTextFile[] = []
+  const pdfs: File[] = []
   const skipped: string[] = []
   for (const entry of entries) {
     if (entry.isDirectory) {
       trees.push(await entryToTree(entry as FileSystemDirectoryEntry, skipped))
     } else if (entry.isFile) {
       const file = await getFile(entry as FileSystemFileEntry)
-      if (isTextFile(file) && file.size <= MAX_BYTES) files.push({ name: file.name, content: await file.text() })
+      if (isPdf(file) && file.size <= MAX_PDF_BYTES) pdfs.push(file)
+      else if (isTextFile(file) && file.size <= MAX_BYTES) files.push({ name: file.name, content: await file.text() })
       else skipped.push(file.name)
     }
   }
-  return { trees, files, skipped }
+  return { trees, files, pdfs, skipped }
 }
 
 // Reads the text files out of a drop, skipping binaries and oversized files.
 // Returns the successfully-read files plus the names that were skipped.
 export async function readDroppedTextFiles(
   files: FileList | File[],
-): Promise<{ accepted: DroppedTextFile[]; skipped: string[] }> {
+): Promise<{ accepted: DroppedTextFile[]; pdfs: File[]; skipped: string[] }> {
   const accepted: DroppedTextFile[] = []
+  const pdfs: File[] = []
   const skipped: string[] = []
   for (const file of Array.from(files)) {
+    if (isPdf(file) && file.size <= MAX_PDF_BYTES) {
+      pdfs.push(file)
+      continue
+    }
     if (!isTextFile(file) || file.size > MAX_BYTES) {
       skipped.push(file.name)
       continue
@@ -128,5 +140,5 @@ export async function readDroppedTextFiles(
       skipped.push(file.name)
     }
   }
-  return { accepted, skipped }
+  return { accepted, pdfs, skipped }
 }

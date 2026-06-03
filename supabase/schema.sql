@@ -252,3 +252,20 @@ create index on cards(list_id);
 -- alter table user_secrets enable row level security;
 -- create policy "users manage their own secrets" on user_secrets for all
 --   using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ── PDF storage ───────────────────────────────────────────────────────────────
+-- PDFs are stored as binaries in a private Storage bucket "pdfs". Each user's
+-- files live under a folder named with their auth uid, and RLS on
+-- storage.objects ensures a user can only upload/read/delete their own.
+-- Run this block once in the Supabase SQL editor on the live project:
+--
+-- insert into storage.buckets (id, name, public)
+--   values ('pdfs', 'pdfs', false)
+--   on conflict (id) do nothing;
+--
+-- create policy "pdf insert own" on storage.objects for insert to authenticated
+--   with check (bucket_id = 'pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
+-- create policy "pdf select own" on storage.objects for select to authenticated
+--   using (bucket_id = 'pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
+-- create policy "pdf delete own" on storage.objects for delete to authenticated
+--   using (bucket_id = 'pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
