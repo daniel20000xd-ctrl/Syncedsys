@@ -143,7 +143,19 @@ async function renderContext(
         label = `pdf "${d.name ?? 'document'}" (${d.pageCount ?? '?'} pages)` +
           (excerpt.trim() ? `:\n${indent}      text: ${JSON.stringify(excerpt)}` : ' (no extractable text)')
       }
-      else if (e.type === 'portal') label = `portal → ${d.targetBoardId ?? '(unset)'}`
+      else if (e.type === 'portal') {
+        if (d.viewer_context) {
+          // Viewer portal: include the full live data block so Claude has zero info loss
+          lines.push(`${indent}    element[${e.id}]: viewer-portal (${d.viewerKind ?? 'unknown'})`)
+          lines.push(`${indent}    ---BEGIN VIEWER DATA---`)
+          for (const vline of String(d.viewer_context).split('\n')) {
+            lines.push(`${indent}    ${vline}`)
+          }
+          lines.push(`${indent}    ---END VIEWER DATA---`)
+          continue
+        }
+        label = `portal → ${d.targetBoardId ?? '(unset)'}`
+      }
       else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
       lines.push(`${indent}    element[${e.id}]: ${label}`)
     }

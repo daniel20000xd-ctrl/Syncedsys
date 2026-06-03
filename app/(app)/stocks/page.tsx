@@ -7,14 +7,7 @@ export default async function StocksPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: secrets } = await supabase
-    .from('user_secrets')
-    .select('stocks_enabled')
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  // If the feature has not been enabled, send to the toggle page
-  if (!(secrets as { stocks_enabled?: boolean } | null)?.stocks_enabled) {
+  if (!user.user_metadata?.stocks_enabled) {
     redirect('/settings/connected-apps')
   }
 

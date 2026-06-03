@@ -1003,7 +1003,19 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   function navOut() { if (openFile) { setOpenFile(null); return } setStack(prev => prev.slice(0, -1)) }
 
   function persist(patch: Record<string, unknown>) {
-    const next = { targetBoardId, home, vx: pan.x, vy: pan.y, zoom, width: data.width, height: data.height, ...patch }
+    // Always carry forward viewer fields and the Claude context blob so they
+    // aren't lost on unrelated persists (pan/zoom/resize).
+    const next = {
+      targetBoardId, home,
+      vx: pan.x, vy: pan.y, zoom,
+      width: data.width, height: data.height,
+      locked: data.locked,
+      fitted: data.fitted,
+      ...(viewerKind   ? { viewerKind }   : {}),
+      ...(Object.keys(viewerConfig).length ? { viewerConfig } : {}),
+      ...(data.viewer_context != null ? { viewer_context: data.viewer_context } : {}),
+      ...patch,
+    }
     updateNodeData(id, next)
     onSave?.(id, next, data.width as number | undefined, data.height as number | undefined)
   }
@@ -1254,6 +1266,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           <StockPortal
             config={viewerConfig}
             onPersistConfig={cfg => persist({ viewerKind: 'stocks', viewerConfig: cfg })}
+            onUpdateContext={ctx => persist({ viewer_context: ctx })}
           />
         )}
 

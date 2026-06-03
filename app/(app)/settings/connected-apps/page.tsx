@@ -7,13 +7,7 @@ export default async function ConnectedAppsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: secrets } = await supabase
-    .from('user_secrets')
-    .select('stocks_enabled')
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  const stocksEnabled = !!(secrets as { stocks_enabled?: boolean } | null)?.stocks_enabled
+  const stocksEnabled = !!(user.user_metadata?.stocks_enabled as boolean | undefined)
 
   return (
     <div className="p-8 bg-gray-100 min-h-screen">

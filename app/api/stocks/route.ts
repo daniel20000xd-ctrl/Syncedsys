@@ -105,19 +105,23 @@ export async function GET(req: NextRequest) {
   const ticker = rawTicker.toUpperCase().trim()
   const admin  = createAdminClient()
 
-  // ── Cache check ─────────────────────────────────────────────────────────────
-  const { data: cached } = await admin
-    .from('stock_cache')
-    .select('data, fetched_at')
-    .eq('ticker', ticker)
-    .eq('interval', interval)
-    .maybeSingle()
+  // ── Cache check (gracefully skipped if stock_cache table doesn't exist yet) ──
+  try {
+    const { data: cached } = await admin
+      .from('stock_cache')
+      .select('data, fetched_at')
+      .eq('ticker', ticker)
+      .eq('interval', interval)
+      .maybeSingle()
 
-  if (cached?.fetched_at) {
-    const ageMs = Date.now() - new Date(cached.fetched_at as string).getTime()
-    if (ageMs < 6 * 60 * 60 * 1000) {
-      return NextResponse.json(cached.data)
+    if (cached?.fetched_at) {
+      const ageMs = Date.now() - new Date(cached.fetched_at as string).getTime()
+      if (ageMs < 6 * 60 * 60 * 1000) {
+        return NextResponse.json(cached.data)
+      }
     }
+  } catch {
+    // stock_cache table not yet created — fetch fresh data below
   }
 
   // ── Fetch fresh data ─────────────────────────────────────────────────────────
@@ -277,11 +281,13 @@ export async function GET(req: NextRequest) {
       news: newsItems,
     }
 
-    // Cache result
-    await admin.from('stock_cache').upsert(
-      { ticker, interval, data: result, fetched_at: new Date().toISOString() },
-      { onConflict: 'ticker,interval' }
-    )
+    // Cache result (skip if stock_cache table doesn't exist yet)
+    try {
+      await admin.from('stock_cache').upsert(
+        { ticker, interval, data: result, fetched_at: new Date().toISOString() },
+        { onConflict: 'ticker,interval' }
+      )
+    } catch { /* cache table not yet created */ }
 
     return NextResponse.json(result)
 
