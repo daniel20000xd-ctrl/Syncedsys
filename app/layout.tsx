@@ -2,7 +2,10 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Syncedsys',
+  title: {
+    default: 'Syncedsys',
+    template: 'Syncedsys - %s',
+  },
   description: 'Trello-style kanban board',
 }
 

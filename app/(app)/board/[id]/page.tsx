@@ -1,9 +1,36 @@
 import { notFound } from 'next/navigation'
 import dynamic from 'next/dynamic'
+import type { Metadata } from 'next'
 import { createClient } from '@/lib/supabase/server'
 import type { Board, List, Card, BoardElement, BoardEdge } from '@/lib/types'
 import { resetDueRecurringCards } from '@/lib/recur'
 import { isClaudeEnabled } from '@/lib/mcp'
+
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params
+  const supabase = await createClient()
+
+  const { data: board } = await supabase
+    .from('boards')
+    .select('id, name, parent_id')
+    .eq('id', id)
+    .single()
+
+  if (!board) return {}
+
+  let root = board
+  while (root.parent_id) {
+    const { data: parent } = await supabase
+      .from('boards')
+      .select('id, name, parent_id')
+      .eq('id', root.parent_id)
+      .single()
+    if (!parent) break
+    root = parent
+  }
+
+  return { title: root.name }
+}
 
 // Code-split each board view so a tab only ships the JS for its own mode —
 // notably, the heavy React Flow canvas bundle loads only for classic boards.
