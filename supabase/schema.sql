@@ -228,6 +228,7 @@ create index on cards(list_id);
 -- alter table board_edges add column if not exists data jsonb not null default '{}';
 -- alter table boards add column if not exists synced boolean not null default false;
 -- alter table boards add column if not exists meta text;
+-- (snapshots + claude_actions tables: run the create table + policy blocks from the MCP audit section above)
 -- (device_links table: run the create table + policy block above on existing DBs)
 -- alter table cards add column if not exists done boolean not null default false;
 -- alter table lists add column if not exists is_widget boolean not null default false;
@@ -270,6 +271,38 @@ create index on cards(list_id);
 --   using (bucket_id = 'pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
 -- create policy "pdf delete own" on storage.objects for delete to authenticated
 --   using (bucket_id = 'pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ── MCP audit log ────────────────────────────────────────────────────────────
+-- Captures a before-snapshot of any entity before an MCP write tool mutates it,
+-- enabling undo and diff display in future tooling.
+create table if not exists snapshots (
+  id          uuid        primary key default gen_random_uuid(),
+  user_id     uuid        not null references auth.users(id) on delete cascade,
+  entity_type text        not null,  -- 'board' | 'list' | 'card' | 'element' | 'edge'
+  entity_id   text        not null,
+  data        jsonb       not null,
+  created_at  timestamptz not null default now()
+);
+alter table snapshots enable row level security;
+create policy "users manage their own snapshots" on snapshots for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create index if not exists snapshots_user_idx     on snapshots(user_id);
+create index if not exists snapshots_entity_idx   on snapshots(entity_type, entity_id);
+
+-- Append-only log of every MCP write tool invocation.
+create table if not exists claude_actions (
+  id           uuid        primary key default gen_random_uuid(),
+  user_id      uuid        not null references auth.users(id) on delete cascade,
+  tool         text        not null,
+  params       jsonb       not null default '{}',
+  affected_ids text[]      not null default '{}',
+  created_at   timestamptz not null default now()
+);
+alter table claude_actions enable row level security;
+create policy "users manage their own actions" on claude_actions for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+create index if not exists claude_actions_user_idx on claude_actions(user_id);
+create index if not exists claude_actions_tool_idx on claude_actions(tool);
 
 -- ── Stock Viewer ──────────────────────────────────────────────────────────────
 -- 1. Add stocks_enabled flag to user_secrets (run once):
