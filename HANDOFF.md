@@ -128,7 +128,6 @@ create policy "auth write stock cache" on stock_cache for all using (auth.uid() 
 - **Grouping & layer order need NO migration** — both are localStorage (`groupmap-<id>`, `zmap-<id>`).
 
 ## Known gaps / next tasks
-- **iOS app** itself isn't built — only the pairing/sync API + UI exist.
 - **Avanza is unofficial** — endpoints can change without notice; the module degrades to null safely, but Swedish supplemental data could silently stop. Börsdata (paid now) would be the robust replacement.
 - **Stock data currency**: market cap / EPS etc. for `.ST` tickers are SEK but the full-page UI prefixes `$` on the generic stat cards (the dedicated "Nordic Data (Avanza)" section labels SEK correctly). Not currency-aware globally.
 - **Grouping resize for list/card/sub-tab children**: their position follows but their `data.scale` is view-only on reload (no DB column for non-element scale) — same long-standing limitation as standalone hold+scroll scaling.

@@ -240,7 +240,7 @@ export async function renameBoard(boardId: string, name: string) {
   revalidatePath('/', 'layout')
 }
 
-export async function updateBoard(boardId: string, updates: { name?: string; color?: string; deadline?: string | null; mode?: string }) {
+export async function updateBoard(boardId: string, updates: { name?: string; color?: string; deadline?: string | null; mode?: string; meta?: string | null }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')

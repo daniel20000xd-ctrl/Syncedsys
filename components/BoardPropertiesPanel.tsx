@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone } from 'lucide-react'
+import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone, Sparkles } from 'lucide-react'
 import type { Board } from '@/lib/types'
 import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced } from '@/app/actions'
 
@@ -32,6 +32,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   const [saving, setSaving] = useState(false)
   // synced=true means included in iOS sync (default); false means excluded
   const [synced, setSynced] = useState(board.synced ?? true)
+  const [meta, setMeta] = useState(board.meta ?? '')
   // Text and spreadsheet tabs are specialised dead-ends — locked after creation.
   const currentMode = board.mode ?? 'classic'
   const textLocked = currentMode === 'text' || currentMode === 'spreadsheet'
@@ -50,6 +51,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
       warnings.push('Shapes, drawings, connections and sub-tabs stay saved but are hidden until you switch back to Classic.')
     }
   }
+  const [suggesting, setSuggesting] = useState(false)
   const [subTabCreating, setSubTabCreating] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
@@ -77,6 +79,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
         color,
         deadline: hasDeadline && deadline ? new Date(deadline).toISOString() : null,
         mode,
+        meta: meta.trim() || null,
       })
       // Trello → Classic: spread cards/lists into a grid instead of piling at (0,0).
       if (modeChanged && board.mode === 'trello' && mode === 'classic') {
@@ -91,6 +94,26 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
       console.error('Failed to save board:', err)
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handleSuggest() {
+    if (suggesting) return
+    setSuggesting(true)
+    try {
+      const res = await fetch('/api/boards/suggest-meta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim() || board.name, mode }),
+      })
+      if (res.ok) {
+        const { suggestion } = await res.json()
+        if (suggestion) setMeta(suggestion.slice(0, 150))
+      }
+    } catch (err) {
+      console.error('Suggest failed:', err)
+    } finally {
+      setSuggesting(false)
     }
   }
 
@@ -185,6 +208,26 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
           </ul>
         </div>
       )}
+
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-xs text-gray-600">Board description (for AI)</label>
+        <button
+          type="button"
+          onClick={handleSuggest}
+          disabled={suggesting}
+          className="flex items-center gap-1 text-[10px] text-purple-600 hover:text-purple-800 disabled:opacity-50"
+        >
+          <Sparkles size={10} />
+          {suggesting ? 'Thinking…' : 'Suggest'}
+        </button>
+      </div>
+      <input
+        value={meta}
+        onChange={e => setMeta(e.target.value.slice(0, 150))}
+        placeholder="e.g. Q3 marketing tasks"
+        className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm mb-1 focus:outline-none focus:border-blue-500"
+      />
+      <p className="text-[10px] text-gray-400 mb-3 text-right">{meta.length}/150</p>
 
       {/* iOS sync toggle */}
       <label className="flex items-center justify-between gap-2 mb-3 cursor-pointer select-none">

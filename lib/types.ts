@@ -13,6 +13,7 @@ export type Board = {
   free_x: number
   free_y: number
   synced: boolean
+  meta: string | null
   created_at: string
 }
 
