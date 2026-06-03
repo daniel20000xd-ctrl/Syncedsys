@@ -1729,9 +1729,23 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   return (
     <div
+      className="relative flex-1 h-full overflow-hidden"
+      style={{
+        backgroundImage: "url('/henning-witzel-ukvgqriuOgo-unsplash.jpg')",
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundColor: '#0d1117',
+      }}
+    >
+    <div
       ref={wrapperRef}
-      className="relative flex-1 h-full"
-      style={{ backgroundColor: board.color }}
+      className="absolute overflow-hidden"
+      style={{
+        inset: 20,
+        borderRadius: 14,
+        boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3)',
+        backgroundColor: board.color,
+      }}
       onMouseUp={handleWrapperMouseUp}
       onDragEnter={onCanvasDragEnter}
       onDragOver={onCanvasDragOver}
@@ -2069,6 +2083,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           />
         )
       })()}
+    </div>
     </div>
   )
 }
