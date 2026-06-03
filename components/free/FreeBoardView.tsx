@@ -5,7 +5,7 @@ import {
   ReactFlow, Background, Controls, BackgroundVariant,
   useNodesState, useEdgesState, addEdge, ReactFlowProvider,
   useReactFlow, ConnectionMode, type Connection, type Node, type Edge,
-  type NodeTypes, type EdgeTypes,
+  type NodeTypes, type EdgeTypes, type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
@@ -207,6 +207,87 @@ function buildEdges(
   return [...autoEdges, ...manualEdges]
 }
 
+// ── Alignment-guide + grouping helpers (pure, module-level) ───────────────────
+
+// Fallback dimensions when a node hasn't been measured yet.
+const DEFAULT_W: Record<string, number> = { listNode: 208, cardNode: 176, shapeNode: 120, portalNode: 320, claudeNode: 340, subTabNode: 176, textNode: 120, textFileNode: 176, pdfNode: 176, folderLinkNode: 160, imageNode: 200, drawingNode: 80 }
+const DEFAULT_H: Record<string, number> = { listNode: 60, cardNode: 50, shapeNode: 80, portalNode: 220, claudeNode: 420, subTabNode: 96, textNode: 40, textFileNode: 90, pdfNode: 70, folderLinkNode: 80, imageNode: 150, drawingNode: 80 }
+
+function getNodeWH(n: Node): [number, number] {
+  const sw = typeof n.style?.width === 'number' ? (n.style.width as number) : undefined
+  const sh = typeof n.style?.height === 'number' ? (n.style.height as number) : undefined
+  const w = n.measured?.width ?? sw ?? DEFAULT_W[n.type ?? ''] ?? 120
+  const h = n.measured?.height ?? sh ?? DEFAULT_H[n.type ?? ''] ?? 60
+  return [w, h]
+}
+
+const GUIDE_SNAP = 5 // flow-space px within which the dragged node snaps to an alignment
+
+// Compute the closest alignment for a dragged node against every other node.
+// Returns the snapped X/Y (if within threshold) and the guide-line coords to draw.
+function computeGuides(
+  draggedId: string,
+  pos: { x: number; y: number },
+  all: Node[],
+  exclude?: Set<string>,
+): { snapX?: number; snapY?: number; vLine: number | null; hLine: number | null } {
+  const dn = all.find(n => n.id === draggedId)
+  if (!dn) return { vLine: null, hLine: null }
+  const [dw, dh] = getNodeWH(dn)
+  const aL = pos.x, aR = pos.x + dw, aCx = pos.x + dw / 2
+  const aT = pos.y, aB = pos.y + dh, aCy = pos.y + dh / 2
+  let snapX: number | undefined, snapY: number | undefined
+  let vLine: number | null = null, hLine: number | null = null
+  let bestX = GUIDE_SNAP, bestY = GUIDE_SNAP
+  for (const o of all) {
+    if (o.id === draggedId || o.hidden) continue
+    if (exclude?.has(o.id)) continue
+    const [ow, oh] = getNodeWH(o)
+    const bL = o.position.x, bR = o.position.x + ow, bCx = o.position.x + ow / 2
+    const bT = o.position.y, bB = o.position.y + oh, bCy = o.position.y + oh / 2
+    // [draggedAnchor, otherAnchor, candidate-x-so-anchors-align]
+    const xs: Array<[number, number, number]> = [
+      [aL, bL, bL], [aR, bR, bR - dw], [aCx, bCx, bCx - dw / 2],
+      [aL, bR, bR], [aR, bL, bL - dw],
+      [aCx, bL, bL - dw / 2], [aCx, bR, bR - dw / 2],
+      [aL, bCx, bCx], [aR, bCx, bCx - dw],
+    ]
+    for (const [av, bv, cand] of xs) {
+      const d = Math.abs(av - bv)
+      if (d < bestX) { bestX = d; snapX = cand; vLine = bv }
+    }
+    const ys: Array<[number, number, number]> = [
+      [aT, bT, bT], [aB, bB, bB - dh], [aCy, bCy, bCy - dh / 2],
+      [aT, bB, bB], [aB, bT, bT - dh],
+      [aCy, bT, bT - dh / 2], [aCy, bB, bB - dh / 2],
+      [aT, bCy, bCy], [aB, bCy, bCy - dh],
+    ]
+    for (const [av, bv, cand] of ys) {
+      const d = Math.abs(av - bv)
+      if (d < bestY) { bestY = d; snapY = cand; hLine = bv }
+    }
+  }
+  return { snapX, snapY, vLine, hLine }
+}
+
+// All nodes contained (directly or transitively) by `rootId` via data.parentId.
+function descendantsOf(rootId: string, all: Node[]): Set<string> {
+  const childrenByParent = new Map<string, string[]>()
+  for (const n of all) {
+    const p = (n.data as { parentId?: string }).parentId
+    if (p) { const a = childrenByParent.get(p) ?? []; a.push(n.id); childrenByParent.set(p, a) }
+  }
+  const out = new Set<string>()
+  const stack = [rootId]
+  while (stack.length) {
+    const cur = stack.pop() as string
+    for (const c of childrenByParent.get(cur) ?? []) {
+      if (!out.has(c)) { out.add(c); stack.push(c) }
+    }
+  }
+  return out
+}
+
 interface Props {
   board: Board
   initialLists: List[]
@@ -232,6 +313,15 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [expiryPanel, setExpiryPanel] = useState<string | null>(null) // nodeId of element being given a deadline
   // Position where the user asked to add a sub-tab — shown while the mode picker is open
   const [subtabPickPos, setSubtabPickPos] = useState<{ x: number; y: number } | null>(null)
+
+  // Alignment guides shown while dragging (flow coords). helperRef avoids re-render churn.
+  const [helperLines, setHelperLines] = useState<{ v: number | null; h: number | null }>({ v: null, h: null })
+  const helperRef = useRef<{ v: number | null; h: number | null }>({ v: null, h: null })
+  // Grouping: the shape currently highlighted as a drop container under the dragged node.
+  const [groupHoverId, setGroupHoverId] = useState<string | null>(null)
+  const groupHoverRef = useRef<string | null>(null)
+  // Live drag tracking so a container's descendants move along with it.
+  const groupDragRef = useRef<{ id: string; lastX: number; lastY: number; descIds: Set<string> } | null>(null)
 
   // Drawing state
   const drawingRef = useRef<{ points: { x: number; y: number }[] } | null>(null)
@@ -387,7 +477,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setSubPanel(prev => prev?.boardId === boardId ? null : { boardId, rect })
   }
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(
+  const [nodes, setNodes, onNodesChangeRaw] = useNodesState(
     buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel, toggleCardDone, openExpiryPanel, (id) => hideUnit(id, true), (id) => decoupleFolderLink(id))
   )
   const removeEdgeRef = useRef<(id: string) => void>(() => {})
@@ -436,6 +526,92 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const edgesRef = useRef(edges)
   useEffect(() => { nodesRef.current = nodes }, [nodes])
   useEffect(() => { edgesRef.current = edges }, [edges])
+
+  // ── Alignment guides + grouping ─────────────────────────────────────────────
+
+  // Persist the child→parent grouping map to localStorage. Works for every node
+  // type with no schema change (mirrors how z-order is persisted via zmap).
+  const persistGroupMap = useCallback(() => {
+    try {
+      const map: Record<string, string> = {}
+      for (const n of nodesRef.current) {
+        const p = (n.data as { parentId?: string }).parentId
+        if (p) map[n.id] = p
+      }
+      localStorage.setItem(`groupmap-${board.id}`, JSON.stringify(map))
+    } catch {}
+  }, [board.id])
+
+  // Persist a node's position only (after a group move).
+  const persistPos = useCallback((n: Node) => {
+    const { x, y } = n.position
+    if (n.id.startsWith('list-')) updateListPosition(n.id.replace('list-', ''), x, y)
+    else if (n.id.startsWith('card-')) updateCardPosition(n.id.replace('card-', ''), x, y)
+    else if (n.id.startsWith('sub-')) updateBoardFreePosition(n.id.replace('sub-', ''), x, y)
+    else if (n.id.startsWith('el-')) updateElement(n.id.replace('el-', ''), { x, y })
+  }, [])
+
+  // Persist a node's position + size/scale (after a group resize). Element children
+  // persist fully; lists/cards/sub-tabs persist position (their scale is view-only).
+  const persistNodeFull = useCallback((n: Node) => {
+    if (n.id.startsWith('el-')) {
+      const sized = n.type === 'shapeNode' || n.type === 'portalNode' || n.type === 'claudeNode'
+      const w = sized ? (Number(n.style?.width) || (n.data.width as number) || undefined) : undefined
+      const h = sized ? (Number(n.style?.height) || (n.data.height as number) || undefined) : undefined
+      saveElement(n.id, n.data, w, h)
+    }
+    persistPos(n)
+  }, [persistPos, saveElement])
+
+  // Wrapped onNodesChange: snaps a single dragged node to alignment guides, surfaces
+  // the active guide lines, then defers to React Flow's default handler.
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    let v: number | null = null
+    let h: number | null = null
+    if (changes.length === 1) {
+      const ch = changes[0] as { id?: string; type?: string; dragging?: boolean; position?: { x: number; y: number } }
+      if (ch.type === 'position' && ch.dragging && ch.position && ch.id) {
+        const g = computeGuides(ch.id, ch.position, nodesRef.current, groupDragRef.current?.descIds)
+        if (g.snapX != null) { ch.position.x = g.snapX; v = g.vLine }
+        if (g.snapY != null) { ch.position.y = g.snapY; h = g.hLine }
+      }
+    }
+    if (helperRef.current.v !== v || helperRef.current.h !== h) {
+      helperRef.current = { v, h }
+      setHelperLines({ v, h })
+    }
+    onNodesChangeRaw(changes)
+  }, [onNodesChangeRaw])
+
+  // Capture descendants of the node about to be dragged so we can move them with it.
+  const onNodeDragStart = useCallback((_e: unknown, node: Node) => {
+    groupDragRef.current = { id: node.id, lastX: node.position.x, lastY: node.position.y, descIds: descendantsOf(node.id, nodesRef.current) }
+  }, [])
+
+  // While dragging a container, translate descendants by the same delta; also
+  // highlight the shape the node would drop into.
+  const onNodeDrag = useCallback((_e: unknown, node: Node) => {
+    const g = groupDragRef.current
+    if (g && g.id === node.id && g.descIds.size > 0) {
+      const dx = node.position.x - g.lastX
+      const dy = node.position.y - g.lastY
+      if (dx !== 0 || dy !== 0) {
+        g.lastX = node.position.x; g.lastY = node.position.y
+        setNodes(prev => prev.map(n => (g.descIds.has(n.id) && !n.selected)
+          ? { ...n, position: { x: n.position.x + dx, y: n.position.y + dy } }
+          : n))
+      }
+    }
+    let hover: string | null = null
+    let bestArea = Infinity
+    for (const c of getIntersectingNodes(node)) {
+      if (c.type !== 'shapeNode' || c.id === node.id || g?.descIds.has(c.id)) continue
+      const [w, h] = getNodeWH(c)
+      const area = w * h
+      if (area < bestArea) { bestArea = area; hover = c.id }
+    }
+    if (groupHoverRef.current !== hover) { groupHoverRef.current = hover; setGroupHoverId(hover) }
+  }, [setNodes, getIntersectingNodes])
 
   // ── Create a free-mode element (client-controlled id so undo can restore it) ──
   function addElement(
@@ -725,7 +901,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     lastSnapRef.current = s
     lastSigRef.current = sigOf(s.nodes, s.edges)
     reconcileDb(s)
-    setTimeout(() => { restoringRef.current = false }, 0)
+    // Keep the grouping map in sync with the restored node state.
+    setTimeout(() => { persistGroupMap(); restoringRef.current = false }, 0)
   }
 
   function undo() {
@@ -772,19 +949,41 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       e.preventDefault()
       e.stopPropagation()
       const factor = e.deltaY > 0 ? 0.9 : 1.1
-      setNodesRef.current!(prev => prev.map(n => {
-        if (n.id !== heldNodeRef.current) return n
-        if (n.type === 'shapeNode' || n.type === 'portalNode') {
-          // Resize the box itself; inner content scales with it
-          const curW = Number(n.style?.width) || n.measured?.width || (n.data.width as number) || 120
-          const curH = Number(n.style?.height) || n.measured?.height || (n.data.height as number) || 80
-          const w = Math.max(30, Math.min(4000, curW * factor))
-          const h = Math.max(20, Math.min(4000, curH * factor))
-          return { ...n, style: { ...n.style, width: w, height: h }, data: { ...n.data, width: w, height: h } }
-        }
-        const curr = (n.data.scale as number) ?? 1
-        return { ...n, data: { ...n.data, scale: Math.max(0.2, Math.min(5, curr * factor)) } }
-      }))
+      setNodesRef.current!(prev => {
+        const held = prev.find(x => x.id === heldNodeRef.current)
+        if (!held) return prev
+        // Only boxes carry descendants; scale + reposition them around the box origin.
+        const isBox = held.type === 'shapeNode' || held.type === 'portalNode'
+        const descIds = isBox ? descendantsOf(held.id, prev) : new Set<string>()
+        const ox = held.position.x, oy = held.position.y
+        return prev.map(n => {
+          if (n.id === heldNodeRef.current) {
+            if (n.type === 'shapeNode' || n.type === 'portalNode') {
+              // Resize the box itself; inner content scales with it
+              const curW = Number(n.style?.width) || n.measured?.width || (n.data.width as number) || 120
+              const curH = Number(n.style?.height) || n.measured?.height || (n.data.height as number) || 80
+              const w = Math.max(30, Math.min(4000, curW * factor))
+              const h = Math.max(20, Math.min(4000, curH * factor))
+              return { ...n, style: { ...n.style, width: w, height: h }, data: { ...n.data, width: w, height: h } }
+            }
+            const curr = (n.data.scale as number) ?? 1
+            return { ...n, data: { ...n.data, scale: Math.max(0.2, Math.min(5, curr * factor)) } }
+          }
+          if (descIds.has(n.id)) {
+            const nx = ox + (n.position.x - ox) * factor
+            const ny = oy + (n.position.y - oy) * factor
+            if (n.type === 'shapeNode' || n.type === 'portalNode' || n.type === 'claudeNode') {
+              const cw = Number(n.style?.width) || n.measured?.width || (n.data.width as number) || 120
+              const chh = Number(n.style?.height) || n.measured?.height || (n.data.height as number) || 80
+              const w = Math.max(20, cw * factor), h = Math.max(20, chh * factor)
+              return { ...n, position: { x: nx, y: ny }, style: { ...n.style, width: w, height: h }, data: { ...n.data, width: w, height: h } }
+            }
+            const sc = (n.data.scale as number) ?? 1
+            return { ...n, position: { x: nx, y: ny }, data: { ...n.data, scale: Math.max(0.1, Math.min(8, sc * factor)) } }
+          }
+          return n
+        })
+      })
     }
     el.addEventListener('wheel', handleWheel, { passive: false, capture: true })
     return () => el.removeEventListener('wheel', handleWheel, { capture: true } as EventListenerOptions)
@@ -829,18 +1028,28 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (!heldNodeRef.current) return
     const heldId = heldNodeRef.current
     heldNodeRef.current = null
-    if (!heldId.startsWith('el-')) return
-    const rawId = heldId.replace('el-', '')
-    const node = nodes.find(n => n.id === heldId)
+    const node = nodesRef.current.find(n => n.id === heldId)
     if (!node) return
-    if (node.type === 'shapeNode' || node.type === 'portalNode') {
-      // Persist the new size (shape text / portal content scale with it)
-      const w = Number(node.style?.width) || node.measured?.width || (node.data.width as number) || 120
-      const h = Number(node.style?.height) || node.measured?.height || (node.data.height as number) || 80
-      saveElement(heldId, { ...node.data, width: w, height: h }, w, h)
-    } else {
-      const el = elementsRef.current.find(e => e.id === rawId)
-      if (el) updateElement(rawId, { data: { ...el.data, scale: (node.data.scale as number) ?? 1 } })
+    if (heldId.startsWith('el-')) {
+      const rawId = heldId.replace('el-', '')
+      if (node.type === 'shapeNode' || node.type === 'portalNode') {
+        // Persist the new size (shape text / portal content scale with it)
+        const w = Number(node.style?.width) || node.measured?.width || (node.data.width as number) || 120
+        const h = Number(node.style?.height) || node.measured?.height || (node.data.height as number) || 80
+        saveElement(heldId, { ...node.data, width: w, height: h }, w, h)
+      } else {
+        const el = elementsRef.current.find(e => e.id === rawId)
+        if (el) updateElement(rawId, { data: { ...el.data, scale: (node.data.scale as number) ?? 1 } })
+      }
+    }
+    // If a container was resized, persist every descendant that scaled with it.
+    const descIds = descendantsOf(heldId, nodesRef.current)
+    if (descIds.size > 0) {
+      for (const id of descIds) {
+        const dn = nodesRef.current.find(n => n.id === id)
+        if (dn) persistNodeFull(dn)
+      }
+      scheduleRefresh()
     }
   }
 
@@ -871,6 +1080,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }, [])
 
   const onNodeDragStop = useCallback((_: unknown, node: Node) => {
+    // Clear transient drag overlays.
+    if (groupHoverRef.current !== null) { groupHoverRef.current = null; setGroupHoverId(null) }
+    if (helperRef.current.v !== null || helperRef.current.h !== null) { helperRef.current = { v: null, h: null }; setHelperLines({ v: null, h: null }) }
+    const g = groupDragRef.current
+    groupDragRef.current = null
+
     // Drop a file block onto a folder/sub-tab node → move it into that board.
     if (node.type === 'textFileNode') {
       const target = getIntersectingNodes(node).find(n => n.id.startsWith('sub-'))
@@ -883,15 +1098,47 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         return
       }
     }
-    const { x, y } = node.position
-    if (node.id.startsWith('list-')) updateListPosition(node.id.replace('list-', ''), x, y)
-    else if (node.id.startsWith('card-')) updateCardPosition(node.id.replace('card-', ''), x, y)
-    else if (node.id.startsWith('el-')) updateElement(node.id.replace('el-', ''), { x, y })
-    else if (node.id.startsWith('sub-')) updateBoardFreePosition(node.id.replace('sub-', ''), x, y)
-    // Bust the router cache so the updated position is visible on next visit.
+
+    // ── Grouping: did the node land inside a shape container? ──
+    const desc = g?.descIds ?? new Set<string>()
+    let container: string | null = null
+    let bestArea = Infinity
+    for (const c of getIntersectingNodes(node)) {
+      if (c.type !== 'shapeNode' || c.id === node.id || desc.has(c.id)) continue
+      const [w, h] = getNodeWH(c)
+      const area = w * h
+      if (area < bestArea) { bestArea = area; container = c.id }
+    }
+    const curParent = (node.data as { parentId?: string }).parentId ?? null
+    if (container !== curParent) {
+      setNodes(prev => {
+        const containerZ = container ? (prev.find(p => p.id === container)?.zIndex ?? 0) : 0
+        return prev.map(n => n.id === node.id
+          ? { ...n, data: { ...n.data, parentId: container ?? undefined }, zIndex: container ? Math.max(n.zIndex ?? 0, containerZ + 1) : n.zIndex }
+          : n)
+      })
+      if (node.id.startsWith('el-')) {
+        const raw = node.id.replace('el-', '')
+        const el = elementsRef.current.find(e => e.id === raw)
+        if (el) {
+          const nd = { ...el.data, parentId: container ?? null }
+          setElements(prev => prev.map(e => e.id === raw ? { ...e, data: nd } : e))
+          updateElement(raw, { data: nd }).catch(() => {})
+        }
+      }
+      setTimeout(persistGroupMap, 0)
+    }
+
+    // ── Persist positions: the dragged node + every descendant that moved. ──
+    persistPos(node)
+    for (const id of desc) {
+      const dn = nodesRef.current.find(n => n.id === id)
+      if (dn) persistPos(dn)
+    }
+    // Bust the router cache so the updated positions are visible on next visit.
     scheduleRefresh()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scheduleRefresh])
+  }, [scheduleRefresh, getIntersectingNodes, persistPos, persistGroupMap])
 
   async function handleAddCard(listId: string) {
     const list = lists.find(l => l.id === listId)
@@ -1225,6 +1472,18 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board.id])
 
+  // Restore child→parent grouping from localStorage so containment survives reloads.
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`groupmap-${board.id}`)
+      if (!stored) return
+      const map = JSON.parse(stored) as Record<string, string>
+      if (!map || typeof map !== 'object') return
+      setNodes(prev => prev.map(n => map[n.id] ? { ...n, data: { ...n.data, parentId: map[n.id] } } : n))
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board.id])
+
   // Handlers the sidebar can call back into
   useEffect(() => {
     unitsStore.setHandlers({
@@ -1359,6 +1618,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         }}
         onEdgesDelete={onEdgesDelete}
         onNodesDelete={onNodesDelete}
+        onNodeDragStart={onNodeDragStart}
+        onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
@@ -1416,6 +1677,37 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
               {label}
             </span>
           </div>
+        )
+      })()}
+
+      {/* Alignment guides — pink lines spanning the board while dragging */}
+      {(helperLines.v != null || helperLines.h != null) && (() => {
+        const vp = getViewport()
+        return (
+          <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 15 }}>
+            {helperLines.v != null && (
+              <div style={{ position: 'absolute', top: 0, bottom: 0, left: helperLines.v * vp.zoom + vp.x, width: 1, background: '#ec4899' }} />
+            )}
+            {helperLines.h != null && (
+              <div style={{ position: 'absolute', left: 0, right: 0, top: helperLines.h * vp.zoom + vp.y, height: 1, background: '#ec4899' }} />
+            )}
+          </div>
+        )
+      })()}
+
+      {/* Grouping target — green ring around the shape the dragged node would drop into */}
+      {groupHoverId && (() => {
+        const n = nodesRef.current.find(x => x.id === groupHoverId)
+        if (!n) return null
+        const vp = getViewport()
+        const [w, h] = getNodeWH(n)
+        const sx = n.position.x * vp.zoom + vp.x
+        const sy = n.position.y * vp.zoom + vp.y
+        return (
+          <div
+            className="absolute pointer-events-none rounded-lg"
+            style={{ left: sx - 3, top: sy - 3, width: w * vp.zoom + 6, height: h * vp.zoom + 6, zIndex: 16, outline: '2px dashed #22c55e', boxShadow: '0 0 0 3px rgba(34,197,94,0.18)' }}
+          />
         )
       })()}
 
