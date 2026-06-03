@@ -3,9 +3,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Check, Plus, Trash2, Lock, AlertTriangle } from 'lucide-react'
+import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { updateBoard, createSubTab, layoutBoardGrid } from '@/app/actions'
+import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced } from '@/app/actions'
 
 const COLORS = [
   '#0079bf', '#d29034', '#519839', '#b04632',
@@ -30,6 +30,8 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
   const [mode, setMode] = useState<'classic' | 'trello' | 'text' | 'folder' | 'spreadsheet'>(board.mode ?? 'classic')
   const [saving, setSaving] = useState(false)
+  // synced=true means included in iOS sync (default); false means excluded
+  const [synced, setSynced] = useState(board.synced ?? true)
   // Text and spreadsheet tabs are specialised dead-ends — locked after creation.
   const currentMode = board.mode ?? 'classic'
   const textLocked = currentMode === 'text' || currentMode === 'spreadsheet'
@@ -66,6 +68,10 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
     const modeChanged = mode !== board.mode
     setSaving(true)
     try {
+      // Save sync preference alongside other properties
+      if (synced !== (board.synced ?? true)) {
+        await setBoardSynced(board.id, synced)
+      }
       const updated = await updateBoard(board.id, {
         name: name.trim() || board.name,
         color,
@@ -179,6 +185,23 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
           </ul>
         </div>
       )}
+
+      {/* iOS sync toggle */}
+      <label className="flex items-center justify-between gap-2 mb-3 cursor-pointer select-none">
+        <span className="text-xs text-gray-600 flex items-center gap-1.5">
+          <Smartphone size={12} className="text-gray-400" />
+          Sync to iOS
+        </span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={synced}
+          onClick={() => setSynced(v => !v)}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none ${synced ? 'bg-blue-500' : 'bg-gray-300'}`}
+        >
+          <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${synced ? 'translate-x-[18px]' : 'translate-x-[3px]'}`} />
+        </button>
+      </label>
 
       <button onClick={handleSave} disabled={saving} className={`w-full text-white text-sm py-1.5 rounded disabled:opacity-60 ${warnings.length > 0 ? 'bg-amber-600 hover:bg-amber-700' : 'bg-[#0079bf] hover:bg-[#026aa7]'}`}>
         {saving ? 'Saving…' : warnings.length > 0 ? 'Switch anyway' : 'Save'}

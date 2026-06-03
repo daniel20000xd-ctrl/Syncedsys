@@ -23,13 +23,13 @@ export async function GET(req: NextRequest) {
   // Update last-seen timestamp (fire-and-forget, don't await)
   admin.from('device_links').update({ last_seen: new Date().toISOString() }).eq('id', link.id).then(() => {})
 
-  // Fetch all boards the user has explicitly marked for sync.
-  // Include sub-boards (parent_id not null) that are themselves marked synced.
+  // Sync ALL of the user's boards. The original `synced=true` filter was never
+  // reachable (no UI existed to set it, so every board defaulted to false and
+  // the iOS app always got empty arrays). Remove the filter so everything syncs.
   const { data: boards } = await admin
     .from('boards')
     .select('*')
     .eq('user_id', link.user_id)
-    .eq('synced', true)
     .order('tab_position', { ascending: true })
     .order('created_at', { ascending: true })
 
