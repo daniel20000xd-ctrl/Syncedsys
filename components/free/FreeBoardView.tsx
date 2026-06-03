@@ -1456,46 +1456,72 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
   }, [contextMenu])
 
-  // Double-click-hold-drag on canvas background to enable marquee selection.
-  // Detects the second pointerdown within the double-click threshold so the user
-  // can hold that second click and drag — single click+drag continues to pan.
+  // Double-click-hold-drag on canvas background → marquee selection.
+  // Strategy: pre-stage allowMarqueeSelection=true on the FIRST click's release so
+  // React re-renders (updating panOnDrag + selectionOnDrag props) before the second
+  // pointerdown arrives. d3-zoom then sees the updated filter and won't start a pan.
   useEffect(() => {
     const el = wrapperRef.current
     if (!el) return
 
-    let lastPointerDownTime = 0
-    let fallbackTimeoutId: ReturnType<typeof setTimeout> | null = null
+    let firstDownTime = 0
+    let readyForSecond = false
+    let resetTimeoutId: ReturnType<typeof setTimeout> | null = null
 
     function reset() {
+      readyForSecond = false
+      firstDownTime = 0
       setAllowMarqueeSelection(false)
-      if (fallbackTimeoutId) { clearTimeout(fallbackTimeoutId); fallbackTimeoutId = null }
+      if (resetTimeoutId) { clearTimeout(resetTimeoutId); resetTimeoutId = null }
     }
 
-    function onCanvasPointerDown(e: PointerEvent) {
+    function onPointerDown(e: PointerEvent) {
       if (e.button !== 0) return
       if (tool !== 'select') return
       const target = e.target as HTMLElement
       if (target.closest('.react-flow__node')) return
 
-      const now = Date.now()
-      if (now - lastPointerDownTime <= 300) {
-        setAllowMarqueeSelection(true)
-        // Reset when the user releases — covers both drag and immediate release
+      if (readyForSecond) {
+        // Second click — allowMarqueeSelection is already true, React has already
+        // re-rendered with panOnDrag=[1] so d3-zoom rejects button 0 and the Pane
+        // starts the selection rectangle instead.
+        readyForSecond = false
+        if (resetTimeoutId) { clearTimeout(resetTimeoutId); resetTimeoutId = null }
         const onUp = () => {
           reset()
           window.removeEventListener('pointerup', onUp)
         }
         window.addEventListener('pointerup', onUp)
-        // Safety fallback in case pointerup is lost (e.g. pointer leaves window)
-        fallbackTimeoutId = setTimeout(reset, 5000)
+        return
       }
-      lastPointerDownTime = now
+
+      firstDownTime = Date.now()
     }
 
-    el.addEventListener('pointerdown', onCanvasPointerDown)
+    function onPointerUp(e: PointerEvent) {
+      if (e.button !== 0) return
+      if (tool !== 'select') return
+      if (firstDownTime === 0) return
+
+      const held = Date.now() - firstDownTime
+      firstDownTime = 0
+
+      // Only treat as first click if released quickly (not a pan/hold)
+      if (held <= 300) {
+        readyForSecond = true
+        setAllowMarqueeSelection(true) // pre-stage before second press
+        if (resetTimeoutId) clearTimeout(resetTimeoutId)
+        // Reset if no second click arrives within the double-click window
+        resetTimeoutId = setTimeout(reset, 400)
+      }
+    }
+
+    el.addEventListener('pointerdown', onPointerDown)
+    el.addEventListener('pointerup', onPointerUp)
     return () => {
-      el.removeEventListener('pointerdown', onCanvasPointerDown)
-      if (fallbackTimeoutId) clearTimeout(fallbackTimeoutId)
+      el.removeEventListener('pointerdown', onPointerDown)
+      el.removeEventListener('pointerup', onPointerUp)
+      if (resetTimeoutId) clearTimeout(resetTimeoutId)
     }
   }, [tool])
 
@@ -1743,17 +1769,20 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         selectionOnDrag={allowMarqueeSelection && tool === 'select'}
         panOnDrag={
           tool === 'hand' ? [0, 1, 2] :
-          tool === 'select' && allowMarqueeSelection ? [1, 2] :
-          tool === 'select' ? [0, 1, 2] :
+          tool === 'select' && allowMarqueeSelection ? [1] :
+          tool === 'select' ? [0, 1] :
           false
         }
         zoomOnDoubleClick={false}
         zoomOnScroll
         zoomOnPinch
         onPaneClick={e => {
+          // Close context menu on any background left-click; no longer opens it
+          if (contextMenu) setContextMenu(null)
+        }}
+        onPaneContextMenu={e => {
           if (tool !== 'select') return
-          // If a menu is already open, this click just closes it — don't reopen elsewhere
-          if (contextMenu) { setContextMenu(null); return }
+          e.preventDefault()
           const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
           setContextMenu({ x: e.clientX, y: e.clientY, flowX: flowPos.x, flowY: flowPos.y })
         }}
