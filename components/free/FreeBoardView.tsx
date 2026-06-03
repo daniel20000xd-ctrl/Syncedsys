@@ -346,6 +346,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // Middle-mouse panning while a tool overlay is active
   const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
 
+  const [allowMarqueeSelection, setAllowMarqueeSelection] = useState(false)
+
   // Tracks whether the user is currently dragging a connection so the
   // proximity handler and CSS can treat handles differently.
   const isConnectingRef = useRef(false)
@@ -1454,6 +1456,49 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
   }, [contextMenu])
 
+  // Double-click-hold-drag on canvas background to enable marquee selection.
+  // Detects the second pointerdown within the double-click threshold so the user
+  // can hold that second click and drag — single click+drag continues to pan.
+  useEffect(() => {
+    const el = wrapperRef.current
+    if (!el) return
+
+    let lastPointerDownTime = 0
+    let fallbackTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+    function reset() {
+      setAllowMarqueeSelection(false)
+      if (fallbackTimeoutId) { clearTimeout(fallbackTimeoutId); fallbackTimeoutId = null }
+    }
+
+    function onCanvasPointerDown(e: PointerEvent) {
+      if (e.button !== 0) return
+      if (tool !== 'select') return
+      const target = e.target as HTMLElement
+      if (target.closest('.react-flow__node')) return
+
+      const now = Date.now()
+      if (now - lastPointerDownTime <= 300) {
+        setAllowMarqueeSelection(true)
+        // Reset when the user releases — covers both drag and immediate release
+        const onUp = () => {
+          reset()
+          window.removeEventListener('pointerup', onUp)
+        }
+        window.addEventListener('pointerup', onUp)
+        // Safety fallback in case pointerup is lost (e.g. pointer leaves window)
+        fallbackTimeoutId = setTimeout(reset, 5000)
+      }
+      lastPointerDownTime = now
+    }
+
+    el.addEventListener('pointerdown', onCanvasPointerDown)
+    return () => {
+      el.removeEventListener('pointerdown', onCanvasPointerDown)
+      if (fallbackTimeoutId) clearTimeout(fallbackTimeoutId)
+    }
+  }, [tool])
+
   // Keyboard shortcuts — all ignored while typing in a text field
   // Ctrl+Z = undo, Ctrl+X = redo
   // V = select/cursor, H = hand, P = pen/draw, R = shape, F = portal
@@ -1695,8 +1740,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         maxZoom={4}
         deleteKeyCode="Delete"
         nodesDraggable={tool === 'select'}
-        selectionOnDrag={tool === 'select'}
-        panOnDrag={tool === 'hand' ? true : tool === 'select' ? [1, 2] : false}
+        selectionOnDrag={allowMarqueeSelection && tool === 'select'}
+        panOnDrag={tool === 'hand' ? true : (tool === 'select' && !allowMarqueeSelection) ? true : false}
         zoomOnScroll
         zoomOnPinch
         onPaneClick={e => {
