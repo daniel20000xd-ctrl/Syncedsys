@@ -353,8 +353,8 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
 // ── Text Node ────────────────────────────────────────────────────────────────
 
 const TEXT_BG_PRESETS = [
-  { label: 'None',   value: 'transparent' },
   { label: 'White',  value: 'rgba(255,255,255,0.92)' },
+  { label: 'None',   value: 'transparent' },
   { label: 'Black',  value: 'rgba(0,0,0,0.75)' },
   { label: 'Yellow', value: 'rgba(255,240,100,0.90)' },
   { label: 'Blue',   value: 'rgba(59,130,246,0.85)' },
@@ -370,7 +370,7 @@ export function TextNode({ id, data }: NodeProps) {
   const [showBgPicker, setShowBgPicker] = useState(false)
   const color = (data.color as string) || '#1f2937'
   const fontSize = (data.fontSize as number) || 18
-  const bgColor = (data.bgColor as string) || 'transparent'
+  const bgColor = (data.bgColor as string) || 'rgba(255,255,255,0.92)'
   const onSave = data.onSave as SaveFn | undefined
 
   function commit() {
