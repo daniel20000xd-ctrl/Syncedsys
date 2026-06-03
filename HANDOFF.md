@@ -1,134 +1,149 @@
 # Syncedsys — Session Handoff
 
-A Next.js 16 Trello-style + freeform-canvas board app. Supabase auth/DB, deployed on Vercel at **syncedsys.com**. Repo: `daniel20000xd-ctrl/Syncedsys` (branch `main`, push auto-deploys to Vercel).
+A Next.js 16 Trello-style + freeform-canvas board app with an on-canvas Claude assistant, PDF support, and a Stock Viewer. Supabase auth/DB, deployed on Vercel at **syncedsys.com**. Repo: `daniel20000xd-ctrl/Syncedsys` (branch `main`, push auto-deploys to Vercel).
 
 ## Stack & conventions
 - **Next.js 16.2.6** App Router + Turbopack. Middleware is `proxy.ts` exporting `proxy` (Next 16 rename), not `middleware.ts`.
 - **Supabase SSR** (`@supabase/ssr`): `lib/supabase/client.ts` (browser), `server.ts` (server), `admin.ts` (service role).
-- **@dnd-kit** for Trello-mode drag/drop. **@xyflow/react** for the freeform "Classic" canvas.
-- **Tailwind v4** (`@import "tailwindcss"`).
+- **@dnd-kit** for Trello-mode drag/drop. **@xyflow/react** (v12) for the freeform "Classic" canvas.
+- **Tailwind v4** (`@import "tailwindcss"`). **lucide-react** icons.
 - All DB writes are Server Actions in `app/actions.ts` (`'use server'`).
 - **Never** call `createClient()` at module/component top level — only in handlers/effects/async fns, or SSR prerender breaks.
+- **`dynamic(() => ..., { ssr: false })` must live in a Client Component**, never a Server Component (build error otherwise). Pattern: a thin `'use client'` wrapper — see `app/(app)/stocks/StockViewerWrapper.tsx`.
 - Floating panels use `createPortal` so the `overflow-x-auto` tab bars don't clip them.
-- Git: route-group paths contain `(app)` parens — quote paths or use the Bash tool (PowerShell chokes on parens). `npx next build` is the real check (tsc alone misses ESLint); build has been kept green every commit.
+- Git/tooling: route-group paths contain `(app)` parens — **use the Bash tool** (PowerShell chokes on parens) or quote paths. Commit messages with parens/`@`/newlines: use a PowerShell here-string or keep them simple. `git push` over HTTPS prints to stderr which PowerShell surfaces as a red "error" even on success — check the last line (`main -> main`) to confirm.
+- **`npx next build` is the real check** (tsc alone misses some ESLint); build has been kept green every commit. `npx tsc --noEmit` for fast iteration.
 
 ## Board modes (`boards.mode`, default `'classic'`)
 - **`'classic'`** = freeform canvas (xyflow). **The default / standard.** → `components/free/FreeBoardView.tsx`.
-- **`'trello'`** = kanban columns (the old "classic"). → `components/BoardView.tsx`.
+- **`'trello'`** = kanban columns. → `components/BoardView.tsx`.
 - **`'text'`** = plain document, autosaves to `boards.content`. → `components/TextBoardView.tsx`.
-- Legacy `'free'` value still routes to freeform in `app/(app)/board/[id]/page.tsx`.
+- **`'folder'`** = file explorer (sub-folders + dropped text files). → `components/FolderBoardView.tsx`.
+- **`'spreadsheet'`** = grid with formulas. → `components/SpreadsheetBoardView.tsx` (`lib/spreadsheet.ts`).
+- `text`/`spreadsheet` tabs are mode-locked after creation. Legacy `'free'` still routes to freeform in `app/(app)/board/[id]/page.tsx`.
 
 ## Tabs & sub-tabs
-- `components/TabBar.tsx` — browser-style tabs (root boards only). Alt+Q/W cycle.
-- `components/SubTabBar.tsx` — stacked rows under the main tabs (ancestor chain). `+` creates a sub-tab **instantly** ("Tab N", no prompt). Each has a ⌄ → shared properties panel.
-- `components/BoardPropertiesPanel.tsx` — shared panel (name, color, expiry, preset, Add sub-tab, optional **Remove tab**). Props: `showAddSubTab`, `onRemove`. Calls `router.refresh()` on save so the server-rendered board view actually re-renders.
-- Boards self-reference via `parent_id` + `tab_position` (infinite nesting; sub-tabs are just child boards).
+- `components/TabBar.tsx` — browser-style tabs (root boards only). Tab drag-reorder is **optimistic** (local `setBoards` first, then `moveTab` server action, then `router.refresh()`).
+- `components/SubTabBar.tsx` — stacked rows under the main tabs (ancestor chain).
+- `components/BoardPropertiesPanel.tsx` — shared panel (name, color, expiry, preset, **"Sync to iOS" toggle**, Add sub-tab, optional **Remove tab**). Calls `router.refresh()` on save.
+- Boards self-reference via `parent_id` + `tab_position` (infinite nesting; sub-tabs are just child boards). Groups via `group_id` + `is_group`.
 
 ## Free-mode canvas — `components/free/FreeBoardView.tsx` + `nodes.tsx`
-Toolbar (top-right, icon-only, vertical): **Select / Hand / Draw / Shape / Text / Portal**.
-- **Select**: left-drag = marquee multi-select; Delete removes selection (persisted, incl. orphaned card nodes). Middle/right-drag pans. Recolor swatches appear when shapes/drawings/text are selected.
-- **Hand** (shortcut `H`, ignored while typing): left-drag pans.
-- **Draw**: pointer-capture freehand, hold-to-draw, release ends a stroke; stays armed. Points captured in **flow coords** (fixed a size/offset jump bug).
-- **Shape**: click-move-click with live dashed preview (rect/circle/diamond), resizable via NodeResizer; click center to edit label; label font auto-scales to shape size (ResizeObserver).
-- **Text**: click to drop an editable text box (auto-focuses).
-- **Portal**: see below.
-- **Right-click empty canvas** → context menu (create list/card/sub-tab/image/draw/shape). Auto-dismisses on window blur / tab switch / pointer leaving viewport / Escape. Won't reopen if already open. **Create card** auto-creates a list if none exists.
-- **Navigation**: scroll = zoom (cursor-anchored, works with any tool via overlay `onWheel`), `elevateNodesOnSelect={false}` so layering is authoritative, minZoom 0.05.
-- **Hold a unit + scroll = resize it** (NOT zoom). Implemented via a **capture-phase** wheel listener on the wrapper that stops propagation when `heldNodeRef` is set, so React Flow's pane zoom never fires. Shapes/portals resize w/h; others scale `data.scale`. Persists on mouseup.
-- **Undo `Ctrl+Z` / Redo `Ctrl+X`** (ignored while typing): debounced snapshot history of nodes+edges; reconciles DB via `upsertElement` (restores deleted elements by original id) + position updates. Elements use **client-generated UUIDs** + upsert (no temp-id dance).
-- **Links (edges)**: drag from any side handle (4 per node, `ConnectionMode.Loose`). Hover a link → blue drag-dot + × delete. **Grab and pull a link to bend it** (quadratic curve through the grab point); persists in `board_edges.data` (`{cx,cy}` offset from midpoint) via `updateEdgeShape`; ⟲ straightens. Custom edge = `DeletableEdge` in `nodes.tsx`. Auto list→card links are dashed/grey and not editable.
+Toolbar (top-right, icon-only, vertical): **Select / Hand / Draw / Shape / Text / Portal / Claude** (shortcuts V/H/P/R/—/F/C).
+- **Select**: left-drag = marquee multi-select; Delete removes selection. Middle/right-drag pans. Recolor swatches appear when shapes/drawings/text are selected.
+- **Draw / Shape / Text / Portal / Claude**: pointer overlay (`overlayActive`) intercepts input. Shape = click-move-click with live dashed preview (rect/circle/diamond). Text = click to drop. Portal/Claude = drag a box.
+- **Right-click empty canvas** → context menu (list/card/sub-tab/image/draw/shape). **Add sub-tab** opens a **mode picker modal** (`SubtabModePicker`) before creating.
+- **Hold a unit + scroll = resize it** (NOT zoom) — capture-phase wheel listener on the wrapper; shapes/portals resize w/h, others scale `data.scale`. Persists on mouseup.
+- **Undo `Ctrl+Z` / Redo `Ctrl+X`**: debounced snapshot history; reconciles DB via `upsertElement` (client-generated UUIDs). `elTypeOf` maps node types incl. `pdfNode→'pdf'`, `claudeNode→'claude'`.
+- **Links (edges)**: 4 side handles per node, `ConnectionMode.Loose`. **Handles are invisible until the cursor is near** (JS proximity writes inline `opacity`; CSS `.rf-connecting` makes all handles pulse during an active connection drag). Hover a link → bend dot + colour + × delete; drag to bend (quadratic, persisted in `board_edges.data {cx,cy}`).
+- **`scheduleRefresh()`** debounces `router.refresh()` at **250 ms** (was 1500 — caused position-revert-on-tab-switch).
+
+### Alignment guides (snap lines) — NEW
+- Wrapped `onNodesChange` runs the React Flow "helper-lines" pattern. Dragging a single node snaps (within **5 flow-px**) to other nodes' left/right/center/top/bottom/edge alignments; **pink guide lines span the board** while dragging, cleared on drop.
+- Pure module-level `computeGuides()` + `getNodeWH()` (with `DEFAULT_W/H` fallbacks). `helperRef` guards re-render churn. Multi-select drags (`changes.length > 1`) are not snapped.
+
+### Grouping — drop units/shapes into shapes — NEW
+- **Containers are `shapeNode`s.** Drag any node onto a shape → it becomes a child (`data.parentId = shapeId`); a **green dashed ring** highlights the target during drag.
+- **Move**: dragging a container translates all descendants by the same delta (`onNodeDrag`, tracked via `groupDragRef`).
+- **Resize** (BOTH gestures): hold+scroll (in the wheel handler) and corner-handle `NodeResizer` (detected via `dimensions` changes with `resizing:true` in `onNodesChange`, mapped from a start `resizeSnapshotRef` to avoid drift) scale + reposition descendants. Box children scale w/h; others scale `data.scale`.
+- **Detach**: drag a child out of all shapes. **Nesting** is supported (`descendantsOf` is transitive) and cycle-safe.
+- **Persistence**: child→parent map saved to **`localStorage` `groupmap-<boardId>`** (same zero-schema pattern as z-order `zmap-<boardId>`); element children also keep `parentId` in their jsonb data. Hydrated on mount; undo/redo re-syncs the map. **No DB schema change.**
+- All of this lives in `FreeBoardView.tsx` in **absolute coordinates** — deliberately NOT React Flow's native `parentId`/`extent` model (avoids node-ordering constraints). `nodes.tsx` was not touched for grouping.
 
 ## Units dashboard (sidebar)
-- `lib/unitsStore.ts` — module store bridging the canvas (in the page) and `components/Sidebar.tsx` (in the layout) via `useSyncExternalStore`. FreeBoardView publishes units + registers handlers; clears on unmount.
-- `components/UnitsPanel.tsx` — lists every unit on the current free board (top = front layer):
-  - click → select on board
-  - drag up/down → layer order (zIndex; persists to element `data.z`)
-  - gear → **opacity** slider (persists to element `data.opacity`)
-  - Lists/cards/sub-tabs apply opacity/order in-session only (no DB column).
+- `lib/unitsStore.ts` — module store bridging canvas ↔ `Sidebar.tsx` via `useSyncExternalStore`. Has `select/reorder/setOpacity/setHidden/rename` handlers; `Unit.mode` carries sub-tab board mode.
+- `components/UnitsPanel.tsx` — every unit (top = front layer): click→select, drag→layer order (`data.z` + zmap), gear→opacity, eye→hide/show, **double-click→inline rename** (routes to the right DB record per node type). Mode-aware icons for sub-tabs (`AlignLeft`/`TableProperties`/`LayoutDashboard`/`Square`).
 
 ## Portals — `PortalNode` in `nodes.tsx`
-A resizable window showing a live read-only view of another tab.
-- Draw with the Portal tool → empty rectangle → **"Choose a tab…"** dropdown (all boards, home hidden).
-- Renders the target board's lists/cards/shapes (with **labels**)/text/drawings/images, plus **links** (`PortalEdges`, manual blue + auto dashed, non-scaling stroke).
-- **Drag inside** to pan that view independently; **scroll inside** zooms the portal view (uses `nowheel` + internal handler), not the main board.
-- **Auto-fit** to content bounds once on first load (persisted `fitted` flag; never overrides a saved/locked view).
-- **Lock** toggle (top bar): freezes the current pan/zoom (saved as `vx,vy,zoom`) so it always shows that region; disables pan/zoom/re-fit/change-tab while locked.
-- **Text-target portals** render an editable textarea writing back to that board's `content` (debounced).
-- **Maximize** corner button = open that tab fully (navigates).
-- **Auto-mirror**: choosing a target inserts a portal back on the target board via `ensureMirrorPortal(targetBoardId, home)`. Portal data carries `home` (its own board id).
-- Portal element type is `'portal'` in `board_elements`; data = `{ targetBoardId, home, vx, vy, zoom, locked, fitted, width, height }`.
+A resizable window showing a live view of another tab **or a built-in Viewer**.
+- The **⌄ chooser is split into two sections**: **Viewers** (currently "Stock Viewer") and **Tabs** (the board list + "New sub-tab"). Picking a viewer sets `data.viewerKind`/`viewerConfig` and clears `targetBoardId`; picking a tab clears the viewer. They're mutually exclusive.
+- **Board portals**: render the target's lists/cards/shapes/text/drawings/images + links; pan by dragging, **plain scroll = pan, Ctrl/⌘+scroll = zoom** (inside the portal only). Auto-fit once; **Lock** freezes pan/zoom; text/folder/spreadsheet targets render their own editors/previews. Auto-mirror via `ensureMirrorPortal`.
+- Element type `'portal'`; data = `{ targetBoardId, home, vx, vy, zoom, locked, fitted, width, height, viewerKind?, viewerConfig?, viewer_context? }`. `persist()` carries viewer fields + `viewer_context` forward on every pan/zoom/resize.
 
-## iOS sync (groundwork — the iOS app does not exist yet)
-Goal: mark certain tabs as "synced" and let a future iOS app pull them.
-- `boards.synced` boolean flagged per-tab via the **"Sync to connected iOS apps"** checkbox in `BoardPropertiesPanel`. Server action `setBoardSynced(boardId, synced)`.
-- `device_links` table = paired apps/devices. Actions: `createDeviceLink(name)` → returns a **6-char pairing code** + stores a secret `token`; `removeDeviceLink(id)`.
-- **REST API the app will call** (both use `createAdminClient()` / service role, since the device has no Supabase session):
-  - `POST /api/devices/pair` — body `{ code, name? }` → finds the unpaired `device_links` row by code, marks it paired, returns `{ token, deviceId, userId }`.
-  - `GET /api/sync` — header `Authorization: Bearer <token>` → looks up the paired device by token, bumps `last_seen`, returns `{ boards, lists, cards, elements }` for that user's `synced` boards.
-- **Sidebar UI** (`components/Sidebar.tsx`, receives `devices` from layout):
-  - Dashboard has a divider: units (or lists) above, a **"Synced tabs"** list (all `boards.synced`) below.
-  - Above Settings: a **"Connected apps"** list with `+` (calls `createDeviceLink`, shows the code inline) and `×` remove; pending (un-paired) devices show a "pending" badge.
-- Connection flow for the future app: user taps **+** → gets code → enters it in the app → app `POST /api/devices/pair` → stores token → polls `GET /api/sync`.
-- Not yet done (fine to add when the app exists): pairing-code expiry, write-back from the app (sync is read-only), push/realtime.
+## Claude on the canvas — `components/claude/`
+- **`ClaudeNode`** (in `nodes.tsx`) = a resizable chat box on the canvas with an outward **"claude orange" neon glow** (`.claude-node-glow` in `globals.css`). Dark theme (`#30302E`/`#262624`). Scoped to its board (`data.boardId`) and everything reachable downward.
+- **`ClaudeChat.tsx`** — chat UI. Files/PDFs dropped onto it become **attachment chips** (thumbnail for PDFs via `renderPdfThumbnail`), injected through the module-level **`lib/claudeDropRegistry.ts`** (`ChatAttachment` type) rather than raw text.
+- **`app/api/claude/route.ts`** — streams from Anthropic using the user's own key.
+- **API key**: stored **encrypted** (AES-256-GCM, `lib/crypto.ts`) in `user_secrets.anthropic_key_encrypted`. Requires env **`APP_ENCRYPTION_KEY`**. Settings UI: `components/ClaudeKeySettings.tsx` (+ `getClaudeStatus`/`saveAnthropicKey`/`removeAnthropicKey`/`setClaudeAutoApply`).
+- **`lib/claude/context.ts`** — builds Claude's scope (BFS down from root board through children + portal/folder-link targets) and a text snapshot of everything in scope. **Renders PDFs' extracted text** and **viewer-portal data** (see Stock Viewer below).
+- `lib/claude/tools.ts` — tool definitions (read/write board ops, gated by `claude_auto_apply`).
+
+## PDFs
+- Drop a PDF on the canvas/folder → a **`pdfNode`** (red file block, opens the stored PDF in a new tab). Drop near a Claude node → injected as a chat attachment; near a sub-tab → lands in that board.
+- `lib/pdf.ts`: `extractPdfText` (pdfjs, CDN worker, 120k cap), `uploadPdf` (Supabase Storage bucket **`pdfs`**), `renderPdfThumbnail` (page-1 JPEG data-URL).
+- `getPdfUrl(path)` server action mints a 1-hour signed URL. Element type `'pdf'`, data `{ name, storagePath, text, pageCount }`.
+- Drop routing (text + PDFs) uses **magnetic targeting** (`MAGNETIC_RADIUS`): a pulsing ring shows whether the drop will go to a Claude chat, a sub-tab board, or the canvas.
+
+## Stock Viewer
+A standalone feature (not a tab/board mode). Sidebar has a **Stocks** nav entry.
+- **Enable flag**: stored in **Supabase Auth `user_metadata.stocks_enabled`** (NOT a DB column — chosen so no migration is ever needed; `supabase.auth.updateUser({ data })`). `getStocksEnabled`/`setStocksEnabled` in `app/actions.ts`.
+- **`/stocks`** (`app/(app)/stocks/page.tsx`) — server component: auth → if flag off, redirect to `/settings/connected-apps`; else render `StockViewerWrapper` → `StockViewer.tsx` (full page: search, stats, candlestick chart w/ SMA50+SMA200 overlays + volume, indicator badges, fundamentals, analyst consensus, earnings, income/balance/cashflow tables, insider txns, news, and a **Nordic Data (Avanza)** section).
+- **`/settings/connected-apps`** (`connected-apps/page.tsx` + `components/StockViewerSettings.tsx`) — the enable toggle + "Open Stock Viewer".
+- **`/api/stocks?ticker=&interval=`** (`app/api/stocks/route.ts`):
+  - Calls **Yahoo Finance REST endpoints directly** (`query1/2.finance.yahoo.com`: `v8/finance/chart`, `v10/finance/quoteSummary` with ALL free modules, `v1/finance/search` for news). **The `yahoo-finance2` npm package was removed** (v3 broke the default-export API and Vercel resolved versions unreliably).
+  - Computes RSI(14)/SMA50/SMA200/MACD/Bollinger from OHLCV via **`technicalindicators`**.
+  - Caches in a **`stock_cache`** table (6-hour TTL) — **wrapped in try/catch so it works even if that table doesn't exist**.
+  - For **`.ST` (Swedish) tickers**, merges **Avanza** data (see below) into any fields Yahoo left null, and attaches the raw `avanza` block.
+- **`lib/avanza.ts`** — unofficial Avanza endpoints (`POST /_api/search/filtered-search` to resolve the orderbook id by exact ticker match, then `GET /_api/market-guide/stock/{id}`). **Deliberately failure-proof**: hard `AbortController` timeouts, every path wrapped to return `null` on any problem, exact-symbol match so it never returns the wrong company. If it fails, the response is byte-identical to Yahoo-only.
+- **Portal embed**: `components/free/StockPortal.tsx` — compact dark chart inside a `PortalNode` when `viewerKind === 'stocks'`. Persists ticker/interval to `viewerConfig`.
+- **Claude zero-loss feed**: `StockPortal.buildViewerContext()` formats the **entire** API response (every OHLCV bar, all indicators/fundamentals/analyst/earnings/financial-statements/insider/news, plus the Avanza SEK block) as plain text and writes it to the portal element's `data.viewer_context`. `lib/claude/context.ts` injects that verbatim between `---BEGIN/END VIEWER DATA---` markers, so Claude reads stocks with no information loss.
+
+## iOS sync
+- **`/api/sync`** (`app/api/sync/route.ts`): header `Authorization: Bearer <token>` → looks up the paired `device_links` row → returns **ALL of that user's boards** + their lists/cards/elements. `export const dynamic = 'force-dynamic'` + `Cache-Control: no-store` headers (Vercel was edge-caching it).
+  - **History note**: the original `.eq('synced', true)` filter was a bug — every board defaults to `synced=false` and there was no UI to flip it, so the app always got empty arrays. The filter was removed; **all boards sync by default**, and the `BoardPropertiesPanel` "Sync to iOS" toggle is now an **opt-OUT** (`synced=false` = excluded), via `setBoardSynced`.
+- **`/api/devices/pair`** — body `{ code, name? }` → marks the unpaired `device_links` row paired, returns `{ token, deviceId, userId }`.
+- **Sidebar** "Connected apps" list with `+` (`createDeviceLink` → 6-char code) / `×` (`removeDeviceLink`).
+- The iOS app itself is not in this repo.
 
 ## Admin overview
-- `ADMIN_EMAIL` env designates admin. `app/(app)/overview/page.tsx` uses the service-role client to list all users' boards. One-way only; `account_links` table exists but is unused.
+- `ADMIN_EMAIL` env designates admin. `app/(app)/overview/page.tsx` uses the service-role client to list all users' boards. `account_links` table exists but is effectively unused.
 
 ## Environment / deploy
-- Vercel env vars (Settings → Environment Variables, then redeploy): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `ADMIN_EMAIL`, `SUPABASE_SERVICE_ROLE_KEY`. Vercel hides sensitive values after save (blank-on-edit is normal).
+Vercel env vars (then redeploy):
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_EMAIL`
+- **`APP_ENCRYPTION_KEY`** — required for Claude API-key encryption (AES-256-GCM). If missing, saving a Claude key fails with a clear error.
 - `.env.local` mirrors these. `ADMIN_EMAIL=Daniel20000xd@gmail.com`.
 
 ## ⚠️ DB MIGRATION STATE — READ FIRST
-The live Supabase DB was created from an early schema and has been missing columns/tables repeatedly; the user adds them by hand. **Before debugging "X doesn't save / disappears on reload", confirm the column/table exists.** The full idempotent migration set lives commented at the bottom of `supabase/schema.sql`. Current required pieces:
+The live Supabase DB was created from an early schema and is missing things repeatedly; the user adds them by hand. **Before debugging "X doesn't save / disappears on reload", confirm the column/table/bucket exists.** Idempotent set lives commented at the bottom of `supabase/schema.sql`. Pieces relevant now:
 
 ```sql
--- boards
-alter table boards add column if not exists mode text not null default 'classic';
-alter table boards add column if not exists deadline timestamptz;
-alter table boards add column if not exists parent_id uuid references boards(id) on delete cascade;
-alter table boards add column if not exists tab_position integer not null default 0;
-alter table boards add column if not exists content text;
-alter table boards add column if not exists free_x double precision not null default 100;
-alter table boards add column if not exists free_y double precision not null default 100;
-create index if not exists boards_parent_id_idx on boards(parent_id);
-
-alter table boards add column if not exists synced boolean not null default false;
-
--- board_elements (shapes/drawings/text/images/portals) + RLS  (full create-if-not-exists + policy in schema.sql)
--- board_edges
-alter table board_edges add column if not exists data jsonb not null default '{}';  -- link bend {cx,cy}
-
--- device_links (iOS sync) — run the full create table + RLS policy block from schema.sql:
-create table if not exists device_links (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid references auth.users(id) on delete cascade not null,
-  name text not null default 'iOS device',
-  pairing_code text, token text not null,
-  paired boolean not null default false,
-  last_seen timestamptz, created_at timestamptz default now()
+-- Stock Viewer cache (OPTIONAL — /api/stocks try/catches around it; without it, every call fetches fresh)
+create table if not exists stock_cache (
+  ticker text not null, interval text not null,
+  data jsonb not null, fetched_at timestamptz not null default now(),
+  primary key (ticker, interval)
 );
-alter table device_links enable row level security;
-create policy "users manage their device links" on device_links for all
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
-create index if not exists device_links_user_idx on device_links(user_id);
+alter table stock_cache enable row level security;
+create policy "auth read stock cache"  on stock_cache for select using (auth.uid() is not null);
+create policy "auth write stock cache" on stock_cache for all using (auth.uid() is not null) with check (auth.uid() is not null);
+
+-- PDFs: private Storage bucket "pdfs" + per-user-folder RLS (see schema.sql for the policy block)
+-- user_secrets: anthropic_key_encrypted text, claude_auto_apply boolean  (Claude)
+-- boards.synced boolean, device_links table  (iOS sync — from earlier sessions)
+-- board_edges.data jsonb  (link bending)
 ```
 
-As of this session's end, the most recently added pieces are **`boards.synced`** and the **`device_links`** table — the user must run those for iOS-sync UI/API to work (and `board_edges.data` from the prior session for link-bending). Do NOT run the old `UPDATE boards SET mode=...` rename lines (there was never old mode data).
+- **`stocks_enabled` needs NO migration** — it lives in `auth.users.user_metadata`, set via `setStocksEnabled`.
+- **Grouping & layer order need NO migration** — both are localStorage (`groupmap-<id>`, `zmap-<id>`).
 
 ## Known gaps / next tasks
-- **iOS app** itself isn't built — only the pairing/sync API + UI groundwork exists (see "iOS sync" above).
-- **Portal cross-tab links** (links from a main-tab unit to a unit shown inside a portal, visible on both tabs) — deferred. Bringing this in should also add "remove portal → remove its cross-tab links".
-- **Portal invert/open animation** (smooth zoom-swap where the portal becomes the full board at the same screen proportion) — deferred; "Maximize" just navigates today.
-- Removing a portal does **not** remove its auto-mirror on the other tab (they're independent).
-- Portal mini-view draws links **straight** (ignores saved bends); could honor `data.cx/cy`.
-- Link bending is a single control point; multi-point routing would be a bigger change.
-- Opacity/layer order for lists/cards/sub-tabs is session-only (no DB columns).
-- `app/(app)/settings/SettingsClient.tsx` and the `account_links` table/policies are dead code (post-simplification) — safe to delete.
-- List/card scale via hold+scroll is visual-only on reload for non-element nodes.
+- **iOS app** itself isn't built — only the pairing/sync API + UI exist.
+- **Avanza is unofficial** — endpoints can change without notice; the module degrades to null safely, but Swedish supplemental data could silently stop. Börsdata (paid now) would be the robust replacement.
+- **Stock data currency**: market cap / EPS etc. for `.ST` tickers are SEK but the full-page UI prefixes `$` on the generic stat cards (the dedicated "Nordic Data (Avanza)" section labels SEK correctly). Not currency-aware globally.
+- **Grouping resize for list/card/sub-tab children**: their position follows but their `data.scale` is view-only on reload (no DB column for non-element scale) — same long-standing limitation as standalone hold+scroll scaling.
+- **Deleting a container shape** leaves children with a stale `parentId` (harmless; they just behave as ungrouped). Not auto-cleaned.
+- Portal cross-tab links, portal open/invert animation, multi-point link routing — all still deferred.
+- `app/(app)/settings/SettingsClient.tsx` + `account_links` are dead code — safe to delete.
+- **Supabase Edge Function** `supabase/functions/fetch-stock-data/index.ts` is a documented production alternative to `/api/stocks` (Deno `npm:` imports) — not deployed; the Next.js route is the live path.
 
 ## Key files
-- `components/free/FreeBoardView.tsx` — the canvas (tools, history, units publish, edges, portals wiring). Large; most free-mode logic lives here.
-- `components/free/nodes.tsx` — all node components (List/Card/Shape/Image/Drawing/SubTab/Text/Portal) + `DeletableEdge` + `SideHandles` + portal mini-renderers (`MiniUnit`, `PortalEdges`).
-- `app/actions.ts` — server actions (boards, lists, cards, elements upsert/delete, edges upsert/delete/shape, sub-tabs, mirror portal, board content/free position, setBoardSynced, createDeviceLink/removeDeviceLink).
-- `app/api/devices/pair/route.ts`, `app/api/sync/route.ts` — REST endpoints for the future iOS app (service-role).
-- `lib/types.ts` (incl. `DeviceLink`), `lib/unitsStore.ts`, `components/UnitsPanel.tsx`, `components/Sidebar.tsx`, `components/TabBar.tsx`, `components/SubTabBar.tsx`, `components/BoardPropertiesPanel.tsx`.
+- `components/free/FreeBoardView.tsx` — the canvas: tools, history, units publish, edges, portals wiring, **alignment guides + grouping** (`computeGuides`, `descendantsOf`, `getNodeWH` are module-level helpers near the top). Large; most free-mode logic lives here.
+- `components/free/nodes.tsx` — all node components (List/Card/Shape/Image/Drawing/SubTab/Text/TextFile/**Pdf**/FolderLink/Portal/**Claude**) + `DeletableEdge` + `SideHandles` + portal mini-renderers + the **split Viewers/Tabs chooser**.
+- `components/free/StockPortal.tsx` — embedded stock viewer + `buildViewerContext` (Claude feed).
+- `app/(app)/stocks/{page,StockViewerWrapper,StockViewer}.tsx`, `components/StockViewerSettings.tsx`, `app/(app)/settings/connected-apps/page.tsx`.
+- `app/api/stocks/route.ts` (Yahoo REST + indicators + Avanza merge + cache), `lib/avanza.ts`.
+- `app/api/sync/route.ts`, `app/api/devices/pair/route.ts`, `app/api/claude/route.ts`.
+- `lib/claude/{context,tools}.ts`, `components/claude/{ClaudeChat,ClaudeAgent,ClaudeMark}.tsx`, `lib/claudeDropRegistry.ts`, `lib/crypto.ts`.
+- `lib/pdf.ts`, `lib/files.ts` (drop parsing → `{trees, files, pdfs, skipped}`).
+- `app/actions.ts` — all server actions. `lib/types.ts`, `lib/unitsStore.ts`, `components/{UnitsPanel,Sidebar,TabBar,SubTabBar,BoardPropertiesPanel}.tsx`.
