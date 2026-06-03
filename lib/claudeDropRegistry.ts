@@ -1,8 +1,15 @@
-// A lightweight registry so FreeBoardView can inject dropped-file text into
-// whichever ClaudeChat node is the current drop target, without needing to
-// thread callbacks through many layers of props.
+// Registry so FreeBoardView can inject file attachments into any mounted
+// ClaudeChat instance without prop-drilling.
 
-type InjectFn = (text: string, filename: string) => void
+export type ChatAttachment = {
+  id: string
+  name: string
+  content: string          // extracted text (PDF) or raw content (text file)
+  kind: 'pdf' | 'text'
+  thumbnail?: string       // base-64 JPEG data-URL of page 1 (PDFs only)
+}
+
+type InjectFn = (attachment: ChatAttachment) => void
 
 const registry = new Map<string, InjectFn>()
 
@@ -13,7 +20,7 @@ export const claudeDropRegistry = {
   unregister(nodeId: string) {
     registry.delete(nodeId)
   },
-  inject(nodeId: string, text: string, filename: string) {
-    registry.get(nodeId)?.(text, filename)
+  inject(nodeId: string, attachment: ChatAttachment) {
+    registry.get(nodeId)?.(attachment)
   },
 }

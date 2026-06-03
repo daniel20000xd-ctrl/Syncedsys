@@ -2,9 +2,9 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { Send, ArrowUpRight } from 'lucide-react'
+import { Send, ArrowUpRight, FileText, FileType, X } from 'lucide-react'
 import { ClaudeMark } from './ClaudeMark'
-import { claudeDropRegistry } from '@/lib/claudeDropRegistry'
+import { claudeDropRegistry, type ChatAttachment } from '@/lib/claudeDropRegistry'
 
 export type Msg = { role: 'user' | 'assistant'; content: string }
 
@@ -20,40 +20,99 @@ const TOOL_LABEL: Record<string, string> = {
   rename_board: 'Renaming…',
 }
 
-// The shared chat core. Fills its parent (h-full flex column). Used by both the
-// floating ClaudeAgent panel and the on-canvas ClaudeNode. Interactive areas are
-// marked nodrag/nowheel so it behaves correctly when embedded in a React Flow node.
+// ── Attachment chip ────────────────────────────────────────────────────────────
+function AttachmentChip({ a, onRemove }: { a: ChatAttachment; onRemove: () => void }) {
+  return (
+    <div className="nodrag relative flex items-center gap-2 bg-[#2a2926] border border-[#3d3a36] rounded-xl overflow-hidden pr-2 shrink-0 max-w-[180px] group/chip">
+      {/* Thumbnail or icon */}
+      {a.thumbnail ? (
+        <img src={a.thumbnail} alt="" className="h-12 w-10 object-cover shrink-0 rounded-l-xl" />
+      ) : (
+        <div className="h-12 w-10 flex items-center justify-center bg-[#3d3a36] shrink-0 rounded-l-xl">
+          {a.kind === 'pdf'
+            ? <FileType size={18} className="text-[#D97757]" />
+            : <FileText size={18} className="text-indigo-400" />}
+        </div>
+      )}
+      {/* Name + type label */}
+      <div className="flex flex-col min-w-0 py-1">
+        <span className="text-[12px] font-medium text-[#e8e3db] truncate leading-tight">{a.name}</span>
+        <span className="text-[10px] text-[#7a7570] uppercase tracking-wide leading-tight">
+          {a.kind === 'pdf' ? 'PDF' : 'Text file'}
+        </span>
+      </div>
+      {/* Remove button */}
+      <button
+        onClick={onRemove}
+        className="nodrag absolute top-1 right-1 opacity-0 group-hover/chip:opacity-100 p-0.5 rounded-full bg-[#1e1d1b]/80 text-[#a09a91] hover:text-white transition-opacity"
+      >
+        <X size={10} />
+      </button>
+    </div>
+  )
+}
+
+// ── Chat core ──────────────────────────────────────────────────────────────────
+// Fills its parent (h-full flex column). Used by both the floating ClaudeAgent
+// panel and the on-canvas ClaudeNode. Interactive areas are marked nodrag/nowheel
+// so it behaves correctly when embedded in a React Flow node.
 export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeId?: string }) {
   const router = useRouter()
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const [streaming, setStreaming] = useState(false)
   const [activity, setActivity] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const didWrite = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  // Register this chat instance so FreeBoardView can inject dropped-file text.
+  // Register so FreeBoardView can inject file attachments into this chat instance.
   useEffect(() => {
     if (!nodeId) return
-    claudeDropRegistry.register(nodeId, (text, filename) => {
-      setInput(prev => {
-        const block = `[File: ${filename}]\n${text}`
-        return prev.trim() ? `${prev.trim()}\n\n${block}` : block
+    claudeDropRegistry.register(nodeId, (attachment) => {
+      setAttachments(prev => {
+        // Avoid duplicates by id (same file dropped twice)
+        if (prev.some(a => a.id === attachment.id)) return prev
+        return [...prev, attachment]
       })
     })
     return () => { claudeDropRegistry.unregister(nodeId) }
   }, [nodeId])
 
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }) }, [messages, activity])
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  }, [messages, activity])
+
+  function removeAttachment(id: string) {
+    setAttachments(prev => prev.filter(a => a.id !== id))
+  }
 
   async function send() {
     const text = input.trim()
-    if (!text || streaming) return
+    if ((!text && attachments.length === 0) || streaming) return
     setError(null)
     setInput('')
-    const next: Msg[] = [...messages, { role: 'user', content: text }]
-    setMessages(next)
+
+    // Build the full message content: attachment blocks first, then user text.
+    const attachmentBlocks = attachments.map(a =>
+      `[Attached file: ${a.name}]\n${a.content || '(no extractable text)'}`
+    ).join('\n\n---\n\n')
+    const fullContent = attachmentBlocks
+      ? (text ? `${attachmentBlocks}\n\n---\n\n${text}` : attachmentBlocks)
+      : text
+    setAttachments([])
+
+    // The bubble shown to the user only shows the typed text (+ chip count for attachments).
+    const userBubbleText = attachments.length > 0
+      ? (text
+          ? `📎 ${attachments.length} file${attachments.length > 1 ? 's' : ''} attached\n\n${text}`
+          : `📎 ${attachments.length} file${attachments.length > 1 ? 's' : ''} attached`)
+      : text
+
+    const next: Msg[] = [...messages, { role: 'user', content: fullContent }]
+    // Show friendly version in the UI but send full content to the API
+    setMessages(prev => [...prev, { role: 'user', content: userBubbleText }])
     setMessages(m => [...m, { role: 'assistant', content: '' }])
     setStreaming(true)
     didWrite.current = false
@@ -88,7 +147,11 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
           try { ev = JSON.parse(line) } catch { continue }
           if (ev.type === 'text' && ev.delta) {
             setActivity(null)
-            setMessages(m => { const c = [...m]; c[c.length - 1] = { role: 'assistant', content: c[c.length - 1].content + ev.delta }; return c })
+            setMessages(m => {
+              const c = [...m]
+              c[c.length - 1] = { role: 'assistant', content: c[c.length - 1].content + ev.delta }
+              return c
+            })
           } else if (ev.type === 'tool') {
             didWrite.current = didWrite.current || ev.name !== 'get_board'
             setActivity(TOOL_LABEL[ev.name ?? ''] ?? 'Working…')
@@ -110,9 +173,11 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
     }
   }
 
+  const canSend = (input.trim().length > 0 || attachments.length > 0) && !streaming
+
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* Messages — warm Claude cream background, dark readable text */}
+      {/* Messages */}
       <div ref={scrollRef} className="nodrag nowheel flex-1 overflow-y-auto px-3.5 py-4 space-y-3.5 bg-[#1e1d1b]">
         {messages.length === 0 && (
           <div className="flex flex-col items-center text-center mt-8 px-4 gap-3">
@@ -125,7 +190,9 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}>
             {m.role === 'assistant' && <ClaudeMark size={20} animate={streaming && i === messages.length - 1} />}
-            <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${m.role === 'user' ? 'bg-[#D97757] text-white' : 'bg-[#2d2c29] text-[#e8e3db] shadow-sm'}`}>
+            <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap ${
+              m.role === 'user' ? 'bg-[#D97757] text-white' : 'bg-[#2d2c29] text-[#e8e3db] shadow-sm'
+            }`}>
               {m.content || (streaming && i === messages.length - 1 ? <span className="text-[#b8b2a6]">…</span> : '')}
             </div>
           </div>
@@ -138,26 +205,38 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
         {error && (
           <div className="text-[13px] text-red-300 bg-red-950/60 border border-red-800/50 rounded-xl px-3 py-2 flex items-start gap-1.5">
             {error}
-            {error.includes('Settings') && <a href="/settings" className="underline shrink-0 inline-flex items-center">Settings <ArrowUpRight size={12} /></a>}
+            {error.includes('Settings') && (
+              <a href="/settings" className="underline shrink-0 inline-flex items-center">
+                Settings <ArrowUpRight size={12} />
+              </a>
+            )}
           </div>
         )}
       </div>
 
       {/* Composer */}
-      <div className="border-t border-black/10 bg-[#30302E] p-2.5 shrink-0">
+      <div className="border-t border-black/10 bg-[#30302E] px-2.5 pt-2 pb-2.5 shrink-0 flex flex-col gap-2">
+        {/* Attachment chips — shown above the text input */}
+        {attachments.length > 0 && (
+          <div className="nodrag nowheel flex gap-2 overflow-x-auto pb-0.5">
+            {attachments.map(a => (
+              <AttachmentChip key={a.id} a={a} onRemove={() => removeAttachment(a.id)} />
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <textarea
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
             onPointerDown={e => e.stopPropagation()}
-            placeholder="Ask or instruct…"
+            placeholder={attachments.length > 0 ? 'Add a message, or just send…' : 'Ask or instruct…'}
             rows={1}
             className="nodrag flex-1 resize-none bg-[#3d3d3a] text-[#F0EEE6] text-[15px] rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-1 focus:ring-[#D97757]/60 placeholder:text-[#F0EEE6]/35 max-h-28"
           />
           <button
             onClick={send}
-            disabled={streaming || !input.trim()}
+            disabled={!canSend}
             className="nodrag p-2.5 rounded-xl bg-[#D97757] hover:bg-[#c56647] text-white disabled:opacity-40 shrink-0 transition-colors"
           >
             <Send size={16} />

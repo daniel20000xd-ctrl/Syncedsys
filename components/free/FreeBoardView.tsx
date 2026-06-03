@@ -19,7 +19,7 @@ import {
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode, PdfNode } from './nodes'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
-import { uploadPdf, extractPdfText } from '@/lib/pdf'
+import { uploadPdf, extractPdfText, renderPdfThumbnail } from '@/lib/pdf'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
 import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME } from '@/lib/files'
@@ -535,7 +535,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         if (item.kind === 'file') {
           // Route portal file to drop target if one is active
           if (currentDropTarget?.type === 'claude') {
-            claudeDropRegistry.inject(currentDropTarget.nodeId, item.content, item.name)
+            claudeDropRegistry.inject(currentDropTarget.nodeId, { id: crypto.randomUUID(), name: item.name, content: item.content, kind: 'text' })
           } else if (currentDropTarget?.type === 'subtab') {
             const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
             const id = crypto.randomUUID()
@@ -561,7 +561,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
     if (currentDropTarget?.type === 'claude') {
       // Inject all text files directly into the chat composer (append one after another)
-      files.forEach(f => claudeDropRegistry.inject(currentDropTarget.nodeId, f.content, f.name))
+      files.forEach(f => claudeDropRegistry.inject(currentDropTarget.nodeId, { id: crypto.randomUUID(), name: f.name, content: f.content, kind: 'text' }))
     } else if (currentDropTarget?.type === 'subtab') {
       // Drop files into the sub-tab's board (silent — they appear when you navigate there)
       const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
@@ -585,7 +585,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         const [storagePath, { text, pageCount }] = await Promise.all([uploadPdf(pdf), extractPdfText(pdf)])
         const pdfData = { name: pdf.name, storagePath, text, pageCount }
         if (currentDropTarget?.type === 'claude') {
-          claudeDropRegistry.inject(currentDropTarget.nodeId, text || '(no extractable text in this PDF)', pdf.name)
+          // Generate thumbnail for the attachment chip (best-effort — non-blocking)
+          const thumbnail = await renderPdfThumbnail(pdf).catch(() => '')
+          claudeDropRegistry.inject(currentDropTarget.nodeId, {
+            id: crypto.randomUUID(), name: pdf.name,
+            content: text || '(no extractable text in this PDF)',
+            kind: 'pdf', thumbnail: thumbnail || undefined,
+          })
         } else if (currentDropTarget?.type === 'subtab') {
           const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
           const id = crypto.randomUUID()

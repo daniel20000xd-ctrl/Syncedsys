@@ -35,6 +35,27 @@ export async function extractPdfText(file: File): Promise<{ text: string; pageCo
   return { text: text.slice(0, MAX_TEXT_CHARS).trim(), pageCount: doc.numPages }
 }
 
+// Render page 1 of a PDF to a small JPEG data-URL for use as an attachment
+// thumbnail. Reuses the same pdfjs load so callers can share the ArrayBuffer.
+export async function renderPdfThumbnail(file: File, maxWidth = 120): Promise<string> {
+  const pdfjs = await import('pdfjs-dist')
+  pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`
+
+  const buf = await file.arrayBuffer()
+  const doc = await pdfjs.getDocument({ data: buf }).promise
+  const page = await doc.getPage(1)
+  const baseViewport = page.getViewport({ scale: 1 })
+  const scale = maxWidth / baseViewport.width
+  const viewport = page.getViewport({ scale })
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(viewport.width)
+  canvas.height = Math.round(viewport.height)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return ''
+  await page.render({ canvasContext: ctx, viewport }).promise
+  return canvas.toDataURL('image/jpeg', 0.75)
+}
+
 // Upload the raw PDF to the user's folder in the storage bucket. Returns the
 // storage path (e.g. "<userId>/<uuid>.pdf") to persist on the element.
 export async function uploadPdf(file: File): Promise<string> {
