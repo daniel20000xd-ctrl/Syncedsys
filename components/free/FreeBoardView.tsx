@@ -1800,23 +1800,26 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
       {fileDragOver && (() => {
         const vp = getViewport()
-        const holes = nodesRef.current
+        const claudeRects = nodesRef.current
           .filter(n => n.type === 'claudeNode')
-          .map(n => {
-            const w = (n.measured?.width ?? 340) * vp.zoom
-            const h = (n.measured?.height ?? 420) * vp.zoom
-            const x = n.position.x * vp.zoom + vp.x
-            const y = n.position.y * vp.zoom + vp.y
-            return `M${x},${y} H${x + w} V${y + h} H${x} Z`
-          }).join(' ')
+          .map(n => ({
+            x: n.position.x * vp.zoom + vp.x,
+            y: n.position.y * vp.zoom + vp.y,
+            w: (n.measured?.width ?? 340) * vp.zoom,
+            h: (n.measured?.height ?? 420) * vp.zoom,
+          }))
+        const holePath = claudeRects.map(r => `M${r.x},${r.y} H${r.x + r.w} V${r.y + r.h} H${r.x} Z`).join(' ')
         return (
           <>
             <svg className="absolute inset-0 pointer-events-none" style={{ zIndex: 20, width: '100%', height: '100%' }}>
               <path
-                d={`M-1,-1 H10001 V10001 H-1 Z ${holes}`}
+                d={`M-1,-1 H10001 V10001 H-1 Z ${holePath}`}
                 fillRule="evenodd"
                 fill="rgba(99,102,241,0.1)"
               />
+              {claudeRects.map((r, i) => (
+                <rect key={i} x={r.x} y={r.y} width={r.w} height={r.h} fill="rgba(0,0,0,0.13)" rx={8} />
+              ))}
             </svg>
             <div className="absolute inset-0 z-20 flex items-center justify-center border-4 border-dashed border-indigo-400 pointer-events-none">
               <p className="bg-white/90 text-indigo-600 text-sm font-medium px-4 py-2 rounded-lg shadow">Drop files or folders to add them to the canvas</p>
