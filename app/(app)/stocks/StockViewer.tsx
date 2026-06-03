@@ -21,38 +21,45 @@ interface OHLCVBar {
   volume: number
 }
 
+type Num = number | null
+type Pct = number | null
+
+interface IncomeRow  { date: string; totalRevenue: Num; grossProfit: Num; ebit: Num; netIncome: Num; ebitda: Num; totalOperatingExpenses: Num }
+interface BalanceRow { date: string; totalAssets: Num; totalLiab: Num; equity: Num; cash: Num; shortDebt: Num; longDebt: Num }
+interface CashRow    { date: string; operatingCF: Num; capex: Num; freeCF: Num; investingCF: Num; financingCF: Num }
+interface EarningsRow { date: string; epsActual: Num; epsEstimate: Num; surprisePct: Num }
+interface EstimateRow { period: string; endDate: string; epsEst: Num; revEst: Num; numAnalysts: Num }
+interface RecRow      { period: string; strongBuy: number; buy: number; hold: number; sell: number; strongSell: number }
+interface UpgradeRow  { date: string; firm: string; toGrade: string; fromGrade: string; action: string }
+interface InsiderRow  { date: string; name: string; shares: Num; value: Num; description: string }
+
 interface StockData {
-  ticker: string
-  interval: string
-  currentPrice: number
-  change: number
-  changePercent: number
-  marketCap: number | null
-  peRatio: number | null
-  dividendYield: number | null
-  high52w: number | null
-  low52w: number | null
-  eps: number | null
+  ticker: string; interval: string
+  currentPrice: number; change: number; changePercent: number
+  marketCap: Num; peRatio: Num; dividendYield: Pct; high52w: Num; low52w: Num; eps: Num
+  forwardEps: Num; priceToBook: Num; enterpriseValue: Num; enterpriseToRevenue: Num
+  enterpriseToEbitda: Num; beta: Num; shortRatio: Num; payoutRatio: Pct
+  bookValue: Num; heldPercentInsiders: Pct; heldPercentInstitutions: Pct
+  targetMeanPrice: Num; targetHighPrice: Num; targetLowPrice: Num; numberOfAnalysts: Num
+  recommendationKey: string | null; recommendationMean: Num
+  revenueGrowth: Pct; earningsGrowth: Pct; grossMargins: Pct; operatingMargins: Pct
+  profitMargins: Pct; returnOnEquity: Pct; returnOnAssets: Pct
+  debtToEquity: Num; currentRatio: Num; quickRatio: Num
+  totalCash: Num; totalDebt: Num; freeCashflow: Num; operatingCashflow: Num
+  totalRevenue: Num; grossProfits: Num; ebitda: Num
+  description: string | null; sector: string | null; industry: string | null
+  employees: Num; website: string | null; country: string | null
+  nextEarningsDate: string | null
   ohlcv: OHLCVBar[]
   sma50: { time: string; value: number }[]
   sma200: { time: string; value: number }[]
-  indicators: {
-    rsi: number | null
-    macd: number | null
-    macdSignal: number | null
-    macdHistogram: number | null
-    bbUpper: number | null
-    bbMiddle: number | null
-    bbLower: number | null
-    bbWidth: number | null
-  }
-  news: Array<{
-    title: string
-    source: string
-    link: string
-    publishedAt: string
-    sentiment: 'positive' | 'negative' | 'neutral' | null
-  }>
+  indicators: { rsi: Num; macd: Num; macdSignal: Num; macdHistogram: Num; bbUpper: Num; bbMiddle: Num; bbLower: Num; bbWidth: Num }
+  incomeAnnual: IncomeRow[]; incomeQuarterly: IncomeRow[]
+  balanceAnnual: BalanceRow[]; cashflowAnnual: CashRow[]
+  earningsHistory: EarningsRow[]; earningsTrend: EstimateRow[]
+  recommendationTrend: RecRow[]; upgradeDowngradeHistory: UpgradeRow[]
+  insiderTransactions: InsiderRow[]
+  news: Array<{ title: string; source: string; link: string; publishedAt: string; sentiment: 'positive' | 'negative' | 'neutral' | null }>
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -70,9 +77,66 @@ function fmtPrice(n: number): string {
 }
 
 function fmtDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-  } catch { return iso }
+  try { return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) }
+  catch { return iso }
+}
+function fmtNum(n: Num, dp = 2, prefix = ''): string {
+  return n == null ? '—' : `${prefix}${n.toFixed(dp)}`
+}
+function fmtPct(n: Pct, stored01 = true): string {
+  return n == null ? '—' : `${(stored01 ? n * 100 : n).toFixed(1)}%`
+}
+function fmtB(n: Num): string {
+  if (n == null) return '—'
+  const a = Math.abs(n)
+  if (a >= 1e12) return `$${(n / 1e12).toFixed(2)}T`
+  if (a >= 1e9)  return `$${(n / 1e9).toFixed(2)}B`
+  if (a >= 1e6)  return `$${(n / 1e6).toFixed(2)}M`
+  if (a >= 1e3)  return `$${(n / 1e3).toFixed(1)}K`
+  return `$${n.toFixed(2)}`
+}
+
+function SectionCard({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="bg-white rounded-xl p-5 shadow-sm">
+      <h2 className="font-semibold text-gray-800 mb-3 flex items-center gap-2 text-sm">{icon}{title}</h2>
+      {children}
+    </div>
+  )
+}
+function Grid({ items }: { items: { label: string; value: string }[] }) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {items.map(({ label, value }) => (
+        <div key={label} className="border border-gray-100 rounded-lg px-3 py-2.5">
+          <p className="text-[10px] text-gray-400 mb-0.5">{label}</p>
+          <p className="text-sm font-bold text-gray-800">{value}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+function TableSection({ cols, rows }: { cols: string[]; rows: (string | null)[][] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-gray-100">
+            {cols.map(c => <th key={c} className="text-left text-gray-400 font-medium pb-1.5 pr-4 whitespace-nowrap">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} className="border-b border-gray-50 last:border-0">
+              {row.map((cell, j) => (
+                <td key={j} className="py-1.5 pr-4 text-gray-700 whitespace-nowrap font-mono tabular-nums">{cell ?? '—'}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
@@ -476,6 +540,206 @@ export default function StockViewer() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* ── Company profile ──────────────────────────────────────── */}
+            {(stockData.description || stockData.sector) && (
+              <SectionCard title="Company Profile" icon={<BookOpen size={14} className="text-indigo-500" />}>
+                <Grid items={[
+                  { label: 'Sector',    value: stockData.sector   ?? '—' },
+                  { label: 'Industry',  value: stockData.industry ?? '—' },
+                  { label: 'Country',   value: stockData.country  ?? '—' },
+                  { label: 'Employees', value: stockData.employees != null ? stockData.employees.toLocaleString() : '—' },
+                  { label: 'Beta',      value: fmtNum(stockData.beta, 2) },
+                  { label: 'Short Ratio', value: fmtNum(stockData.shortRatio, 1) },
+                ]} />
+                {stockData.description && (
+                  <p className="mt-3 text-sm text-gray-600 leading-relaxed line-clamp-4">{stockData.description}</p>
+                )}
+                {stockData.website && (
+                  <a href={stockData.website} target="_blank" rel="noreferrer" className="mt-1 text-xs text-blue-500 hover:underline">{stockData.website}</a>
+                )}
+              </SectionCard>
+            )}
+
+            {/* ── Extended valuation ───────────────────────────────────── */}
+            <SectionCard title="Extended Valuation" icon={<BookOpen size={14} className="text-purple-500" />}>
+              <Grid items={[
+                { label: 'Forward P/E',   value: stockData.forwardEps && stockData.currentPrice ? `${(stockData.currentPrice / stockData.forwardEps).toFixed(1)}×` : '—' },
+                { label: 'Price/Book',    value: fmtNum(stockData.priceToBook, 2, '') + (stockData.priceToBook != null ? '×' : '') },
+                { label: 'EV/Revenue',    value: fmtNum(stockData.enterpriseToRevenue, 2, '') + (stockData.enterpriseToRevenue != null ? '×' : '') },
+                { label: 'EV/EBITDA',     value: fmtNum(stockData.enterpriseToEbitda, 2, '') + (stockData.enterpriseToEbitda != null ? '×' : '') },
+                { label: 'Forward EPS',   value: stockData.forwardEps != null ? `$${stockData.forwardEps}` : '—' },
+                { label: 'Book Value',    value: stockData.bookValue  != null ? `$${stockData.bookValue}`  : '—' },
+                { label: 'Payout Ratio',  value: fmtPct(stockData.payoutRatio) },
+                { label: 'Insider Own.',  value: fmtPct(stockData.heldPercentInsiders) },
+                { label: 'Inst. Own.',    value: fmtPct(stockData.heldPercentInstitutions) },
+              ].filter(i => i.value !== '—')} />
+            </SectionCard>
+
+            {/* ── Margins & health ─────────────────────────────────────── */}
+            <SectionCard title="Margins & Financial Health" icon={<BarChart2 size={14} className="text-blue-500" />}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Margins</p>
+                  <Grid items={[
+                    { label: 'Gross Margin',     value: fmtPct(stockData.grossMargins) },
+                    { label: 'Operating Margin', value: fmtPct(stockData.operatingMargins) },
+                    { label: 'Profit Margin',    value: fmtPct(stockData.profitMargins) },
+                    { label: 'ROE',              value: fmtPct(stockData.returnOnEquity) },
+                    { label: 'ROA',              value: fmtPct(stockData.returnOnAssets) },
+                    { label: 'Revenue Growth',   value: fmtPct(stockData.revenueGrowth) },
+                    { label: 'Earnings Growth',  value: fmtPct(stockData.earningsGrowth) },
+                  ].filter(i => i.value !== '—')} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Balance</p>
+                  <Grid items={[
+                    { label: 'Total Revenue',    value: fmtB(stockData.totalRevenue) },
+                    { label: 'Gross Profit',     value: fmtB(stockData.grossProfits) },
+                    { label: 'EBITDA',           value: fmtB(stockData.ebitda) },
+                    { label: 'Free Cash Flow',   value: fmtB(stockData.freeCashflow) },
+                    { label: 'Total Cash',       value: fmtB(stockData.totalCash) },
+                    { label: 'Total Debt',       value: fmtB(stockData.totalDebt) },
+                    { label: 'Debt/Equity',      value: fmtNum(stockData.debtToEquity, 2) },
+                    { label: 'Current Ratio',    value: fmtNum(stockData.currentRatio, 2) },
+                  ].filter(i => i.value !== '—')} />
+                </div>
+              </div>
+            </SectionCard>
+
+            {/* ── Analyst consensus ────────────────────────────────────── */}
+            {(stockData.targetMeanPrice || stockData.recommendationKey) && (
+              <SectionCard title="Analyst Consensus" icon={<TrendingUp size={14} className="text-green-500" />}>
+                <div className="flex flex-wrap gap-3 mb-3">
+                  {stockData.recommendationKey && (
+                    <div className="px-4 py-2 bg-blue-50 text-blue-700 rounded-lg text-sm font-bold uppercase">{stockData.recommendationKey}</div>
+                  )}
+                  {stockData.numberOfAnalysts != null && (
+                    <div className="px-4 py-2 bg-gray-50 text-gray-600 rounded-lg text-sm">{stockData.numberOfAnalysts} analysts</div>
+                  )}
+                  {stockData.nextEarningsDate && (
+                    <div className="px-4 py-2 bg-amber-50 text-amber-700 rounded-lg text-sm">Next earnings: {stockData.nextEarningsDate}</div>
+                  )}
+                </div>
+                <Grid items={[
+                  { label: 'Target (mean)', value: stockData.targetMeanPrice != null ? `$${stockData.targetMeanPrice.toFixed(2)}` : '—' },
+                  { label: 'Target (high)', value: stockData.targetHighPrice != null ? `$${stockData.targetHighPrice.toFixed(2)}` : '—' },
+                  { label: 'Target (low)',  value: stockData.targetLowPrice  != null ? `$${stockData.targetLowPrice.toFixed(2)}`  : '—' },
+                  ...(stockData.targetMeanPrice && stockData.currentPrice ? [{
+                    label: 'Upside (mean)',
+                    value: `${((stockData.targetMeanPrice - stockData.currentPrice) / stockData.currentPrice * 100).toFixed(1)}%`,
+                  }] : []),
+                ].filter(i => i.value !== '—')} />
+
+                {stockData.recommendationTrend.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Recommendation trend</p>
+                    <TableSection
+                      cols={['Period', 'Strong Buy', 'Buy', 'Hold', 'Sell', 'Strong Sell']}
+                      rows={stockData.recommendationTrend.map(r => [r.period, String(r.strongBuy), String(r.buy), String(r.hold), String(r.sell), String(r.strongSell)])}
+                    />
+                  </div>
+                )}
+
+                {stockData.upgradeDowngradeHistory.length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Recent analyst actions</p>
+                    <TableSection
+                      cols={['Date', 'Firm', 'Action', 'To', 'From']}
+                      rows={stockData.upgradeDowngradeHistory.map(u => [u.date, u.firm, u.action, u.toGrade, u.fromGrade || '—'])}
+                    />
+                  </div>
+                )}
+              </SectionCard>
+            )}
+
+            {/* ── Earnings history & estimates ────────────────────────── */}
+            {(stockData.earningsHistory.length > 0 || stockData.earningsTrend.length > 0) && (
+              <SectionCard title="Earnings" icon={<BarChart2 size={14} className="text-orange-500" />}>
+                {stockData.earningsHistory.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Historical EPS</p>
+                    <TableSection
+                      cols={['Quarter', 'Actual', 'Estimate', 'Surprise']}
+                      rows={stockData.earningsHistory.map(e => [
+                        e.date,
+                        e.epsActual   != null ? `$${e.epsActual.toFixed(2)}`   : null,
+                        e.epsEstimate != null ? `$${e.epsEstimate.toFixed(2)}` : null,
+                        e.surprisePct != null ? `${(e.surprisePct * 100).toFixed(1)}%` : null,
+                      ])}
+                    />
+                  </div>
+                )}
+                {stockData.earningsTrend.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Forward estimates</p>
+                    <TableSection
+                      cols={['Period', 'End Date', 'EPS Est.', 'Revenue Est.', 'Analysts']}
+                      rows={stockData.earningsTrend.map(t => [
+                        t.period, t.endDate,
+                        t.epsEst != null ? `$${t.epsEst.toFixed(2)}` : null,
+                        t.revEst != null ? fmtB(t.revEst) : null,
+                        t.numAnalysts != null ? String(t.numAnalysts) : null,
+                      ])}
+                    />
+                  </div>
+                )}
+              </SectionCard>
+            )}
+
+            {/* ── Annual income statements ─────────────────────────────── */}
+            {stockData.incomeAnnual.length > 0 && (
+              <SectionCard title="Annual Income Statements" icon={<BookOpen size={14} className="text-teal-500" />}>
+                <TableSection
+                  cols={['Fiscal Year', 'Revenue', 'Gross Profit', 'EBIT', 'Net Income', 'EBITDA']}
+                  rows={stockData.incomeAnnual.map(s => [s.date, fmtB(s.totalRevenue), fmtB(s.grossProfit), fmtB(s.ebit), fmtB(s.netIncome), fmtB(s.ebitda)])}
+                />
+                {stockData.incomeQuarterly.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Quarterly (last 4)</p>
+                    <TableSection
+                      cols={['Quarter', 'Revenue', 'Gross Profit', 'Net Income']}
+                      rows={stockData.incomeQuarterly.map(s => [s.date, fmtB(s.totalRevenue), fmtB(s.grossProfit), fmtB(s.netIncome)])}
+                    />
+                  </div>
+                )}
+              </SectionCard>
+            )}
+
+            {/* ── Balance sheet ─────────────────────────────────────────── */}
+            {stockData.balanceAnnual.length > 0 && (
+              <SectionCard title="Annual Balance Sheets" icon={<BookOpen size={14} className="text-violet-500" />}>
+                <TableSection
+                  cols={['Fiscal Year', 'Total Assets', 'Total Liab.', 'Equity', 'Cash', 'Long-Term Debt']}
+                  rows={stockData.balanceAnnual.map(s => [s.date, fmtB(s.totalAssets), fmtB(s.totalLiab), fmtB(s.equity), fmtB(s.cash), fmtB(s.longDebt)])}
+                />
+              </SectionCard>
+            )}
+
+            {/* ── Cash flow ────────────────────────────────────────────── */}
+            {stockData.cashflowAnnual.length > 0 && (
+              <SectionCard title="Annual Cash Flow Statements" icon={<BarChart2 size={14} className="text-cyan-500" />}>
+                <TableSection
+                  cols={['Fiscal Year', 'Operating CF', 'CapEx', 'Free CF', 'Investing CF', 'Financing CF']}
+                  rows={stockData.cashflowAnnual.map(s => [s.date, fmtB(s.operatingCF), fmtB(s.capex), fmtB(s.freeCF), fmtB(s.investingCF), fmtB(s.financingCF)])}
+                />
+              </SectionCard>
+            )}
+
+            {/* ── Insider transactions ──────────────────────────────────── */}
+            {stockData.insiderTransactions.length > 0 && (
+              <SectionCard title="Recent Insider Transactions" icon={<Newspaper size={14} className="text-rose-500" />}>
+                <TableSection
+                  cols={['Date', 'Insider', 'Shares', 'Value', 'Description']}
+                  rows={stockData.insiderTransactions.map(t => [
+                    t.date, t.name,
+                    t.shares != null ? t.shares.toLocaleString() : null,
+                    t.value  != null ? fmtB(t.value)             : null,
+                    t.description || null,
+                  ])}
+                />
+              </SectionCard>
             )}
 
           </>
