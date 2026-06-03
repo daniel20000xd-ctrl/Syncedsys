@@ -269,3 +269,25 @@ create index on cards(list_id);
 --   using (bucket_id = 'pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
 -- create policy "pdf delete own" on storage.objects for delete to authenticated
 --   using (bucket_id = 'pdfs' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ── Stock Viewer ──────────────────────────────────────────────────────────────
+-- 1. Add stocks_enabled flag to user_secrets (run once):
+--
+-- alter table user_secrets
+--   add column if not exists stocks_enabled boolean not null default false;
+--
+-- 2. Shared cache table for yahoo-finance data (no user_id — public market data):
+--
+-- create table if not exists stock_cache (
+--   ticker      text not null,
+--   interval    text not null,
+--   data        jsonb not null,
+--   fetched_at  timestamptz not null default now(),
+--   primary key (ticker, interval)
+-- );
+-- alter table stock_cache enable row level security;
+-- create policy "Authenticated users can read stock cache"
+--   on stock_cache for select using (auth.uid() is not null);
+-- create policy "Authenticated users can upsert stock cache"
+--   on stock_cache for all
+--   using (auth.uid() is not null) with check (auth.uid() is not null);

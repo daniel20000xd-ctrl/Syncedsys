@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid, Smartphone, Plus, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid, Smartphone, Plus, X, BarChart2 } from 'lucide-react'
 import type { Board, List as ListType, DeviceLink } from '@/lib/types'
 import { useUnits } from '@/lib/unitsStore'
 import { useDocTabs } from '@/lib/docTabsStore'
@@ -167,6 +167,14 @@ export default function Sidebar({ boards, isAdmin, devices = [] }: { boards: Boa
             {!collapsed && <span>Overview</span>}
           </button>
         )}
+        <button
+          onClick={() => router.push('/stocks')}
+          className={`w-full flex items-center gap-2 px-2 py-2 rounded text-sm transition-colors ${pathname === '/stocks' ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'} ${collapsed ? 'justify-center' : ''}`}
+          title={collapsed ? 'Stocks' : undefined}
+        >
+          <BarChart2 size={15} />
+          {!collapsed && <span>Stocks</span>}
+        </button>
         <button
           onClick={() => router.push('/settings')}
           className={`w-full flex items-center gap-2 px-2 py-2 rounded text-sm transition-colors ${pathname === '/settings' ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'} ${collapsed ? 'justify-center' : ''}`}

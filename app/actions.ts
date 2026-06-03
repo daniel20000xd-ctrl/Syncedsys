@@ -764,6 +764,35 @@ export async function upsertElement(
   if (error) throw error
 }
 
+// ── Stock Viewer feature flag ─────────────────────────────────────────────────
+
+export async function getStocksEnabled(): Promise<boolean> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return false
+  const { data } = await supabase
+    .from('user_secrets')
+    .select('stocks_enabled')
+    .eq('user_id', user.id)
+    .maybeSingle()
+  return !!(data as { stocks_enabled?: boolean } | null)?.stocks_enabled
+}
+
+export async function setStocksEnabled(enabled: boolean): Promise<void> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  const { error } = await supabase
+    .from('user_secrets')
+    .upsert(
+      { user_id: user.id, stocks_enabled: enabled, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' }
+    )
+  if (error) throw error
+  revalidatePath('/settings/connected-apps')
+  revalidatePath('/stocks')
+}
+
 // ── Account links ─────────────────────────────────────────────────────────────
 
 export async function linkAccount(memberId: string, label: string) {
