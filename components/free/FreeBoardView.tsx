@@ -744,17 +744,23 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     e.preventDefault()
     e.dataTransfer.dropEffect = 'copy'
 
-    // Magnetic targeting — find nearest claude/subtab node within MAGNETIC_RADIUS
+    // Magnetic targeting — activate when cursor is within node bounds (+ MAGNETIC_RADIUS outside edges)
     const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     let closest: { nodeId: string; type: 'claude' | 'subtab'; dist: number } | null = null
     for (const n of nodesRef.current) {
       if (n.type !== 'claudeNode' && n.type !== 'subTabNode') continue
       const w = n.measured?.width ?? (n.type === 'claudeNode' ? 340 : 150)
       const h = n.measured?.height ?? (n.type === 'claudeNode' ? 420 : 60)
+      const inBounds =
+        flowPos.x >= n.position.x - MAGNETIC_RADIUS &&
+        flowPos.x <= n.position.x + w + MAGNETIC_RADIUS &&
+        flowPos.y >= n.position.y - MAGNETIC_RADIUS &&
+        flowPos.y <= n.position.y + h + MAGNETIC_RADIUS
+      if (!inBounds) continue
       const cx = n.position.x + w / 2
       const cy = n.position.y + h / 2
       const dist = Math.hypot(flowPos.x - cx, flowPos.y - cy)
-      if (dist < MAGNETIC_RADIUS && (!closest || dist < closest.dist)) {
+      if (!closest || dist < closest.dist) {
         closest = { nodeId: n.id, type: n.type === 'claudeNode' ? 'claude' : 'subtab', dist }
       }
     }
