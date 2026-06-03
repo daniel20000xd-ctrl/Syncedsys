@@ -1,9 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
-import dynamic from 'next/dynamic'
-
-// Loaded client-side only — lightweight-charts uses DOM APIs
-const StockViewer = dynamic(() => import('./StockViewer'), { ssr: false })
+import StockViewerWrapper from './StockViewerWrapper'
 
 export default async function StocksPage() {
   const supabase = await createClient()
@@ -21,5 +18,5 @@ export default async function StocksPage() {
     redirect('/settings/connected-apps')
   }
 
-  return <StockViewer />
+  return <StockViewerWrapper />
 }

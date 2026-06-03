@@ -5,8 +5,10 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, FileType } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, FileType, BarChart2 } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab, getPdfUrl } from '@/app/actions'
+import { useRouter } from 'next/navigation'
+import StockPortal from './StockPortal'
 import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
@@ -960,6 +962,12 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const onHold = data.onHold as ((id: string) => void) | undefined
 
   const { updateNodeData } = useReactFlow()
+  const router = useRouter()
+
+  // Viewer mode — when set, the portal embeds a built-in viewer instead of a board tab
+  const viewerKind   = (data.viewerKind   as string | undefined)                          ?? null
+  const viewerConfig = (data.viewerConfig as { ticker?: string; interval?: string } | undefined) ?? {}
+
   const [choosing, setChoosing] = useState(false)
   const [boards, setBoards] = useState<{ id: string; name: string; color: string; parent_id: string | null }[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -1241,13 +1249,22 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           </div>
         )}
 
-        {(!targetBoardId) && (
+        {/* ── Stock Viewer portal ────────────────────────────────────────── */}
+        {viewerKind === 'stocks' && (
+          <StockPortal
+            config={viewerConfig}
+            onPersistConfig={cfg => persist({ viewerKind: 'stocks', viewerConfig: cfg })}
+          />
+        )}
+
+        {/* Empty state — shown when nothing is chosen yet */}
+        {(!targetBoardId && !viewerKind) && (
           <div className="absolute inset-0 flex items-center justify-center border-2 border-dashed border-fuchsia-400/60">
             <button
               onClick={e => { e.stopPropagation(); setChoosing(v => !v) }}
               className="nodrag bg-fuchsia-500 hover:bg-fuchsia-600 text-white text-xs px-3 py-1.5 rounded-lg shadow"
             >
-              Choose a tab…
+              Choose…
             </button>
           </div>
         )}
@@ -1264,9 +1281,16 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 <ArrowLeft size={11} />
               </button>
             )}
-            <span className="truncate">{openFile ? openFile.name : (canGoBack ? (viewName || 'Folder') : (target ? `↪ ${target.name}` : 'Portal'))}</span>
+            <span className="truncate">
+              {viewerKind === 'stocks'
+                ? (viewerConfig.ticker ? `📈 ${viewerConfig.ticker}` : '📈 Stock Viewer')
+                : openFile
+                  ? openFile.name
+                  : (canGoBack ? (viewName || 'Folder') : (target ? `↪ ${target.name}` : 'Portal'))}
+            </span>
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
+            {/* Lock — only for board portals */}
             {targetBoardId && isBase && !openFile && isPannable && (
               <button
                 className={`nodrag p-0.5 rounded hover:bg-white/20 ${locked ? 'text-fuchsia-300' : ''}`}
@@ -1276,12 +1300,17 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 {locked ? <Lock size={11} /> : <LockOpen size={11} />}
               </button>
             )}
-            {targetBoardId && isBase && !locked && (
-              <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Change tab" onClick={e => { e.stopPropagation(); setChoosing(v => !v) }}><ChevronDown size={11} /></button>
+            {/* Chevron: switch tab/viewer — shown for board portals and viewer portals */}
+            {((targetBoardId && isBase && !locked) || viewerKind != null) && (
+              <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Change content" onClick={e => { e.stopPropagation(); setChoosing(v => !v) }}><ChevronDown size={11} /></button>
             )}
-            {viewId && !openFile && (
-              <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Open this tab fully" onClick={e => { e.stopPropagation(); onOpenFully?.(viewId) }}><Maximize2 size={11} /></button>
-            )}
+            {/* Maximize — board portal opens the tab; viewer portal navigates to /stocks */}
+            {viewId && !openFile
+              ? <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Open this tab fully" onClick={e => { e.stopPropagation(); onOpenFully?.(viewId) }}><Maximize2 size={11} /></button>
+              : viewerKind === 'stocks'
+                ? <button className="nodrag p-0.5 rounded hover:bg-white/20" title="Open Stock Viewer" onClick={e => { e.stopPropagation(); router.push('/stocks') }}><Maximize2 size={11} /></button>
+                : null
+            }
             <button className="nodrag p-0.5 rounded hover:bg-red-500/50" title="Remove portal" onClick={e => { e.stopPropagation(); (data.onDelete as (id: string) => void)(id) }}><X size={11} /></button>
           </div>
         </div>
@@ -1294,7 +1323,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         async function pickBoard(boardId: string) {
           setChoosing(false)
           fittedRef.current = null
-          persist({ targetBoardId: boardId })
+          // Clear any viewer mode when switching to a board tab
+          persist({ targetBoardId: boardId, viewerKind: null, viewerConfig: null })
           if (home) {
             const { createClient } = await import('@/lib/supabase/client')
             const { data: bd } = await createClient().from('boards').select('mode').eq('id', boardId).single()
@@ -1302,16 +1332,45 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           }
         }
 
+        function pickViewer(kind: string) {
+          setChoosing(false)
+          // Clear any board target when switching to a viewer
+          persist({ viewerKind: kind, viewerConfig: {}, targetBoardId: null })
+        }
+
         const topBoards = boards.filter(b => !b.parent_id && b.id !== home)
         const childrenOf = (pid: string) => boards.filter(b => b.parent_id === pid && b.id !== home)
 
         return (
           <div
-            className="nodrag nowheel absolute top-6 right-0 z-50 bg-white rounded-lg shadow-xl border border-gray-200 py-1 w-52 max-h-64 overflow-y-auto"
+            className="nodrag nowheel absolute top-6 right-0 z-50 bg-white rounded-lg shadow-xl border border-gray-200 w-52 max-h-72 overflow-y-auto"
             onWheel={e => { e.stopPropagation(); e.nativeEvent.stopImmediatePropagation() }}
             onClick={e => e.stopPropagation()}
           >
-            {boards.length === 0 && <p className="px-3 py-2 text-xs text-gray-400">Loading…</p>}
+            {/* ── Viewers section ─────────────────────────────────────────── */}
+            <div className="px-3 pt-2 pb-1">
+              <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Viewers</p>
+              <button
+                onClick={e => { e.stopPropagation(); pickViewer('stocks') }}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md text-left transition-colors ${
+                  viewerKind === 'stocks'
+                    ? 'bg-green-50 text-green-700'
+                    : 'text-gray-700 hover:bg-green-50 hover:text-green-700'
+                }`}
+              >
+                <BarChart2 size={12} className="text-green-500 shrink-0" />
+                <span>Stock Viewer</span>
+                {viewerKind === 'stocks' && <span className="ml-auto text-[9px] text-green-500">active</span>}
+              </button>
+            </div>
+
+            <div className="border-t border-gray-100 mx-0 my-1" />
+
+            {/* ── Tabs section ────────────────────────────────────────────── */}
+            <div className="px-3 pb-1 pt-0.5">
+              <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Tabs</p>
+            </div>
+            {boards.length === 0 && <p className="px-3 pb-2 text-xs text-gray-400">Loading…</p>}
             {topBoards.map(b => {
               const children = childrenOf(b.id)
               const isExp = expanded.has(b.id)
@@ -1356,7 +1415,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                   const homeBoard = boards.find(b => b.id === home)
                   const sub = await createSubTab(home, 'New tab', homeBoard?.color ?? '#0079bf', 'classic')
                   fittedRef.current = null
-                  persist({ targetBoardId: sub.id })
+                  persist({ targetBoardId: sub.id, viewerKind: null, viewerConfig: null })
                 }}
                 className="w-full flex items-center gap-1.5 px-3 py-2 text-xs text-blue-600 hover:bg-blue-50 text-left border-t border-gray-100 mt-0.5"
               >
