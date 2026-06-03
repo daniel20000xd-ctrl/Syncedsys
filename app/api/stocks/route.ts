@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { RSI, SMA, MACD, BollingerBands } from 'technicalindicators'
+import { fetchAvanzaData, isSwedishTicker, type AvanzaData } from '@/lib/avanza'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,8 @@ interface StockResult {
   insiderTransactions: InsiderRow[]
   // ── News ──
   news: Array<{ title: string; source: string; link: string; publishedAt: string; sentiment: 'positive' | 'negative' | 'neutral' }>
+  // ── Nordic supplement (Avanza, Swedish tickers only; null if unavailable) ──
+  avanza: AvanzaData | null
 }
 
 // ── Yahoo Finance helpers ─────────────────────────────────────────────────────
@@ -367,6 +370,34 @@ export async function GET(req: NextRequest) {
     const change        = r2(currentPrice - prevClose)
     const changePercent = prevClose > 0 ? Math.round((change / prevClose) * 10000) / 100 : 0
 
+    // ── Nordic supplement (Avanza) — Swedish tickers only ──────────────────────
+    // fetchAvanzaData never throws and self-times-out; on any problem it returns
+    // null and we simply ship the Yahoo-only result, exactly as before.
+    let avanza: AvanzaData | null = null
+    if (isSwedishTicker(ticker)) {
+      avanza = await fetchAvanzaData(ticker)
+    }
+
+    // Fill ONLY the gaps Yahoo left null. Yahoo values always win where present,
+    // so existing behaviour is unchanged for tickers Yahoo covers fully.
+    if (avanza) {
+      if (peRatio       == null && avanza.peRatio        != null) peRatio       = Math.round(avanza.peRatio * 10) / 10
+      if (dividendYield == null && avanza.directYield    != null) dividendYield = avanza.directYield
+      if (marketCap     == null && avanza.marketCap      != null) marketCap     = avanza.marketCap
+      if (eps           == null && avanza.eps            != null) eps           = avanza.eps
+      if (bookValue     == null && avanza.equityPerShare != null) bookValue     = avanza.equityPerShare
+      if (priceToBook   == null && avanza.pbRatio        != null) priceToBook   = avanza.pbRatio
+      if (beta          == null && avanza.beta           != null) beta          = avanza.beta
+      if (returnOnEquity   == null && avanza.returnOnEquity != null) returnOnEquity = avanza.returnOnEquity
+      if (returnOnAssets   == null && avanza.returnOnAssets != null) returnOnAssets = avanza.returnOnAssets
+      if (grossMargins     == null && avanza.grossMargin    != null) grossMargins     = avanza.grossMargin
+      if (operatingMargins == null && avanza.operatingMargin!= null) operatingMargins = avanza.operatingMargin
+      if (profitMargins    == null && avanza.netMargin      != null) profitMargins    = avanza.netMargin
+      if (operatingCashflow== null && avanza.operatingCashFlow != null) operatingCashflow = avanza.operatingCashFlow
+      if (nextEarningsDate == null && avanza.nextReportDate != null) nextEarningsDate = avanza.nextReportDate
+      if (shortRatio       == null && avanza.shortSellingRatio != null) shortRatio = avanza.shortSellingRatio
+    }
+
     const result: StockResult = {
       ticker, interval, currentPrice, change, changePercent,
       marketCap, peRatio, dividendYield, high52w, low52w, eps,
@@ -379,6 +410,7 @@ export async function GET(req: NextRequest) {
       totalCash, totalDebt, freeCashflow, operatingCashflow, totalRevenue, grossProfits, ebitda,
       description, sector, industry, employees, website, country,
       nextEarningsDate,
+      avanza,
       ohlcv, sma50, sma200,
       indicators: {
         rsi:           rsiRaw.length ? Math.round(rsiRaw[rsiRaw.length-1] * 10) / 10 : null,

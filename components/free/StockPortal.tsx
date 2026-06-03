@@ -18,6 +18,17 @@ interface EstimateRow { period: string; endDate: string; epsEst: Num; revEst: Nu
 interface RecRow      { period: string; strongBuy: number; buy: number; hold: number; sell: number; strongSell: number }
 interface UpgradeRow  { date: string; firm: string; toGrade: string; fromGrade: string; action: string }
 interface InsiderRow  { date: string; name: string; shares: Num; value: Num; description: string }
+interface AvanzaData {
+  orderBookId: string; name: string | null; marketList: string | null; currency: string | null
+  peRatio: Num; psRatio: Num; pbRatio: Num; evEbit: Num
+  directYield: Num; beta: Num; volatility: Num
+  returnOnEquity: Num; returnOnAssets: Num; returnOnCapitalEmployed: Num; equityRatio: Num
+  grossMargin: Num; operatingMargin: Num; netMargin: Num
+  marketCap: Num; eps: Num; equityPerShare: Num; operatingCashFlow: Num
+  numberOfOwners: Num; shortSellingRatio: Num
+  dividendAmount: Num; dividendExDate: string | null; dividendsPerYear: Num
+  nextReportDate: string | null; nextReportType: string | null; previousReportDate: string | null
+}
 
 interface StockData {
   ticker: string; interval: string
@@ -45,6 +56,7 @@ interface StockData {
   earningsHistory: EarningsRow[]; earningsTrend: EstimateRow[]
   recommendationTrend: RecRow[]; upgradeDowngradeHistory: UpgradeRow[]
   insiderTransactions: InsiderRow[]
+  avanza: AvanzaData | null
   news: Array<{ title: string; source: string; link: string; publishedAt: string; sentiment: 'positive' | 'negative' | 'neutral' | null }>
 }
 
@@ -275,6 +287,37 @@ function buildViewerContext(d: StockData): string {
       lines.push(`  ${t.date}  ${t.name.padEnd(30)} ${shares}${val}`)
       if (t.description) lines.push(`            ${t.description}`)
     }
+  }
+
+  // ── Nordic supplement (Avanza, SEK) ───────────────────────────────────────
+  if (d.avanza) {
+    const a = d.avanza
+    h('NORDIC DATA — AVANZA (in SEK)')
+    lines.push('  (Swedish broker data — fills gaps Yahoo Finance leaves for .ST tickers)')
+    if (a.marketList) lines.push(`  Market List:             ${a.marketList}`)
+    lines.push(`  P/E Ratio:               ${fmtN(a.peRatio, 2)}`)
+    lines.push(`  P/S Ratio:               ${fmtN(a.psRatio, 2)}`)
+    lines.push(`  P/B Ratio:               ${fmtN(a.pbRatio, 2)}`)
+    lines.push(`  EV/EBIT:                 ${fmtN(a.evEbit, 2)}`)
+    lines.push(`  Direct Yield:            ${fmtPct(a.directYield)}`)
+    lines.push(`  Beta:                    ${fmtN(a.beta, 2)}`)
+    lines.push(`  Volatility:              ${fmtPct(a.volatility)}`)
+    lines.push(`  Return on Equity:        ${fmtPct(a.returnOnEquity)}`)
+    lines.push(`  Return on Assets:        ${fmtPct(a.returnOnAssets)}`)
+    lines.push(`  Return on Cap. Employed: ${fmtPct(a.returnOnCapitalEmployed)}`)
+    lines.push(`  Equity Ratio:            ${fmtPct(a.equityRatio)}`)
+    lines.push(`  Gross Margin:            ${fmtPct(a.grossMargin)}`)
+    lines.push(`  Operating Margin:        ${fmtPct(a.operatingMargin)}`)
+    lines.push(`  Net Margin:              ${fmtPct(a.netMargin)}`)
+    lines.push(`  Market Cap:              ${a.marketCap != null ? `${(a.marketCap/1e9).toFixed(2)}B SEK` : 'N/A'}`)
+    lines.push(`  EPS:                     ${a.eps != null ? `${a.eps} SEK` : 'N/A'}`)
+    lines.push(`  Equity / Share:          ${a.equityPerShare != null ? `${a.equityPerShare} SEK` : 'N/A'}`)
+    lines.push(`  Operating Cash Flow:     ${a.operatingCashFlow != null ? `${(a.operatingCashFlow/1e9).toFixed(2)}B SEK` : 'N/A'}`)
+    lines.push(`  Number of Owners:        ${a.numberOfOwners != null ? a.numberOfOwners.toLocaleString() : 'N/A'}`)
+    lines.push(`  Short-Selling Ratio:     ${fmtPct(a.shortSellingRatio)}`)
+    if (a.dividendAmount != null) lines.push(`  Dividend:                ${a.dividendAmount} SEK${a.dividendsPerYear ? ` × ${a.dividendsPerYear}/yr` : ''}${a.dividendExDate ? ` (ex-date ${a.dividendExDate})` : ''}`)
+    if (a.nextReportDate) lines.push(`  Next Report:             ${a.nextReportDate}${a.nextReportType ? ` (${a.nextReportType})` : ''}`)
+    if (a.previousReportDate) lines.push(`  Previous Report:         ${a.previousReportDate}`)
   }
 
   // ── Full OHLCV price history ──────────────────────────────────────────────

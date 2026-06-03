@@ -32,6 +32,17 @@ interface EstimateRow { period: string; endDate: string; epsEst: Num; revEst: Nu
 interface RecRow      { period: string; strongBuy: number; buy: number; hold: number; sell: number; strongSell: number }
 interface UpgradeRow  { date: string; firm: string; toGrade: string; fromGrade: string; action: string }
 interface InsiderRow  { date: string; name: string; shares: Num; value: Num; description: string }
+interface AvanzaData {
+  orderBookId: string; name: string | null; marketList: string | null; currency: string | null
+  peRatio: Num; psRatio: Num; pbRatio: Num; evEbit: Num
+  directYield: Num; beta: Num; volatility: Num
+  returnOnEquity: Num; returnOnAssets: Num; returnOnCapitalEmployed: Num; equityRatio: Num
+  grossMargin: Num; operatingMargin: Num; netMargin: Num
+  marketCap: Num; eps: Num; equityPerShare: Num; operatingCashFlow: Num
+  numberOfOwners: Num; shortSellingRatio: Num
+  dividendAmount: Num; dividendExDate: string | null; dividendsPerYear: Num
+  nextReportDate: string | null; nextReportType: string | null; previousReportDate: string | null
+}
 
 interface StockData {
   ticker: string; interval: string
@@ -59,6 +70,7 @@ interface StockData {
   earningsHistory: EarningsRow[]; earningsTrend: EstimateRow[]
   recommendationTrend: RecRow[]; upgradeDowngradeHistory: UpgradeRow[]
   insiderTransactions: InsiderRow[]
+  avanza: AvanzaData | null
   news: Array<{ title: string; source: string; link: string; publishedAt: string; sentiment: 'positive' | 'negative' | 'neutral' | null }>
 }
 
@@ -559,6 +571,38 @@ export default function StockViewer() {
                 {stockData.website && (
                   <a href={stockData.website} target="_blank" rel="noreferrer" className="mt-1 text-xs text-blue-500 hover:underline">{stockData.website}</a>
                 )}
+              </SectionCard>
+            )}
+
+            {/* ── Nordic data (Avanza) ─────────────────────────────────── */}
+            {stockData.avanza && (
+              <SectionCard title="Nordic Data — Avanza (SEK)" icon={<BarChart2 size={14} className="text-yellow-500" />}>
+                <p className="text-[11px] text-gray-400 mb-3">
+                  Swedish broker data{stockData.avanza.marketList ? ` · ${stockData.avanza.marketList}` : ''} — fills gaps Yahoo Finance leaves for Swedish tickers.
+                </p>
+                <Grid items={[
+                  { label: 'P/E Ratio',      value: fmtNum(stockData.avanza.peRatio, 2) },
+                  { label: 'P/S Ratio',      value: fmtNum(stockData.avanza.psRatio, 2) },
+                  { label: 'P/B Ratio',      value: fmtNum(stockData.avanza.pbRatio, 2) },
+                  { label: 'EV/EBIT',        value: fmtNum(stockData.avanza.evEbit, 2) },
+                  { label: 'Direct Yield',   value: fmtPct(stockData.avanza.directYield) },
+                  { label: 'Beta',           value: fmtNum(stockData.avanza.beta, 2) },
+                  { label: 'Volatility',     value: fmtPct(stockData.avanza.volatility) },
+                  { label: 'ROE',            value: fmtPct(stockData.avanza.returnOnEquity) },
+                  { label: 'ROA',            value: fmtPct(stockData.avanza.returnOnAssets) },
+                  { label: 'ROCE',           value: fmtPct(stockData.avanza.returnOnCapitalEmployed) },
+                  { label: 'Equity Ratio',   value: fmtPct(stockData.avanza.equityRatio) },
+                  { label: 'Gross Margin',   value: fmtPct(stockData.avanza.grossMargin) },
+                  { label: 'Operating Margin', value: fmtPct(stockData.avanza.operatingMargin) },
+                  { label: 'Net Margin',     value: fmtPct(stockData.avanza.netMargin) },
+                  { label: 'Market Cap',     value: stockData.avanza.marketCap != null ? `${(stockData.avanza.marketCap/1e9).toFixed(2)}B SEK` : '—' },
+                  { label: 'EPS',            value: stockData.avanza.eps != null ? `${stockData.avanza.eps} SEK` : '—' },
+                  { label: 'Equity/Share',   value: stockData.avanza.equityPerShare != null ? `${stockData.avanza.equityPerShare} SEK` : '—' },
+                  { label: 'Owners',         value: stockData.avanza.numberOfOwners != null ? stockData.avanza.numberOfOwners.toLocaleString() : '—' },
+                  { label: 'Short Ratio',    value: fmtPct(stockData.avanza.shortSellingRatio) },
+                  { label: 'Dividend',       value: stockData.avanza.dividendAmount != null ? `${stockData.avanza.dividendAmount} SEK${stockData.avanza.dividendsPerYear ? ` ×${stockData.avanza.dividendsPerYear}` : ''}` : '—' },
+                  { label: 'Next Report',    value: stockData.avanza.nextReportDate ?? '—' },
+                ].filter(i => i.value !== '—')} />
               </SectionCard>
             )}
 
