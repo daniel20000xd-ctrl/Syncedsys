@@ -1,20 +1,53 @@
 'use client'
 
-import { useState } from 'react'
-import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Folder, Frame, Eye, EyeOff, FileText } from 'lucide-react'
+import { useState, useRef } from 'react'
+import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Frame, Eye, EyeOff, FileText, LayoutDashboard, AlignLeft, TableProperties } from 'lucide-react'
 import { useUnits, unitsStore, type Unit } from '@/lib/unitsStore'
 
-const KIND_ICON: Record<Unit['kind'], typeof Square> = {
-  list: ListIcon,
-  card: CreditCard,
-  shape: Square,
-  text: Type,
-  image: ImageIcon,
-  drawing: Pencil,
-  subtab: Folder,
-  portal: Frame,
-  file: FileText,
-  unknown: Square,
+// Icon for a unit — subtabs use their board mode to pick a distinct icon
+function UnitIcon({ u }: { u: Unit }) {
+  if (u.kind === 'subtab') {
+    if (u.mode === 'text')        return <AlignLeft size={13} className="shrink-0 text-white/50" />
+    if (u.mode === 'folder')      return <FileText size={13} className="shrink-0 text-white/50" />
+    if (u.mode === 'spreadsheet') return <TableProperties size={13} className="shrink-0 text-white/50" />
+    if (u.mode === 'trello')      return <LayoutDashboard size={13} className="shrink-0 text-white/50" />
+    return <Square size={13} className="shrink-0 text-white/50" /> // classic canvas
+  }
+  const icons: Partial<Record<Unit['kind'], typeof Square>> = {
+    list: ListIcon, card: CreditCard, shape: Square, text: Type,
+    image: ImageIcon, drawing: Pencil, portal: Frame, file: FileText,
+  }
+  const Icon = icons[u.kind] ?? Square
+  return <Icon size={13} className="shrink-0 text-white/50" />
+}
+
+// Inline rename field — shown when the user double-clicks a label
+function RenameField({ id, label, onDone }: { id: string; label: string; onDone: () => void }) {
+  const [draft, setDraft] = useState(label)
+  const ref = useRef<HTMLInputElement>(null)
+
+  function commit() {
+    const trimmed = draft.trim()
+    if (trimmed && trimmed !== label) unitsStore.rename(id, trimmed)
+    onDone()
+  }
+
+  return (
+    <input
+      ref={ref}
+      autoFocus
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') commit()
+        if (e.key === 'Escape') onDone()
+        e.stopPropagation()
+      }}
+      onClick={e => e.stopPropagation()}
+      className="nodrag flex-1 min-w-0 bg-white/15 text-white text-[12px] rounded px-1 py-0 focus:outline-none focus:ring-1 focus:ring-blue-400"
+    />
+  )
 }
 
 export default function UnitsPanel() {
@@ -22,6 +55,7 @@ export default function UnitsPanel() {
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
   const [settingsId, setSettingsId] = useState<string | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
 
   if (units.length === 0) {
     return <p className="px-3 py-1 text-xs text-white/30">No units yet</p>
@@ -41,19 +75,20 @@ export default function UnitsPanel() {
 
   return (
     <div className="px-1">
-      <p className="px-2 py-1 text-[9px] text-white/30">Top of list = front layer · drag to reorder</p>
+      <p className="px-2 py-1 text-[9px] text-white/30">Top = front layer · drag to reorder · double-click to rename</p>
       {units.map(u => {
-        const Icon = KIND_ICON[u.kind]
         const isOpen = settingsId === u.id
+        const isRenaming = renamingId === u.id
         return (
           <div key={u.id}>
             <div
-              draggable={!u.hidden}
+              draggable={!u.hidden && !isRenaming}
               onDragStart={() => setDragId(u.id)}
               onDragOver={e => { e.preventDefault(); setOverId(u.id) }}
               onDrop={() => handleDrop(u.id)}
               onDragEnd={() => { setDragId(null); setOverId(null) }}
-              onClick={() => !u.hidden && unitsStore.select(u.id)}
+              onClick={() => { if (!isRenaming && !u.hidden) unitsStore.select(u.id) }}
+              onDoubleClick={() => { if (!u.hidden) { setSettingsId(null); setRenamingId(u.id) } }}
               className={`group flex items-center gap-1.5 px-1.5 py-1 rounded text-sm transition-colors
                 ${u.hidden
                   ? 'opacity-40 cursor-default'
@@ -64,13 +99,18 @@ export default function UnitsPanel() {
                 ${overId === u.id && dragId ? 'border-t-2 border-blue-400' : 'border-t-2 border-transparent'}`}
             >
               <GripVertical size={12} className="shrink-0 text-white/25 group-hover:text-white/50 cursor-grab" />
-              <Icon size={13} className="shrink-0 text-white/50" />
-              <span className={`truncate flex-1 text-left text-[13px] ${u.hidden ? 'line-through text-white/30' : ''}`}>
-                {u.label || u.kind}
-              </span>
+              <UnitIcon u={u} />
+
+              {isRenaming ? (
+                <RenameField id={u.id} label={u.label} onDone={() => setRenamingId(null)} />
+              ) : (
+                <span className={`truncate flex-1 text-left text-[13px] ${u.hidden ? 'line-through text-white/30' : ''}`}>
+                  {u.label || u.kind}
+                </span>
+              )}
+
               {!u.hidden && u.opacity < 1 && <span className="text-[9px] text-white/30">{Math.round(u.opacity * 100)}%</span>}
 
-              {/* Hide / show toggle — the ONLY way to unhide */}
               <button
                 onClick={e => { e.stopPropagation(); unitsStore.setHidden(u.id, !u.hidden) }}
                 className={`p-0.5 rounded shrink-0 transition-colors ${
@@ -83,10 +123,9 @@ export default function UnitsPanel() {
                 {u.hidden ? <Eye size={12} /> : <EyeOff size={12} />}
               </button>
 
-              {/* Gear / settings — only when visible */}
               {!u.hidden && (
                 <button
-                  onClick={e => { e.stopPropagation(); setSettingsId(isOpen ? null : u.id) }}
+                  onClick={e => { e.stopPropagation(); setRenamingId(null); setSettingsId(isOpen ? null : u.id) }}
                   className={`p-0.5 rounded shrink-0 ${isOpen ? 'text-white bg-white/15' : 'text-white/30 hover:text-white opacity-0 group-hover:opacity-100'}`}
                   title="Unit settings"
                 >
@@ -102,9 +141,7 @@ export default function UnitsPanel() {
                   <span>{Math.round(u.opacity * 100)}%</span>
                 </label>
                 <input
-                  type="range"
-                  min={10}
-                  max={100}
+                  type="range" min={10} max={100}
                   value={Math.round(u.opacity * 100)}
                   onChange={e => unitsStore.setOpacity(u.id, Number(e.target.value) / 100)}
                   className="w-full accent-blue-500"

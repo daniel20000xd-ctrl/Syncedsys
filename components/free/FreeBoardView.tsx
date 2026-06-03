@@ -230,6 +230,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [shapeColorPicker, setShapeColorPicker] = useState<string>(SHAPE_COLORS[0])
   const [subPanel, setSubPanel] = useState<{ boardId: string; rect: DOMRect } | null>(null)
   const [expiryPanel, setExpiryPanel] = useState<string | null>(null) // nodeId of element being given a deadline
+  // Position where the user asked to add a sub-tab — shown while the mode picker is open
+  const [subtabPickPos, setSubtabPickPos] = useState<{ x: number; y: number } | null>(null)
 
   // Drawing state
   const drawingRef = useRef<{ points: { x: number; y: number }[] } | null>(null)
@@ -261,7 +263,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const scheduleRefresh = useCallback(() => {
     if (refreshTimer.current) clearTimeout(refreshTimer.current)
-    refreshTimer.current = setTimeout(() => router.refresh(), 1500)
+    refreshTimer.current = setTimeout(() => router.refresh(), 250)
   }, [router])
 
   const saveElement = useCallback((nodeId: string, dataObj: Record<string, unknown>, w?: number, h?: number) => {
@@ -971,15 +973,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
 
     if (action === 'subtab') {
-      const count = subBoards.length
-      const sub = await createSubTab(board.id, `Tab ${count + 1}`, board.color)
-      await updateBoardFreePosition(sub.id, x, y)
-      const newSub = { ...sub, free_x: x, free_y: y }
-      setSubBoards(prev => [...prev, newSub])
-      setNodes(prev => [...prev, {
-        id: `sub-${sub.id}`, type: 'subTabNode', position: { x, y },
-        data: { boardId: sub.id, name: sub.name, color: sub.color, mode: sub.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
-      }])
+      // Show the mode picker at the drop position; actual creation happens when user picks.
+      setSubtabPickPos({ x, y })
     }
 
     if (action === 'draw') setTool('draw')
@@ -1207,6 +1202,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       return {
         id: n.id,
         kind,
+        mode: (n.data as Record<string, unknown>).mode as string | undefined,
         label: unitLabel(n, kind),
         opacity: typeof n.style?.opacity === 'number' ? (n.style.opacity as number) : 1,
         selected: !!n.selected,
@@ -1253,9 +1249,32 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         if (n && id.startsWith('el-')) saveElement(id, { ...n.data, opacity }, n.data.width as number | undefined, n.data.height as number | undefined)
       },
       setHidden: (id: string, hidden: boolean) => hideUnit(id, hidden),
+      rename: (id: string, label: string) => {
+        // Route rename to the right underlying node type
+        if (id.startsWith('list-')) {
+          const rawId = id.replace('list-', '')
+          setLists(prev => prev.map(l => l.id === rawId ? { ...l, name: label } : l))
+          setNodes(prev => prev.map(n => n.id === id ? { ...n, data: { ...n.data, name: label } } : n))
+          updateBoard(rawId, { name: label }).catch(() => {})
+        } else if (id.startsWith('card-')) {
+          const rawId = id.replace('card-', '')
+          setCards(prev => prev.map(c => c.id === rawId ? { ...c, title: label } : c))
+          setNodes(prev => prev.map(n => n.id === id ? { ...n, data: { ...n.data, title: label } } : n))
+          updateCard(rawId, { title: label }, board.id).catch(() => {})
+        } else if (id.startsWith('sub-')) {
+          renameSubTab(id.replace('sub-', ''), label)
+        } else if (id.startsWith('el-')) {
+          const n = nodesRef.current.find(x => x.id === id)
+          if (!n) return
+          const key = n.type === 'shapeNode' ? 'label' : n.type === 'textNode' ? 'text' : 'name'
+          const newData = { ...n.data, [key]: label }
+          setNodes(prev => prev.map(x => x.id === id ? { ...x, data: newData } : x))
+          saveElement(id, newData, n.data.width as number | undefined, n.data.height as number | undefined)
+        }
+      },
     })
     return () => unitsStore.setHandlers(null)
-  }, [setNodes, saveElement])
+  }, [setNodes, saveElement]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Overlay (draw/shape/text/portal) intercepts pointer input; hand & select do not
   const overlayActive = tool === 'draw' || tool === 'shape' || tool === 'text' || tool === 'portal' || tool === 'claude'
@@ -1523,6 +1542,26 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         </div>
       )}
 
+      {/* Sub-tab mode picker — shown before creating so the user can choose the type */}
+      {subtabPickPos && (
+        <SubtabModePicker
+          onPick={async (mode) => {
+            const { x, y } = subtabPickPos
+            setSubtabPickPos(null)
+            const count = subBoards.length
+            const sub = await createSubTab(board.id, `Tab ${count + 1}`, board.color, mode)
+            await updateBoardFreePosition(sub.id, x, y)
+            const newSub = { ...sub, free_x: x, free_y: y }
+            setSubBoards(prev => [...prev, newSub as Board])
+            setNodes(prev => [...prev, {
+              id: `sub-${sub.id}`, type: 'subTabNode', position: { x, y },
+              data: { boardId: sub.id, name: sub.name, color: sub.color, mode: sub.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
+            }])
+          }}
+          onClose={() => setSubtabPickPos(null)}
+        />
+      )}
+
       {expiryPanel && (() => {
         const el = elements.find(e => `el-${e.id}` === expiryPanel)
         const currentDeadline = el?.deadline ? el.deadline.slice(0, 10) : ''
@@ -1622,6 +1661,45 @@ function ExpiryPanel({ initialValue, onSave, onClose }: {
 }
 
 
+
+// ── Sub-tab mode picker ───────────────────────────────────────────────────────
+
+const SUBTAB_MODES = [
+  { mode: 'classic' as const,     emoji: '🎨', label: 'Canvas',      desc: 'Free-form boards & nodes' },
+  { mode: 'trello' as const,      emoji: '🗂',  label: 'Kanban',      desc: 'Lists & cards' },
+  { mode: 'text' as const,        emoji: '📝', label: 'Document',    desc: 'Rich text editor' },
+  { mode: 'folder' as const,      emoji: '📁', label: 'Folder',      desc: 'Files & sub-folders' },
+  { mode: 'spreadsheet' as const, emoji: '📊', label: 'Spreadsheet', desc: 'Grid with formulas' },
+]
+
+function SubtabModePicker({ onPick, onClose }: {
+  onPick: (mode: 'classic' | 'trello' | 'text' | 'folder' | 'spreadsheet') => void
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 flex items-center justify-center z-[9999] bg-black/30" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 p-5 w-80" onClick={e => e.stopPropagation()}>
+        <p className="text-sm font-semibold text-gray-700 mb-4">Choose sub-tab type</p>
+        <div className="grid grid-cols-1 gap-2">
+          {SUBTAB_MODES.map(({ mode, emoji, label, desc }) => (
+            <button
+              key={mode}
+              onClick={() => onPick(mode)}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-left transition-colors group"
+            >
+              <span className="text-2xl">{emoji}</span>
+              <div>
+                <p className="text-sm font-medium text-gray-800 group-hover:text-blue-700">{label}</p>
+                <p className="text-[11px] text-gray-400">{desc}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+        <button onClick={onClose} className="mt-3 w-full text-xs text-gray-400 hover:text-gray-600 py-1.5 rounded-lg hover:bg-gray-50">Cancel</button>
+      </div>
+    </div>
+  )
+}
 
 export default function FreeBoardView(props: Props) {
   return (

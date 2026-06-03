@@ -6,6 +6,7 @@ import { useSyncExternalStore } from 'react'
 export type Unit = {
   id: string        // react-flow node id (e.g. "el-...", "list-...", "sub-...")
   kind: 'list' | 'card' | 'shape' | 'drawing' | 'text' | 'image' | 'subtab' | 'portal' | 'file' | 'unknown'
+  mode?: string     // board mode for subtab nodes (classic/text/folder/spreadsheet/trello)
   label: string
   opacity: number   // 0..1
   selected: boolean
@@ -17,6 +18,7 @@ type Handlers = {
   reorder: (orderedIdsTopFirst: string[]) => void
   setOpacity: (id: string, opacity: number) => void
   setHidden: (id: string, hidden: boolean) => void
+  rename: (id: string, label: string) => void
 }
 
 let units: Unit[] = []
@@ -39,6 +41,7 @@ export const unitsStore = {
   reorder(ids: string[]) { handlers?.reorder(ids) },
   setOpacity(id: string, o: number) { handlers?.setOpacity(id, o) },
   setHidden(id: string, hidden: boolean) { handlers?.setHidden(id, hidden) },
+  rename(id: string, label: string) { handlers?.rename(id, label) },
 }
 
 export function useUnits(): Unit[] {

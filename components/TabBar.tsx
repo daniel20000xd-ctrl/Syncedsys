@@ -92,7 +92,25 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     const id = draggingRef.current
     endDrag()
     if (!id || id === groupId) return
-    // Fire-and-forget: the drag animation is done; persist + refresh in the background.
+
+    // Optimistic reorder — update local state immediately so the UI is instant.
+    setBoards(prev => {
+      const next = [...prev]
+      const from = next.findIndex(b => b.id === id)
+      if (from === -1) return prev
+      const [moved] = next.splice(from, 1)
+      const updated = { ...moved, group_id: groupId ?? null }
+      if (beforeId) {
+        const to = next.findIndex(b => b.id === beforeId)
+        next.splice(to >= 0 ? to : next.length, 0, updated)
+      } else {
+        next.push(updated)
+      }
+      // Reassign tab_positions so byPos sorts correctly
+      return next.map((b, i) => ({ ...b, tab_position: i }))
+    })
+
+    // Persist in background; only refresh on error
     moveTab(id, groupId, beforeId)
       .then(() => router.refresh())
       .catch(err => { alert(err instanceof Error ? err.message : 'Could not move that tab.'); router.refresh() })

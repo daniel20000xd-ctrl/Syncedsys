@@ -350,19 +350,41 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
 
 // ── Text Node ────────────────────────────────────────────────────────────────
 
+const TEXT_BG_PRESETS = [
+  { label: 'None',   value: 'transparent' },
+  { label: 'White',  value: 'rgba(255,255,255,0.92)' },
+  { label: 'Black',  value: 'rgba(0,0,0,0.75)' },
+  { label: 'Yellow', value: 'rgba(255,240,100,0.90)' },
+  { label: 'Blue',   value: 'rgba(59,130,246,0.85)' },
+  { label: 'Green',  value: 'rgba(34,197,94,0.85)' },
+  { label: 'Red',    value: 'rgba(239,68,68,0.85)' },
+  { label: 'Purple', value: 'rgba(168,85,247,0.85)' },
+]
+
 export function TextNode({ id, data }: NodeProps) {
   const { updateNodeData } = useReactFlow()
   const [editing, setEditing] = useState(!!data.autoEdit)
   const [text, setText] = useState((data.text as string) || '')
+  const [showBgPicker, setShowBgPicker] = useState(false)
   const color = (data.color as string) || '#1f2937'
   const fontSize = (data.fontSize as number) || 18
+  const bgColor = (data.bgColor as string) || 'transparent'
   const onSave = data.onSave as SaveFn | undefined
 
   function commit() {
     updateNodeData(id, { ...data, text, autoEdit: false })
     setEditing(false)
-    onSave?.(id, { text, color, fontSize })
+    onSave?.(id, { text, color, fontSize, bgColor })
   }
+
+  function setBg(value: string) {
+    setShowBgPicker(false)
+    updateNodeData(id, { ...data, bgColor: value })
+    onSave?.(id, { text, color, fontSize, bgColor: value })
+  }
+
+  const hasBg = bgColor !== 'transparent'
+  const bgStyle = hasBg ? { backgroundColor: bgColor, padding: '4px 8px', borderRadius: 8 } : {}
 
   return (
     <div className="relative group">
@@ -382,13 +404,39 @@ export function TextNode({ id, data }: NodeProps) {
       ) : (
         <div
           onClick={() => setEditing(true)}
-          className="whitespace-pre-wrap px-2 py-1.5 cursor-text min-w-[40px] bg-white/80 rounded-lg shadow-sm border border-white/40 backdrop-blur-sm"
-          style={{ color, fontSize, fontWeight: 500 }}
+          className="whitespace-pre-wrap cursor-text min-w-[40px]"
+          style={{ color, fontSize, fontWeight: 500, ...bgStyle }}
           title="Click to edit"
         >
           {text || <span className="opacity-40 text-sm">Text</span>}
         </div>
       )}
+
+      {/* Background colour picker button */}
+      <button
+        className="absolute -bottom-2 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 bg-white rounded-full w-4 h-4 shadow border border-gray-300 z-10 flex items-center justify-center"
+        title="Background colour"
+        onClick={e => { e.stopPropagation(); setShowBgPicker(v => !v) }}
+        style={{ backgroundColor: hasBg ? bgColor : '#fff' }}
+      />
+      {showBgPicker && (
+        <div
+          className="nodrag absolute top-full mt-1 left-0 z-50 bg-white rounded-xl shadow-xl border border-gray-200 p-2 flex flex-wrap gap-1.5"
+          style={{ minWidth: 160 }}
+          onPointerDown={e => e.stopPropagation()}
+        >
+          {TEXT_BG_PRESETS.map(p => (
+            <button
+              key={p.value}
+              title={p.label}
+              onClick={e => { e.stopPropagation(); setBg(p.value) }}
+              className="w-6 h-6 rounded-full border-2 border-gray-300 hover:border-gray-600 shrink-0"
+              style={{ backgroundColor: p.value === 'transparent' ? '#f3f4f6' : p.value }}
+            />
+          ))}
+        </div>
+      )}
+
       <button
         className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500 z-10"
         onClick={() => (data.onDelete as (id: string) => void)(id)}
@@ -1029,13 +1077,18 @@ export function PortalNode({ id, data, selected }: NodeProps) {
 
   const target = boards.find(b => b.id === targetBoardId)
 
-  // Scroll to zoom inside a pannable view without zooming the main board
+  // Scroll inside a pannable portal view: plain scroll = pan, Ctrl/Meta+scroll = zoom.
+  // Both prevent the event from reaching the main canvas.
   useEffect(() => {
     const el = contentElRef.current
     if (!el || !isPannable || locked) return
     function onWheel(e: WheelEvent) {
       e.preventDefault(); e.stopPropagation()
-      setZoom(z => Math.max(0.05, Math.min(3, z * (e.deltaY > 0 ? 0.9 : 1.1))))
+      if (e.ctrlKey || e.metaKey) {
+        setZoom(z => Math.max(0.05, Math.min(3, z * (e.deltaY > 0 ? 0.9 : 1.1))))
+      } else {
+        setPan(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }))
+      }
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
