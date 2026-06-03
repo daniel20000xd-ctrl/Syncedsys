@@ -322,6 +322,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const groupHoverRef = useRef<string | null>(null)
   // Live drag tracking so a container's descendants move along with it.
   const groupDragRef = useRef<{ id: string; lastX: number; lastY: number; descIds: Set<string> } | null>(null)
+  // Snapshot of a container + its descendants captured at the start of a
+  // NodeResizer (corner-handle) resize, so children scale without drift.
+  const resizeSnapshotRef = useRef<{
+    id: string; ox: number; oy: number; ow: number; oh: number
+    kids: Array<{ id: string; x: number; y: number; isBox: boolean; w: number; h: number; scale: number }>
+  } | null>(null)
 
   // Drawing state
   const drawingRef = useRef<{ points: { x: number; y: number }[] } | null>(null)
@@ -564,7 +570,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }, [persistPos, saveElement])
 
   // Wrapped onNodesChange: snaps a single dragged node to alignment guides, surfaces
-  // the active guide lines, then defers to React Flow's default handler.
+  // the active guide lines, scales a container's children during a corner-handle
+  // resize, then defers to React Flow's default handler.
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     let v: number | null = null
     let h: number | null = null
@@ -580,8 +587,66 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       helperRef.current = { v, h }
       setHelperLines({ v, h })
     }
+
     onNodesChangeRaw(changes)
-  }, [onNodesChangeRaw])
+
+    // ── NodeResizer (corner-handle) group scaling ──────────────────────────────
+    // NodeResizer reports resizes as `dimensions` changes (resizing:true) plus a
+    // `position` change when the top/left handle moves the origin. We capture a
+    // start snapshot on the first frame and map every descendant from it so the
+    // group scales/repositions without drift.
+    const dim = changes.find(c => c.type === 'dimensions') as
+      { id?: string; type?: string; dimensions?: { width: number; height: number }; resizing?: boolean } | undefined
+
+    if (dim?.resizing && dim.dimensions && dim.id) {
+      const id = dim.id
+      const container = nodesRef.current.find(n => n.id === id)
+      if (container && container.type === 'shapeNode') {
+        if (!resizeSnapshotRef.current || resizeSnapshotRef.current.id !== id) {
+          const descSet = descendantsOf(id, nodesRef.current)
+          if (descSet.size > 0) {
+            const [ow, oh] = getNodeWH(container)
+            const kids = [...descSet].map(kid => {
+              const n = nodesRef.current.find(x => x.id === kid)!
+              const [w, kh] = getNodeWH(n)
+              const isBox = n.type === 'shapeNode' || n.type === 'portalNode' || n.type === 'claudeNode'
+              return { id: kid, x: n.position.x, y: n.position.y, isBox, w, h: kh, scale: (n.data.scale as number) ?? 1 }
+            })
+            resizeSnapshotRef.current = { id, ox: container.position.x, oy: container.position.y, ow, oh, kids }
+          }
+        }
+        const snap = resizeSnapshotRef.current
+        if (snap && snap.id === id && snap.kids.length > 0) {
+          const sx = snap.ow ? dim.dimensions.width / snap.ow : 1
+          const sy = snap.oh ? dim.dimensions.height / snap.oh : 1
+          const sAvg = Math.sqrt(Math.max(0.0001, sx * sy))
+          const posChange = changes.find(c => c.type === 'position' && (c as { id?: string }).id === id) as { position?: { x: number; y: number } } | undefined
+          const nx = posChange?.position?.x ?? snap.ox
+          const ny = posChange?.position?.y ?? snap.oy
+          setNodes(prev => prev.map(n => {
+            const kid = snap.kids.find(k => k.id === n.id)
+            if (!kid) return n
+            const px = nx + (kid.x - snap.ox) * sx
+            const py = ny + (kid.y - snap.oy) * sy
+            if (kid.isBox) {
+              const w = Math.max(20, kid.w * sx), hh = Math.max(20, kid.h * sy)
+              return { ...n, position: { x: px, y: py }, style: { ...n.style, width: w, height: hh }, data: { ...n.data, width: w, height: hh } }
+            }
+            return { ...n, position: { x: px, y: py }, data: { ...n.data, scale: Math.max(0.1, Math.min(8, kid.scale * sAvg)) } }
+          }))
+        }
+      }
+    } else if (resizeSnapshotRef.current && (!dim || dim.resizing === false)) {
+      // Resize ended → persist every descendant that scaled, then clear.
+      const snap = resizeSnapshotRef.current
+      resizeSnapshotRef.current = null
+      for (const kid of snap.kids) {
+        const n = nodesRef.current.find(x => x.id === kid.id)
+        if (n) persistNodeFull(n)
+      }
+      scheduleRefresh()
+    }
+  }, [onNodesChangeRaw, setNodes, persistNodeFull, scheduleRefresh])
 
   // Capture descendants of the node about to be dragged so we can move them with it.
   const onNodeDragStart = useCallback((_e: unknown, node: Node) => {
