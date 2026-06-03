@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { decryptSecret } from '@/lib/crypto'
 import { buildClaudeContext } from '@/lib/claude/context'
 import { READ_TOOLS, WRITE_TOOLS, executeTool, ScopeError, type ToolCtx } from '@/lib/claude/tools'
+import { isClaudeEnabled } from '@/lib/mcp'
 
 // The model used for the in-app assistant. Change here to upgrade.
 const MODEL = 'claude-sonnet-4-5-20250929'
@@ -25,6 +26,10 @@ export async function POST(req: NextRequest) {
   const boardId = body.boardId
   const messages = (body.messages ?? []).filter(m => m.role && typeof m.content === 'string')
   if (!boardId || messages.length === 0) return new Response(JSON.stringify({ error: 'boardId and messages required' }), { status: 400 })
+
+  if (!await isClaudeEnabled(supabase, user.id)) {
+    return new Response(JSON.stringify({ error: 'no_key' }), { status: 400 })
+  }
 
   // Load + decrypt this user's key, and their auto-apply setting.
   const { data: secrets } = await supabase

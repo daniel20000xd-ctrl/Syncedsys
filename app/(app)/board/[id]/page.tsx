@@ -3,6 +3,7 @@ import dynamic from 'next/dynamic'
 import { createClient } from '@/lib/supabase/server'
 import type { Board, List, Card, BoardElement, BoardEdge } from '@/lib/types'
 import { resetDueRecurringCards } from '@/lib/recur'
+import { isClaudeEnabled } from '@/lib/mcp'
 
 // Code-split each board view so a tab only ships the JS for its own mode —
 // notably, the heavy React Flow canvas bundle loads only for classic boards.
@@ -17,9 +18,9 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   const { id } = await params
   const supabase = await createClient()
 
-  // One round trip for the board + everything attached to it; sub-boards in
-  // parallel. RLS scopes all of it to the owner, so no getUser() hop needed.
-  const [boardRes, subRes] = await Promise.all([
+  // One round trip for the board + everything attached to it; sub-boards and
+  // the Claude gate run in parallel. RLS scopes all queries to the owner.
+  const [boardRes, subRes, claudeEnabled] = await Promise.all([
     supabase
       .from('boards')
       .select('*, lists(*, cards(*)), board_elements(*), board_edges(*)')
@@ -30,6 +31,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
       .select('*')
       .eq('parent_id', id)
       .order('tab_position', { ascending: true }),
+    isClaudeEnabled(supabase),
   ])
 
   const board = boardRes.data
@@ -70,7 +72,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   return (
     <>
       {view}
-      <ClaudeAgent boardId={board.id} />
+      {claudeEnabled && <ClaudeAgent boardId={board.id} />}
     </>
   )
 }

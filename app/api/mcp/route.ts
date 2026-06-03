@@ -6,10 +6,11 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { decryptSecret } from '@/lib/crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { snapshotBefore, logAction, isClaudeEnabled } from '@/lib/mcp'
 import {
   createBoard, createGroup, moveTab, updateBoardFreePosition, updateBoardContent,
   createSubTab, deleteBoard, renameBoard, updateBoard, layoutBoardGrid, setBoardSynced,
-  moveBoardToParent, copyBoardInto, ensureMirrorPortal,
+  moveBoardToParent, copyBoardInto, ensureMirrorPortal, importFolderTree,
   createList, deleteList, renameList, setListWidget, setListDeadline, setListHidden, updateListPosition,
   createCard, deleteCard, updateCard, updateCardDone, setCardDeadline, setCardRecur, setCardHidden,
   moveCard, reorderCards, updateCardPosition, createFreeCard,
@@ -20,6 +21,7 @@ import {
   createDeviceLink, removeDeviceLink,
   saveAnthropicKey, removeAnthropicKey, setClaudeAutoApply, getClaudeStatus,
   setStocksEnabled, getStocksEnabled,
+  linkAccount, acceptLink, removeLink,
 } from '@/app/actions'
 
 export const dynamic = 'force-dynamic'
@@ -82,7 +84,28 @@ export async function suggestBoardMeta(name: string, mode: string, apiKey: strin
 function buildServer(cookie: string, origin: string, supabase: SupabaseClient, userId: string) {
   const server = new McpServer({ name: 'syncedsys', version: '1.0.0' })
 
-  // ── AI / context tools ──────────────────────────────────────────────────────
+  // Every write tool runs snapshotBefore + logAction before executing.
+  // snapshot is optional — create operations have no pre-existing entity to capture.
+  // affectedIds defaults to [snapshot.entityId] when not supplied explicitly.
+  async function wrapWrite(
+    tool: string,
+    params: Record<string, unknown>,
+    fn: () => Promise<unknown>,
+    snapshot?: { entityType: string; entityId: string },
+    affectedIds?: string[],
+  ) {
+    if (!userId) return fail('Not authenticated')
+    const ids = affectedIds ?? (snapshot?.entityId ? [snapshot.entityId] : [])
+    await Promise.all([
+      snapshot?.entityId
+        ? snapshotBefore(supabase, snapshot.entityType, snapshot.entityId, tool)
+        : Promise.resolve(),
+      logAction(supabase, tool, params, ids),
+    ])
+    return wrap(fn)
+  }
+
+  // ── AI / context tools (read-only) ──────────────────────────────────────────
 
   server.registerTool('get_boards_context', {
     title: 'Get boards context',
@@ -162,11 +185,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       for (const e of els) {
         const d = e.data ?? {}
         let label = e.type
-        if (e.type === 'text')       label = `text: ${String(d.text ?? '').slice(0, 200)}`
-        else if (e.type === 'shape') label = `shape(${d.shape ?? 'rect'})${d.label ? ` "${d.label}"` : ''}`
-        else if (e.type === 'textfile') label = `file "${d.name ?? 'untitled'}"`
-        else if (e.type === 'pdf')   label = `pdf "${d.name ?? 'document'}" (${d.pageCount ?? '?'} pages)${String(d.text ?? '').trim() ? ': ' + String(d.text).slice(0, 2000) : ''}`
-        else if (e.type === 'portal') label = d.viewerKind ? `viewer-portal (${d.viewerKind})` : `portal → ${d.targetBoardId ?? '(unset)'}`
+        if (e.type === 'text')           label = `text: ${String(d.text ?? '').slice(0, 200)}`
+        else if (e.type === 'shape')     label = `shape(${d.shape ?? 'rect'})${d.label ? ` "${d.label}"` : ''}`
+        else if (e.type === 'textfile')  label = `file "${d.name ?? 'untitled'}"`
+        else if (e.type === 'pdf')       label = `pdf "${d.name ?? 'document'}" (${d.pageCount ?? '?'} pages)${String(d.text ?? '').trim() ? ': ' + String(d.text).slice(0, 2000) : ''}`
+        else if (e.type === 'portal')    label = d.viewerKind ? `viewer-portal (${d.viewerKind})` : `portal → ${d.targetBoardId ?? '(unset)'}`
         else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
         lines.push(`  [${e.id}] ${label}${e.deadline ? ` [due ${e.deadline.slice(0,10)}]` : ''}`)
       }
@@ -197,7 +220,10 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       color: z.string().describe('Hex color, e.g. #0079bf'),
       mode:  BOARD_MODE.optional().describe('Board mode (default: classic)'),
     },
-  }, ({ name, color, mode }) => wrap(() => createBoard(name, color, mode)))
+  }, ({ name, color, mode }) => wrapWrite(
+    'create_board', { name, color, mode },
+    () => createBoard(name, color, mode),
+  ))
 
   server.registerTool('create_group', {
     title: 'Create group',
@@ -208,29 +234,45 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       mode:          z.enum(['folder', 'classic']),
       parentGroupId: z.string().nullable().optional().describe('Parent group ID, or null for top-level'),
     },
-  }, ({ name, color, mode, parentGroupId }) => wrap(() => createGroup(name, color, mode, parentGroupId ?? null)))
+  }, ({ name, color, mode, parentGroupId }) => wrapWrite(
+    'create_group', { name, color, mode, parentGroupId },
+    () => createGroup(name, color, mode, parentGroupId ?? null),
+    parentGroupId ? { entityType: 'board', entityId: parentGroupId } : undefined,
+  ))
 
   server.registerTool('move_tab', {
     title: 'Move tab',
     description: 'Moves a tab into a group and/or reorders it.',
     inputSchema: {
-      boardId:      z.string(),
-      newGroupId:   z.string().nullable().describe('Target group ID, or null for top-level'),
+      boardId:       z.string(),
+      newGroupId:    z.string().nullable().describe('Target group ID, or null for top-level'),
       beforeBoardId: z.string().nullable().describe('Insert before this board ID, or null for end'),
     },
-  }, ({ boardId, newGroupId, beforeBoardId }) => wrap(() => moveTab(boardId, newGroupId, beforeBoardId)))
+  }, ({ boardId, newGroupId, beforeBoardId }) => wrapWrite(
+    'move_tab', { boardId, newGroupId, beforeBoardId },
+    () => moveTab(boardId, newGroupId, beforeBoardId),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('update_board_free_position', {
     title: 'Update board free position',
     description: 'Sets the canvas position of a board in free (group-folder) mode.',
     inputSchema: { boardId: z.string(), x: z.number(), y: z.number() },
-  }, ({ boardId, x, y }) => wrap(() => updateBoardFreePosition(boardId, x, y)))
+  }, ({ boardId, x, y }) => wrapWrite(
+    'update_board_free_position', { boardId, x, y },
+    () => updateBoardFreePosition(boardId, x, y),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('update_board_content', {
     title: 'Update board content',
     description: 'Overwrites the text/spreadsheet content of a board.',
     inputSchema: { boardId: z.string(), content: z.string() },
-  }, ({ boardId, content }) => wrap(() => updateBoardContent(boardId, content)))
+  }, ({ boardId, content }) => wrapWrite(
+    'update_board_content', { boardId },
+    () => updateBoardContent(boardId, content),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('create_sub_tab', {
     title: 'Create sub-tab',
@@ -241,19 +283,31 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       color: z.string(),
       mode:  BOARD_MODE.optional(),
     },
-  }, ({ parentBoardId, name, color, mode }) => wrap(() => createSubTab(parentBoardId, name, color, mode)))
+  }, ({ parentBoardId, name, color, mode }) => wrapWrite(
+    'create_sub_tab', { parentBoardId, name, color, mode },
+    () => createSubTab(parentBoardId, name, color, mode),
+    { entityType: 'board', entityId: parentBoardId },
+  ))
 
   server.registerTool('delete_board', {
     title: 'Delete board',
     description: 'Permanently deletes a board and all its contents.',
     inputSchema: { boardId: z.string() },
-  }, ({ boardId }) => wrap(() => deleteBoard(boardId)))
+  }, ({ boardId }) => wrapWrite(
+    'delete_board', { boardId },
+    () => deleteBoard(boardId),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('rename_board', {
     title: 'Rename board',
     description: 'Renames a board.',
     inputSchema: { boardId: z.string(), name: z.string() },
-  }, ({ boardId, name }) => wrap(() => renameBoard(boardId, name)))
+  }, ({ boardId, name }) => wrapWrite(
+    'rename_board', { boardId, name },
+    () => renameBoard(boardId, name),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('update_board', {
     title: 'Update board',
@@ -266,19 +320,31 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       mode:     BOARD_MODE.optional(),
       meta:     z.string().nullable().optional().describe('AI description (max 150 chars)'),
     },
-  }, ({ boardId, ...updates }) => wrap(() => updateBoard(boardId, updates)))
+  }, ({ boardId, ...updates }) => wrapWrite(
+    'update_board', { boardId, ...updates },
+    () => updateBoard(boardId, updates),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('layout_board_grid', {
     title: 'Layout board grid',
     description: 'Spreads a board\'s lists/cards into a kanban grid (use after switching Trello → Classic).',
     inputSchema: { boardId: z.string() },
-  }, ({ boardId }) => wrap(() => layoutBoardGrid(boardId)))
+  }, ({ boardId }) => wrapWrite(
+    'layout_board_grid', { boardId },
+    () => layoutBoardGrid(boardId),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('set_board_synced', {
     title: 'Set board synced',
     description: 'Toggles whether a board is included in iOS sync (true = included).',
     inputSchema: { boardId: z.string(), synced: z.boolean() },
-  }, ({ boardId, synced }) => wrap(() => setBoardSynced(boardId, synced)))
+  }, ({ boardId, synced }) => wrapWrite(
+    'set_board_synced', { boardId, synced },
+    () => setBoardSynced(boardId, synced),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('move_board_to_parent', {
     title: 'Move board to parent',
@@ -288,7 +354,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       newParentId:  z.string().nullable().describe('Target parent board ID, or null for top-level'),
       fromParentId: z.string().optional().describe('Current parent board ID (for cache revalidation)'),
     },
-  }, ({ boardId, newParentId, fromParentId }) => wrap(() => moveBoardToParent(boardId, newParentId, fromParentId)))
+  }, ({ boardId, newParentId, fromParentId }) => wrapWrite(
+    'move_board_to_parent', { boardId, newParentId, fromParentId },
+    () => moveBoardToParent(boardId, newParentId, fromParentId),
+    { entityType: 'board', entityId: boardId },
+  ))
 
   server.registerTool('copy_board_into', {
     title: 'Copy board into',
@@ -299,13 +369,41 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       freeX: z.number().optional().describe('Canvas X position (default 100)'),
       freeY: z.number().optional().describe('Canvas Y position (default 100)'),
     },
-  }, ({ sourceBoardId, destParentBoardId, freeX, freeY }) => wrap(() => copyBoardInto(sourceBoardId, destParentBoardId, freeX, freeY)))
+  }, ({ sourceBoardId, destParentBoardId, freeX, freeY }) => wrapWrite(
+    'copy_board_into', { sourceBoardId, destParentBoardId, freeX, freeY },
+    () => copyBoardInto(sourceBoardId, destParentBoardId, freeX, freeY),
+    { entityType: 'board', entityId: sourceBoardId },
+    [sourceBoardId, destParentBoardId],
+  ))
 
   server.registerTool('ensure_mirror_portal', {
     title: 'Ensure mirror portal',
     description: 'Ensures the target board has a portal pointing back to the source board.',
     inputSchema: { targetBoardId: z.string(), backBoardId: z.string() },
-  }, ({ targetBoardId, backBoardId }) => wrap(() => ensureMirrorPortal(targetBoardId, backBoardId)))
+  }, ({ targetBoardId, backBoardId }) => wrapWrite(
+    'ensure_mirror_portal', { targetBoardId, backBoardId },
+    () => ensureMirrorPortal(targetBoardId, backBoardId),
+    { entityType: 'board', entityId: targetBoardId },
+    [targetBoardId, backBoardId],
+  ))
+
+  server.registerTool('import_folder_tree', {
+    title: 'Import folder tree',
+    description: 'Recreates a dropped folder tree under a parent board. Each folder becomes a child board (mode: folder) and each text file a textfile element.',
+    inputSchema: {
+      parentBoardId: z.string().describe('Parent board ID to import under'),
+      tree: z.object({
+        name:  z.string(),
+        files: z.array(z.object({ name: z.string(), content: z.string() })),
+        dirs:  z.array(z.unknown()),
+      }).describe('Folder tree: { name, files: [{name, content}], dirs: [...recursive] }'),
+      color: z.string().describe('Hex color for created folder boards'),
+    },
+  }, ({ parentBoardId, tree, color }) => wrapWrite(
+    'import_folder_tree', { parentBoardId, color },
+    () => importFolderTree(parentBoardId, tree as Parameters<typeof importFolderTree>[1], color),
+    { entityType: 'board', entityId: parentBoardId },
+  ))
 
   // ── Lists ───────────────────────────────────────────────────────────────────
 
@@ -317,25 +415,41 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       name:    z.string(),
       id:      z.string().optional().describe('Optional explicit UUID'),
     },
-  }, ({ boardId, name, id }) => wrap(() => createList(boardId, name, id)))
+  }, ({ boardId, name, id }) => wrapWrite(
+    'create_list', { boardId, name, id },
+    () => createList(boardId, name, id),
+    undefined, [boardId],
+  ))
 
   server.registerTool('delete_list', {
     title: 'Delete list',
     description: 'Deletes a list and all its cards.',
     inputSchema: { listId: z.string(), boardId: z.string() },
-  }, ({ listId, boardId }) => wrap(() => deleteList(listId, boardId)))
+  }, ({ listId, boardId }) => wrapWrite(
+    'delete_list', { listId, boardId },
+    () => deleteList(listId, boardId),
+    { entityType: 'list', entityId: listId },
+  ))
 
   server.registerTool('rename_list', {
     title: 'Rename list',
     description: 'Renames a list.',
     inputSchema: { listId: z.string(), name: z.string(), boardId: z.string() },
-  }, ({ listId, name, boardId }) => wrap(() => renameList(listId, name, boardId)))
+  }, ({ listId, name, boardId }) => wrapWrite(
+    'rename_list', { listId, name, boardId },
+    () => renameList(listId, name, boardId),
+    { entityType: 'list', entityId: listId },
+  ))
 
   server.registerTool('set_list_widget', {
     title: 'Set list widget',
     description: 'Toggles whether a list is displayed as a widget.',
     inputSchema: { listId: z.string(), isWidget: z.boolean(), boardId: z.string() },
-  }, ({ listId, isWidget, boardId }) => wrap(() => setListWidget(listId, isWidget, boardId)))
+  }, ({ listId, isWidget, boardId }) => wrapWrite(
+    'set_list_widget', { listId, isWidget, boardId },
+    () => setListWidget(listId, isWidget, boardId),
+    { entityType: 'list', entityId: listId },
+  ))
 
   server.registerTool('set_list_deadline', {
     title: 'Set list deadline',
@@ -345,19 +459,31 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       deadline: z.string().nullable().describe('ISO date string or null to clear'),
       boardId:  z.string(),
     },
-  }, ({ listId, deadline, boardId }) => wrap(() => setListDeadline(listId, deadline, boardId)))
+  }, ({ listId, deadline, boardId }) => wrapWrite(
+    'set_list_deadline', { listId, deadline, boardId },
+    () => setListDeadline(listId, deadline, boardId),
+    { entityType: 'list', entityId: listId },
+  ))
 
   server.registerTool('set_list_hidden', {
     title: 'Set list hidden',
     description: 'Shows or hides a list.',
     inputSchema: { listId: z.string(), hidden: z.boolean(), boardId: z.string() },
-  }, ({ listId, hidden, boardId }) => wrap(() => setListHidden(listId, hidden, boardId)))
+  }, ({ listId, hidden, boardId }) => wrapWrite(
+    'set_list_hidden', { listId, hidden, boardId },
+    () => setListHidden(listId, hidden, boardId),
+    { entityType: 'list', entityId: listId },
+  ))
 
   server.registerTool('update_list_position', {
     title: 'Update list position',
     description: 'Sets the canvas X/Y position of a list (free-mode).',
     inputSchema: { listId: z.string(), x: z.number(), y: z.number() },
-  }, ({ listId, x, y }) => wrap(() => updateListPosition(listId, x, y)))
+  }, ({ listId, x, y }) => wrapWrite(
+    'update_list_position', { listId, x, y },
+    () => updateListPosition(listId, x, y),
+    { entityType: 'list', entityId: listId },
+  ))
 
   // ── Cards ───────────────────────────────────────────────────────────────────
 
@@ -370,13 +496,21 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       boardId: z.string(),
       id:      z.string().optional().describe('Optional explicit UUID'),
     },
-  }, ({ listId, title, boardId, id }) => wrap(() => createCard(listId, title, boardId, id)))
+  }, ({ listId, title, boardId, id }) => wrapWrite(
+    'create_card', { listId, title, boardId, id },
+    () => createCard(listId, title, boardId, id),
+    undefined, [listId],
+  ))
 
   server.registerTool('delete_card', {
     title: 'Delete card',
     description: 'Permanently deletes a card.',
     inputSchema: { cardId: z.string(), boardId: z.string() },
-  }, ({ cardId, boardId }) => wrap(() => deleteCard(cardId, boardId)))
+  }, ({ cardId, boardId }) => wrapWrite(
+    'delete_card', { cardId, boardId },
+    () => deleteCard(cardId, boardId),
+    { entityType: 'card', entityId: cardId },
+  ))
 
   server.registerTool('update_card', {
     title: 'Update card',
@@ -387,13 +521,21 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       title:       z.string().optional(),
       description: z.string().optional(),
     },
-  }, ({ cardId, boardId, title, description }) => wrap(() => updateCard(cardId, { title, description }, boardId)))
+  }, ({ cardId, boardId, title, description }) => wrapWrite(
+    'update_card', { cardId, boardId, title, description },
+    () => updateCard(cardId, { title, description }, boardId),
+    { entityType: 'card', entityId: cardId },
+  ))
 
   server.registerTool('update_card_done', {
     title: 'Update card done',
     description: 'Marks a card as done or not done.',
     inputSchema: { cardId: z.string(), done: z.boolean(), boardId: z.string() },
-  }, ({ cardId, done, boardId }) => wrap(() => updateCardDone(cardId, done, boardId)))
+  }, ({ cardId, done, boardId }) => wrapWrite(
+    'update_card_done', { cardId, done, boardId },
+    () => updateCardDone(cardId, done, boardId),
+    { entityType: 'card', entityId: cardId },
+  ))
 
   server.registerTool('set_card_deadline', {
     title: 'Set card deadline',
@@ -403,7 +545,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       deadline: z.string().nullable().describe('ISO date string or null to clear'),
       boardId:  z.string(),
     },
-  }, ({ cardId, deadline, boardId }) => wrap(() => setCardDeadline(cardId, deadline, boardId)))
+  }, ({ cardId, deadline, boardId }) => wrapWrite(
+    'set_card_deadline', { cardId, deadline, boardId },
+    () => setCardDeadline(cardId, deadline, boardId),
+    { entityType: 'card', entityId: cardId },
+  ))
 
   server.registerTool('set_card_recur', {
     title: 'Set card recurrence',
@@ -413,13 +559,21 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       intervalMinutes: z.number().nullable().describe('Minutes between recurrences, or null to clear'),
       boardId:         z.string(),
     },
-  }, ({ cardId, intervalMinutes, boardId }) => wrap(() => setCardRecur(cardId, intervalMinutes, boardId)))
+  }, ({ cardId, intervalMinutes, boardId }) => wrapWrite(
+    'set_card_recur', { cardId, intervalMinutes, boardId },
+    () => setCardRecur(cardId, intervalMinutes, boardId),
+    { entityType: 'card', entityId: cardId },
+  ))
 
   server.registerTool('set_card_hidden', {
     title: 'Set card hidden',
     description: 'Shows or hides a card.',
     inputSchema: { cardId: z.string(), hidden: z.boolean(), boardId: z.string() },
-  }, ({ cardId, hidden, boardId }) => wrap(() => setCardHidden(cardId, hidden, boardId)))
+  }, ({ cardId, hidden, boardId }) => wrapWrite(
+    'set_card_hidden', { cardId, hidden, boardId },
+    () => setCardHidden(cardId, hidden, boardId),
+    { entityType: 'card', entityId: cardId },
+  ))
 
   server.registerTool('move_card', {
     title: 'Move card',
@@ -430,7 +584,12 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       newPosition: z.number(),
       boardId:     z.string(),
     },
-  }, ({ cardId, newListId, newPosition, boardId }) => wrap(() => moveCard(cardId, newListId, newPosition, boardId)))
+  }, ({ cardId, newListId, newPosition, boardId }) => wrapWrite(
+    'move_card', { cardId, newListId, newPosition, boardId },
+    () => moveCard(cardId, newListId, newPosition, boardId),
+    { entityType: 'card', entityId: cardId },
+    [cardId, newListId],
+  ))
 
   server.registerTool('reorder_cards', {
     title: 'Reorder cards',
@@ -443,13 +602,21 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       })).describe('Full ordered list of card position updates'),
       boardId: z.string(),
     },
-  }, ({ updates, boardId }) => wrap(() => reorderCards(updates, boardId)))
+  }, ({ updates, boardId }) => wrapWrite(
+    'reorder_cards', { boardId, count: updates.length },
+    () => reorderCards(updates, boardId),
+    undefined, updates.map(u => u.id),
+  ))
 
   server.registerTool('update_card_position', {
     title: 'Update card position',
     description: 'Sets the canvas X/Y position of a card (free-mode).',
     inputSchema: { cardId: z.string(), x: z.number(), y: z.number() },
-  }, ({ cardId, x, y }) => wrap(() => updateCardPosition(cardId, x, y)))
+  }, ({ cardId, x, y }) => wrapWrite(
+    'update_card_position', { cardId, x, y },
+    () => updateCardPosition(cardId, x, y),
+    { entityType: 'card', entityId: cardId },
+  ))
 
   server.registerTool('create_free_card', {
     title: 'Create free card',
@@ -461,7 +628,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       x:       z.number(),
       y:       z.number(),
     },
-  }, ({ listId, title, boardId, x, y }) => wrap(() => createFreeCard(listId, title, boardId, x, y)))
+  }, ({ listId, title, boardId, x, y }) => wrapWrite(
+    'create_free_card', { listId, title, boardId, x, y },
+    () => createFreeCard(listId, title, boardId, x, y),
+    undefined, [listId],
+  ))
 
   // ── Elements ────────────────────────────────────────────────────────────────
 
@@ -477,7 +648,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       width:   z.number().optional(),
       height:  z.number().optional(),
     },
-  }, ({ boardId, type, x, y, data, width, height }) => wrap(() => createElement(boardId, type, x, y, data, width, height)))
+  }, ({ boardId, type, x, y, data, width, height }) => wrapWrite(
+    'create_element', { boardId, type, x, y, width, height },
+    () => createElement(boardId, type, x, y, data, width, height),
+    undefined, [boardId],
+  ))
 
   server.registerTool('update_element', {
     title: 'Update element',
@@ -491,13 +666,21 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       height:    z.number().optional(),
       deadline:  z.string().nullable().optional(),
     },
-  }, ({ elementId, ...updates }) => wrap(() => updateElement(elementId, updates)))
+  }, ({ elementId, ...updates }) => wrapWrite(
+    'update_element', { elementId, x: updates.x, y: updates.y, width: updates.width, height: updates.height, deadline: updates.deadline },
+    () => updateElement(elementId, updates),
+    { entityType: 'element', entityId: elementId },
+  ))
 
   server.registerTool('delete_element', {
     title: 'Delete element',
     description: 'Permanently deletes a canvas element.',
     inputSchema: { elementId: z.string() },
-  }, ({ elementId }) => wrap(() => deleteElement(elementId)))
+  }, ({ elementId }) => wrapWrite(
+    'delete_element', { elementId },
+    () => deleteElement(elementId),
+    { entityType: 'element', entityId: elementId },
+  ))
 
   server.registerTool('create_text_file', {
     title: 'Create text file',
@@ -509,7 +692,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       x:       z.number().optional(),
       y:       z.number().optional(),
     },
-  }, ({ boardId, name, content, x, y }) => wrap(() => createTextFile(boardId, name, content, x, y)))
+  }, ({ boardId, name, content, x, y }) => wrapWrite(
+    'create_text_file', { boardId, name, x, y },
+    () => createTextFile(boardId, name, content, x, y),
+    undefined, [boardId],
+  ))
 
   server.registerTool('update_text_file', {
     title: 'Update text file',
@@ -520,7 +707,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       content:   z.string(),
       boardId:   z.string(),
     },
-  }, ({ elementId, name, content, boardId }) => wrap(() => updateTextFile(elementId, name, content, boardId)))
+  }, ({ elementId, name, content, boardId }) => wrapWrite(
+    'update_text_file', { elementId, name, boardId },
+    () => updateTextFile(elementId, name, content, boardId),
+    { entityType: 'element', entityId: elementId },
+  ))
 
   server.registerTool('move_element_to_board', {
     title: 'Move element to board',
@@ -530,7 +721,12 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       targetBoardId: z.string(),
       fromBoardId:   z.string().optional(),
     },
-  }, ({ elementId, targetBoardId, fromBoardId }) => wrap(() => moveElementToBoard(elementId, targetBoardId, fromBoardId)))
+  }, ({ elementId, targetBoardId, fromBoardId }) => wrapWrite(
+    'move_element_to_board', { elementId, targetBoardId, fromBoardId },
+    () => moveElementToBoard(elementId, targetBoardId, fromBoardId),
+    { entityType: 'element', entityId: elementId },
+    [elementId, targetBoardId],
+  ))
 
   server.registerTool('upsert_element', {
     title: 'Upsert element',
@@ -545,7 +741,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       width:   z.number().nullable().optional(),
       height:  z.number().nullable().optional(),
     },
-  }, ({ id, boardId, type, x, y, data, width, height }) => wrap(() => upsertElement(id, boardId, type, x, y, data, width, height)))
+  }, ({ id, boardId, type, x, y, data, width, height }) => wrapWrite(
+    'upsert_element', { id, boardId, type, x, y, width, height },
+    () => upsertElement(id, boardId, type, x, y, data, width, height),
+    { entityType: 'element', entityId: id },
+  ))
 
   server.registerTool('reorder_folder_items', {
     title: 'Reorder folder items',
@@ -555,7 +755,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       folderIds:     z.array(z.string()).describe('Ordered list of child board IDs'),
       fileIds:       z.array(z.string()).describe('Ordered list of file element IDs'),
     },
-  }, ({ parentBoardId, folderIds, fileIds }) => wrap(() => reorderFolderItems(parentBoardId, folderIds, fileIds)))
+  }, ({ parentBoardId, folderIds, fileIds }) => wrapWrite(
+    'reorder_folder_items', { parentBoardId, folderCount: folderIds.length, fileCount: fileIds.length },
+    () => reorderFolderItems(parentBoardId, folderIds, fileIds),
+    undefined, [...folderIds, ...fileIds],
+  ))
 
   // ── Edges ───────────────────────────────────────────────────────────────────
 
@@ -569,13 +773,21 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       sourceHandle: z.string().optional(),
       targetHandle: z.string().optional(),
     },
-  }, ({ boardId, source, target, sourceHandle, targetHandle }) => wrap(() => createEdge(boardId, source, target, sourceHandle, targetHandle)))
+  }, ({ boardId, source, target, sourceHandle, targetHandle }) => wrapWrite(
+    'create_edge', { boardId, source, target, sourceHandle, targetHandle },
+    () => createEdge(boardId, source, target, sourceHandle, targetHandle),
+    undefined, [boardId],
+  ))
 
   server.registerTool('delete_edge', {
     title: 'Delete edge',
     description: 'Deletes a canvas edge/connection.',
     inputSchema: { edgeId: z.string() },
-  }, ({ edgeId }) => wrap(() => deleteEdge(edgeId)))
+  }, ({ edgeId }) => wrapWrite(
+    'delete_edge', { edgeId },
+    () => deleteEdge(edgeId),
+    { entityType: 'edge', entityId: edgeId },
+  ))
 
   server.registerTool('update_edge_shape', {
     title: 'Update edge shape',
@@ -584,7 +796,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       edgeId: z.string(),
       data:   z.record(z.string(), z.unknown()).describe('Edge shape data, e.g. { cx, cy } for quadratic bend'),
     },
-  }, ({ edgeId, data }) => wrap(() => updateEdgeShape(edgeId, data)))
+  }, ({ edgeId, data }) => wrapWrite(
+    'update_edge_shape', { edgeId },
+    () => updateEdgeShape(edgeId, data),
+    { entityType: 'edge', entityId: edgeId },
+  ))
 
   server.registerTool('upsert_edge', {
     title: 'Upsert edge',
@@ -597,9 +813,13 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       sourceHandle: z.string().nullable().optional(),
       targetHandle: z.string().nullable().optional(),
     },
-  }, ({ id, boardId, source, target, sourceHandle, targetHandle }) => wrap(() => upsertEdge(id, boardId, source, target, sourceHandle, targetHandle)))
+  }, ({ id, boardId, source, target, sourceHandle, targetHandle }) => wrapWrite(
+    'upsert_edge', { id, boardId, source, target, sourceHandle, targetHandle },
+    () => upsertEdge(id, boardId, source, target, sourceHandle, targetHandle),
+    { entityType: 'edge', entityId: id },
+  ))
 
-  // ── PDFs ────────────────────────────────────────────────────────────────────
+  // ── PDFs (read-only) ────────────────────────────────────────────────────────
 
   server.registerTool('get_pdf_url', {
     title: 'Get PDF URL',
@@ -613,13 +833,20 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
     title: 'Create device link',
     description: 'Creates a pending iOS device pairing link. Returns the 6-character pairing code.',
     inputSchema: { name: z.string().optional().describe('Device name (default: "iOS device")') },
-  }, ({ name }) => wrap(() => createDeviceLink(name)))
+  }, ({ name }) => wrapWrite(
+    'create_device_link', { name },
+    () => createDeviceLink(name),
+  ))
 
   server.registerTool('remove_device_link', {
     title: 'Remove device link',
     description: 'Removes a paired or unpaired device link.',
     inputSchema: { id: z.string().describe('Device link ID') },
-  }, ({ id }) => wrap(() => removeDeviceLink(id)))
+  }, ({ id }) => wrapWrite(
+    'remove_device_link', { id },
+    () => removeDeviceLink(id),
+    undefined, [id],
+  ))
 
   // ── User settings ───────────────────────────────────────────────────────────
 
@@ -627,19 +854,28 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
     title: 'Save Anthropic key',
     description: 'Encrypts and saves the user\'s Anthropic API key.',
     inputSchema: { key: z.string().describe('Anthropic API key (must start with sk-ant-)') },
-  }, ({ key }) => wrap(() => saveAnthropicKey(key)))
+  }, ({ key }) => wrapWrite(
+    'save_anthropic_key', {},
+    () => saveAnthropicKey(key),
+  ))
 
   server.registerTool('remove_anthropic_key', {
     title: 'Remove Anthropic key',
     description: 'Removes the stored Anthropic API key.',
     inputSchema: undefined,
-  }, () => wrap(() => removeAnthropicKey()))
+  }, () => wrapWrite(
+    'remove_anthropic_key', {},
+    () => removeAnthropicKey(),
+  ))
 
   server.registerTool('set_claude_auto_apply', {
     title: 'Set Claude auto-apply',
     description: 'Toggles whether Claude is allowed to make write changes (true = writes enabled).',
     inputSchema: { enabled: z.boolean() },
-  }, ({ enabled }) => wrap(() => setClaudeAutoApply(enabled)))
+  }, ({ enabled }) => wrapWrite(
+    'set_claude_auto_apply', { enabled },
+    () => setClaudeAutoApply(enabled),
+  ))
 
   server.registerTool('get_claude_status', {
     title: 'Get Claude status',
@@ -651,13 +887,51 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
     title: 'Set stocks enabled',
     description: 'Enables or disables the Stock Viewer feature for the user.',
     inputSchema: { enabled: z.boolean() },
-  }, ({ enabled }) => wrap(() => setStocksEnabled(enabled)))
+  }, ({ enabled }) => wrapWrite(
+    'set_stocks_enabled', { enabled },
+    () => setStocksEnabled(enabled),
+  ))
 
   server.registerTool('get_stocks_enabled', {
     title: 'Get stocks enabled',
     description: 'Returns whether the Stock Viewer feature is enabled for the user.',
     inputSchema: undefined,
   }, () => wrap(() => getStocksEnabled()))
+
+  // ── Account links ───────────────────────────────────────────────────────────
+
+  server.registerTool('link_account', {
+    title: 'Link account',
+    description: 'Links another user account to the current user as a member.',
+    inputSchema: {
+      memberId: z.string().describe('User ID of the account to link'),
+      label:    z.string().describe('Display label for the linked account'),
+    },
+  }, ({ memberId, label }) => wrapWrite(
+    'link_account', { memberId, label },
+    () => linkAccount(memberId, label),
+    undefined, [memberId],
+  ))
+
+  server.registerTool('accept_link', {
+    title: 'Accept account link',
+    description: 'Accepts a pending account link invitation.',
+    inputSchema: { linkId: z.string().describe('Account link ID to accept') },
+  }, ({ linkId }) => wrapWrite(
+    'accept_link', { linkId },
+    () => acceptLink(linkId),
+    undefined, [linkId],
+  ))
+
+  server.registerTool('remove_link', {
+    title: 'Remove account link',
+    description: 'Removes an account link (either as owner or member).',
+    inputSchema: { linkId: z.string().describe('Account link ID to remove') },
+  }, ({ linkId }) => wrapWrite(
+    'remove_link', { linkId },
+    () => removeLink(linkId),
+    undefined, [linkId],
+  ))
 
   return server
 }
@@ -668,6 +942,13 @@ async function handle(req: NextRequest): Promise<Response> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 })
+
+  if (!await isClaudeEnabled(supabase, user.id)) {
+    return new Response(
+      JSON.stringify({ error: 'Claude not enabled. Add an Anthropic API key in Settings.' }),
+      { status: 403 },
+    )
+  }
 
   const origin = new URL(req.url).origin
   const cookie = req.headers.get('cookie') ?? ''

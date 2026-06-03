@@ -15,6 +15,7 @@ create table boards (
   free_x double precision not null default 100,
   free_y double precision not null default 100,
   synced boolean not null default false,
+  meta text,
   created_at timestamptz default now()
 );
 
@@ -276,32 +277,23 @@ create index on cards(list_id);
 -- Captures a before-snapshot of any entity before an MCP write tool mutates it,
 -- enabling undo and diff display in future tooling.
 create table if not exists snapshots (
-  id          uuid        primary key default gen_random_uuid(),
-  user_id     uuid        not null references auth.users(id) on delete cascade,
-  entity_type text        not null,  -- 'board' | 'list' | 'card' | 'element' | 'edge'
-  entity_id   text        not null,
-  data        jsonb       not null,
-  created_at  timestamptz not null default now()
+  id           uuid        primary key default gen_random_uuid(),
+  entity_type  text        not null,  -- 'board' | 'list' | 'card' | 'element' | 'edge'
+  entity_id    uuid        not null,
+  data         jsonb       not null,
+  changed_at   timestamptz not null default now(),
+  triggered_by text
 );
-alter table snapshots enable row level security;
-create policy "users manage their own snapshots" on snapshots for all
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
-create index if not exists snapshots_user_idx     on snapshots(user_id);
 create index if not exists snapshots_entity_idx   on snapshots(entity_type, entity_id);
 
 -- Append-only log of every MCP write tool invocation.
 create table if not exists claude_actions (
   id           uuid        primary key default gen_random_uuid(),
-  user_id      uuid        not null references auth.users(id) on delete cascade,
   tool         text        not null,
   params       jsonb       not null default '{}',
-  affected_ids text[]      not null default '{}',
-  created_at   timestamptz not null default now()
+  affected_ids uuid[]      not null default '{}',
+  executed_at  timestamptz not null default now()
 );
-alter table claude_actions enable row level security;
-create policy "users manage their own actions" on claude_actions for all
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
-create index if not exists claude_actions_user_idx on claude_actions(user_id);
 create index if not exists claude_actions_tool_idx on claude_actions(tool);
 
 -- ── Stock Viewer ──────────────────────────────────────────────────────────────

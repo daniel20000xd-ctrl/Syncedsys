@@ -210,7 +210,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
       )}
 
       <div className="flex items-center justify-between mb-1">
-        <label className="text-xs text-gray-600">Board description (for AI)</label>
+        <label className="text-xs text-gray-600">AI Description</label>
         <button
           type="button"
           onClick={handleSuggest}
