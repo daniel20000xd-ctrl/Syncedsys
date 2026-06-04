@@ -15,17 +15,16 @@ import { uploadPdf, extractPdfText } from '@/lib/pdf'
 import { folderUnitsStore } from '@/lib/folderUnitsStore'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
-const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁', spreadsheet: '📊' }
+const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
 const FILE_MIME = 'application/x-syncedsys-fileid'
 const FOLDER_MIME = 'application/x-syncedsys-folderid'
 
-type CreateMode = 'folder' | 'classic' | 'trello' | 'text' | 'spreadsheet'
+type CreateMode = 'folder' | 'classic' | 'trello' | 'text'
 const CREATE_OPTIONS: { mode: CreateMode; label: string; emoji: string; name: string }[] = [
   { mode: 'folder', label: 'New folder', emoji: '📁', name: 'New folder' },
   { mode: 'classic', label: 'New canvas', emoji: '🎨', name: 'New canvas' },
   { mode: 'trello', label: 'New board', emoji: '🗂', name: 'New board' },
   { mode: 'text', label: 'New document', emoji: '📝', name: 'New document' },
-  { mode: 'spreadsheet', label: 'New spreadsheet', emoji: '📊', name: 'New spreadsheet' },
 ]
 
 // Where an item will be inserted relative to the hovered tile.

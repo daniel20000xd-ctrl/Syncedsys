@@ -70,7 +70,7 @@ export default function Sidebar({ boards, isAdmin }: { boards: Board[]; userId: 
           <div className="px-3 py-1 mb-1 shrink-0">
             <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">
               {showUnits ? `${activeBoard?.name ?? 'Board'} · units`
-                : showDocTabs ? `${activeBoard?.name ?? 'Board'} · ${docTabs.kind === 'spreadsheet' ? 'sheets' : 'pages'}`
+                : showDocTabs ? `${activeBoard?.name ?? 'Board'} · pages`
                 : showFolderUnits ? `${activeBoard?.name ?? 'Board'} · items`
                 : (activeBoard ? activeBoard.name : 'Lists')}
             </span>

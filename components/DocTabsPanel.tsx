@@ -10,7 +10,7 @@ export default function DocTabsPanel() {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [value, setValue] = useState('')
 
-  const noun = kind === 'spreadsheet' ? 'sheet' : 'page'
+  const noun = 'page'
 
   return (
     <div className="px-1">

@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-// Bridges the active text/spreadsheet board view and the sidebar doc-tabs panel.
+// Bridges the active text board view and the sidebar doc-tabs panel.
 export type DocTabMeta = { id: string; name: string }
 type Handlers = {
   select: (id: string) => void
@@ -10,7 +10,7 @@ type Handlers = {
   rename: (id: string, name: string) => void
   remove: (id: string) => void
 }
-type State = { tabs: DocTabMeta[]; active: string | null; kind: 'text' | 'spreadsheet' | null }
+type State = { tabs: DocTabMeta[]; active: string | null; kind: 'text' | null }
 
 let state: State = { tabs: [], active: null, kind: null }
 let handlers: Handlers | null = null

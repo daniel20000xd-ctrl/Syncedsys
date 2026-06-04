@@ -1,6 +1,5 @@
-// Multiple named "pages" (text) / "sheets" (spreadsheet) inside one board,
-// stored in boards.content. Backward compatible: legacy raw content becomes the
-// body of a single default tab.
+// Multiple named "pages" inside one board, stored in boards.content.
+// Backward compatible: legacy raw content becomes the body of a single default tab.
 
 export type DocTab = { id: string; name: string; body: string }
 export type DocTabs = { tabs: DocTab[]; active: string }

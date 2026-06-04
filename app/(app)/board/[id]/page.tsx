@@ -39,7 +39,6 @@ const BoardView = dynamic(() => import('@/components/BoardView'))
 const FreeBoardView = dynamic(() => import('@/components/free/FreeBoardView'))
 const TextBoardView = dynamic(() => import('@/components/TextBoardView'))
 const FolderBoardView = dynamic(() => import('@/components/FolderBoardView'))
-const SpreadsheetBoardView = dynamic(() => import('@/components/SpreadsheetBoardView'))
 const ClaudeAgent = dynamic(() => import('@/components/claude/ClaudeAgent'))
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
@@ -88,8 +87,6 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
     )
   } else if (board.mode === 'text') {
     view = <BoardDesktop board={board}><TextBoardView board={board} /></BoardDesktop>
-  } else if (board.mode === 'spreadsheet') {
-    view = <BoardDesktop board={board}><SpreadsheetBoardView board={board} /></BoardDesktop>
   } else if (board.mode === 'folder') {
     const fileElements = elements.filter(e => e.type === 'textfile' || e.type === 'pdf')
     view = <BoardDesktop board={board}><FolderBoardView board={board} initialFolders={subBoards} initialFiles={fileElements} /></BoardDesktop>

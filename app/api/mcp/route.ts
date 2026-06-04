@@ -31,7 +31,7 @@ export const dynamic = 'force-dynamic'
 type BoardMeta = { id: string; name: string; mode: string; meta: string | null }
 
 const ELEMENT_TYPE = z.enum(['shape', 'image', 'drawing', 'text', 'portal', 'textfile', 'folderlink', 'claude', 'pdf'])
-const BOARD_MODE   = z.enum(['classic', 'trello', 'text', 'folder', 'spreadsheet'])
+const BOARD_MODE   = z.enum(['classic', 'trello', 'text', 'folder'])
 
 function ok(data: unknown) {
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
@@ -176,7 +176,7 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
         }
       }
     }
-    if ((board.mode === 'text' || board.mode === 'spreadsheet') && board.content?.trim()) {
+    if (board.mode === 'text' && board.content?.trim()) {
       lines.push('\n## Content'); lines.push(board.content.slice(0, 3000))
     }
     const els = elementsResult.data ?? []
@@ -266,7 +266,7 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
 
   server.registerTool('update_board_content', {
     title: 'Update board content',
-    description: 'Overwrites the text/spreadsheet content of a board.',
+    description: 'Overwrites the text content of a board.',
     inputSchema: { boardId: z.string(), content: z.string() },
   }, ({ boardId, content }) => wrapWrite(
     'update_board_content', { boardId },

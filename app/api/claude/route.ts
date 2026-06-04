@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
 
   const system = [
     'You are an assistant embedded inside a visual workspace app, living inside one board ("tab").',
-    'Boards have a mode: classic (freeform canvas), trello (kanban), text (document), folder (file explorer), or spreadsheet.',
+    'Boards have a mode: classic (freeform canvas), trello (kanban), text (document), or folder (file explorer).',
     'Boards can contain lists, cards, and elements (text notes, shapes, files, PDFs, portals).',
     'PDF elements include extracted text — an excerpt is shown inline; call get_board to read the full text of a PDF on a given board.',
     writesEnabled

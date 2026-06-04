@@ -14,7 +14,6 @@ const MODES = [
   { id: 'trello',      emoji: '🗂',  label: 'Kanban',      desc: 'Columns and cards, Trello-style' },
   { id: 'text',        emoji: '📝', label: 'Document',    desc: 'Writing space with pages, auto-saved' },
   { id: 'folder',      emoji: '📁', label: 'Folder',      desc: 'File-explorer view with sub-folders' },
-  { id: 'spreadsheet', emoji: '📊', label: 'Spreadsheet', desc: 'Cells and formulas, bookkeeping-ready' },
 ] as const
 
 type Mode = typeof MODES[number]['id']

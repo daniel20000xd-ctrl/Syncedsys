@@ -28,24 +28,21 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   const [color, setColor] = useState(board.color)
   const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
   const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
-  const [mode, setMode] = useState<'classic' | 'trello' | 'text' | 'folder' | 'spreadsheet'>(board.mode ?? 'classic')
+  const [mode, setMode] = useState<'classic' | 'trello' | 'text' | 'folder'>(board.mode ?? 'classic')
   const [saving, setSaving] = useState(false)
   // synced=true means included in iOS sync (default); false means excluded
   const [synced, setSynced] = useState(board.synced ?? true)
   const [meta, setMeta] = useState(board.meta ?? '')
   // Text and spreadsheet tabs are specialised dead-ends — locked after creation.
   const currentMode = board.mode ?? 'classic'
-  const textLocked = currentMode === 'text' || currentMode === 'spreadsheet'
+  const textLocked = currentMode === 'text'
   // Warnings shown inline before a potentially surprising mode switch.
   const warnings: string[] = []
   if (mode !== board.mode) {
     if (mode === 'text') {
       warnings.push('Lists, cards and any canvas items stay saved but are hidden in Text mode.')
       warnings.push('Text tabs are locked to text — you won’t be able to switch this tab to another mode afterwards.')
-    } else if (mode === 'spreadsheet') {
-      warnings.push('Lists, cards and any canvas items stay saved but are hidden in Spreadsheet mode.')
-      warnings.push('Spreadsheet tabs are locked — you won’t be able to switch this tab to another mode afterwards.')
-    } else if (mode === 'folder') {
+    } else if (mode === ‘folder’) {
       warnings.push('Folder view shows sub-folders and text files only. Lists, cards, shapes, drawings and connections stay saved but are hidden here.')
     } else if (board.mode === 'classic' && mode === 'trello') {
       warnings.push('Shapes, drawings, connections and sub-tabs stay saved but are hidden until you switch back to Classic.')
@@ -175,26 +172,25 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
         {textLocked && <Lock size={10} className="text-gray-400" />}
       </label>
       <div className="grid grid-cols-2 gap-1.5 mb-2">
-        {(['classic', 'trello', 'text', 'folder', 'spreadsheet'] as const).map(m => (
+        {(['classic', 'trello', 'text', 'folder'] as const).map(m => (
           <button
             key={m}
             disabled={textLocked}
             onClick={() => setMode(m)}
             className={`py-2 rounded text-xs font-medium border capitalize transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${mode === m ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
           >
-            {m === 'classic' ? '🎨 Classic' : m === 'trello' ? '🗂 Trello' : m === 'text' ? '📝 Text' : m === 'folder' ? '📁 Folder' : '📊 Sheet'}
+            {m === 'classic' ? '🎨 Classic' : m === 'trello' ? '🗂 Trello' : m === 'text' ? '📝 Text' : '📁 Folder'}
           </button>
         ))}
       </div>
       {textLocked ? (
-        <p className="text-[10px] text-gray-400 mb-3 flex items-center gap-1"><Lock size={9} /> {currentMode === 'spreadsheet' ? 'Spreadsheet tabs are locked.' : 'Text tabs stay text — mode is locked.'}</p>
+        <p className="text-[10px] text-gray-400 mb-3 flex items-center gap-1"><Lock size={9} /> Text tabs stay text — mode is locked.</p>
       ) : (
         <>
           {mode === 'classic' && <p className="text-[10px] text-gray-400 mb-3">Freeform canvas — drag anything, draw connections.</p>}
           {mode === 'trello' && <p className="text-[10px] text-gray-400 mb-3">Kanban columns and cards.</p>}
           {mode === 'text' && <p className="text-[10px] text-gray-400 mb-3">Document — a plain writing space, auto-saved.</p>}
           {mode === 'folder' && <p className="text-[10px] text-gray-400 mb-3">File explorer — sub-folders and dropped text files.</p>}
-          {mode === 'spreadsheet' && <p className="text-[10px] text-gray-400 mb-3">Spreadsheet — cells, formulas (=SUM, =IF…), bookkeeping.</p>}
         </>
       )}
 

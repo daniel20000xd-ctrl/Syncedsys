@@ -3,7 +3,7 @@
 import { Folder, FileText } from 'lucide-react'
 import { useFolderUnits, folderUnitsStore } from '@/lib/folderUnitsStore'
 
-const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁', spreadsheet: '📊' }
+const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
 
 export default function FolderUnitsPanel() {
   const units = useFolderUnits()
