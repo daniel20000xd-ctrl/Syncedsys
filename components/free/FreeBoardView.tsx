@@ -1716,7 +1716,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const drag = cornerDragRef.current
     if (!drag) return
     const d = Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy)
-    setBoardSize(Math.max(0.25, Math.min(4, drag.startSize * d / drag.startDist)))
+    // Amplify the delta 3× so small movements feel responsive
+    const amplified = 1 + (d / drag.startDist - 1) * 3
+    setBoardSize(Math.max(0.25, Math.min(4, drag.startSize * amplified)))
   }, [])
 
   const onCornerPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
