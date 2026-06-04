@@ -1180,15 +1180,13 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           />
         )}
 
-        {/* Text board */}
-        {targetBoardId && !openFile && isText && (
-          <textarea
-            value={text}
-            onChange={e => onTextChange(e.target.value)}
-            onPointerDown={e => e.stopPropagation()}
-            placeholder="Start writing…"
-            className="nodrag nowheel absolute inset-0 pt-7 px-4 pb-3 w-full h-full resize-none focus:outline-none bg-white text-gray-800 text-sm leading-6"
-            style={{ fontFamily: 'Georgia, serif' }}
+        {/* Text board — satellite editor */}
+        {viewId && !openFile && isText && (
+          <iframe
+            src={`https://text.syncedsys.com/board/${viewId}?embed=true`}
+            className="nodrag nowheel absolute left-0 right-0 bottom-0 border-0"
+            style={{ top: 24 }}
+            title={viewName || 'Text editor'}
           />
         )}
 
