@@ -86,8 +86,7 @@ export default function UnitsPanel() {
   }
 
   function handleRowClick(e: React.MouseEvent, id: string, idx: number, isHidden: boolean) {
-    console.log('[units] click', id, 'didLasso:', didLassoDrag.current, 'shift:', e.shiftKey, 'panelSel:', panelSel.size)
-    if (didLassoDrag.current) { didLassoDrag.current = false; console.log('[units] swallowed by lasso'); return }
+    if (didLassoDrag.current) { didLassoDrag.current = false; return }
     if (renamingId === id) return
 
     if (e.shiftKey && lastSelIdx !== null) {
@@ -158,14 +157,12 @@ export default function UnitsPanel() {
               onMouseDown={e => {
                 if (e.button !== 0) return
                 if (e.shiftKey) return
-                console.log('[units] mousedown on', u.id)
                 isLassoDown.current = true
                 didLassoDrag.current = false
                 lassoStartId.current = u.id
               }}
               onMouseEnter={() => {
                 if (!isLassoDown.current || u.id === lassoStartId.current) return
-                console.log('[units] lasso enter', u.id, 'from', lassoStartId.current)
                 didLassoDrag.current = true
                 setPanelSel(prev => {
                   const next = new Set(prev)
