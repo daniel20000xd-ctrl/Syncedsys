@@ -9,7 +9,7 @@ A Next.js 16 Trello-style + freeform-canvas board app with an on-canvas Claude a
 - **Tailwind v4** (`@import "tailwindcss"`). **lucide-react** icons.
 - All DB writes are Server Actions in `app/actions.ts` (`'use server'`).
 - **Never** call `createClient()` at module/component top level — only in handlers/effects/async fns, or SSR prerender breaks.
-- **`dynamic(() => ..., { ssr: false })` must live in a Client Component**, never a Server Component (build error otherwise). Pattern: a thin `'use client'` wrapper — see `app/(app)/stocks/StockViewerWrapper.tsx`.
+- **`dynamic(() => ..., { ssr: false })` must live in a Client Component**, never a Server Component (build error otherwise). Pattern: a thin `'use client'` wrapper that default-imports the heavy component.
 - Floating panels use `createPortal` so the `overflow-x-auto` tab bars don't clip them.
 - Git/tooling: route-group paths contain `(app)` parens — **use the Bash tool** (PowerShell chokes on parens) or quote paths. Commit messages with parens/`@`/newlines: use a PowerShell here-string or keep them simple. `git push` over HTTPS prints to stderr which PowerShell surfaces as a red "error" even on success — check the last line (`main -> main`) to confirm.
 - **`npx next build` is the real check** (tsc alone misses some ESLint); build has been kept green every commit. `npx tsc --noEmit` for fast iteration.
@@ -75,18 +75,10 @@ A resizable window showing a live view of another tab **or a built-in Viewer**.
 - Drop routing (text + PDFs) uses **magnetic targeting** (`MAGNETIC_RADIUS`): a pulsing ring shows whether the drop will go to a Claude chat, a sub-tab board, or the canvas.
 
 ## Stock Viewer
-A standalone feature (not a tab/board mode). Sidebar has a **Stocks** nav entry.
-- **Enable flag**: stored in **Supabase Auth `user_metadata.stocks_enabled`** (NOT a DB column — chosen so no migration is ever needed; `supabase.auth.updateUser({ data })`). `getStocksEnabled`/`setStocksEnabled` in `app/actions.ts`.
-- **`/stocks`** (`app/(app)/stocks/page.tsx`) — server component: auth → if flag off, redirect to `/settings/connected-apps`; else render `StockViewerWrapper` → `StockViewer.tsx` (full page: search, stats, candlestick chart w/ SMA50+SMA200 overlays + volume, indicator badges, fundamentals, analyst consensus, earnings, income/balance/cashflow tables, insider txns, news, and a **Nordic Data (Avanza)** section).
-- **`/settings/connected-apps`** (`connected-apps/page.tsx` + `components/StockViewerSettings.tsx`) — the enable toggle + "Open Stock Viewer".
-- **`/api/stocks?ticker=&interval=`** (`app/api/stocks/route.ts`):
-  - Calls **Yahoo Finance REST endpoints directly** (`query1/2.finance.yahoo.com`: `v8/finance/chart`, `v10/finance/quoteSummary` with ALL free modules, `v1/finance/search` for news). **The `yahoo-finance2` npm package was removed** (v3 broke the default-export API and Vercel resolved versions unreliably).
-  - Computes RSI(14)/SMA50/SMA200/MACD/Bollinger from OHLCV via **`technicalindicators`**.
-  - Caches in a **`stock_cache`** table (6-hour TTL) — **wrapped in try/catch so it works even if that table doesn't exist**.
-  - For **`.ST` (Swedish) tickers**, merges **Avanza** data (see below) into any fields Yahoo left null, and attaches the raw `avanza` block.
-- **`lib/avanza.ts`** — unofficial Avanza endpoints (`POST /_api/search/filtered-search` to resolve the orderbook id by exact ticker match, then `GET /_api/market-guide/stock/{id}`). **Deliberately failure-proof**: hard `AbortController` timeouts, every path wrapped to return `null` on any problem, exact-symbol match so it never returns the wrong company. If it fails, the response is byte-identical to Yahoo-only.
-- **Portal embed**: `components/free/StockPortal.tsx` — compact dark chart inside a `PortalNode` when `viewerKind === 'stocks'`. Persists ticker/interval to `viewerConfig`.
-- **Claude zero-loss feed**: `StockPortal.buildViewerContext()` formats the **entire** API response (every OHLCV bar, all indicators/fundamentals/analyst/earnings/financial-statements/insider/news, plus the Avanza SEK block) as plain text and writes it to the portal element's `data.viewer_context`. `lib/claude/context.ts` injects that verbatim between `---BEGIN/END VIEWER DATA---` markers, so Claude reads stocks with no information loss.
+The full stock viewer is a **satellite app** at `stocks.syncedsys.com` (repo: `daniel20000xd-ctrl/stocks.syncedsys`). The hub's role is minimal:
+- **`/api/stocks`** (`app/api/stocks/route.ts`) — a thin proxy: auth-checks the caller, then forwards the request (with cookies) to `STOCKS_API_URL` (default `https://stocks.syncedsys.com`). Returns 503 if the satellite is unreachable.
+- **`stocks_enabled` flag** in `user_metadata` still gates the Sidebar button; `getStocksEnabled`/`setStocksEnabled` still live in `app/actions.ts`. Settings toggle: `components/StockViewerSettings.tsx`.
+- **Portal embed**: `components/free/StockPortal.tsx` — compact chart inside a `PortalNode` (`viewerKind === 'stocks'`). `buildViewerContext()` formats the full API response as plain text and writes it to `data.viewer_context`; `lib/claude/context.ts` injects it verbatim so Claude reads stocks with no information loss.
 
 ## iOS sync
 - **`/api/sync`** (`app/api/sync/route.ts`): header `Authorization: Bearer <token>` → looks up the paired `device_links` row → returns **ALL of that user's boards** + their lists/cards/elements. `export const dynamic = 'force-dynamic'` + `Cache-Control: no-store` headers (Vercel was edge-caching it).
@@ -128,20 +120,17 @@ create policy "auth write stock cache" on stock_cache for all using (auth.uid() 
 - **Grouping & layer order need NO migration** — both are localStorage (`groupmap-<id>`, `zmap-<id>`).
 
 ## Known gaps / next tasks
-- **Avanza is unofficial** — endpoints can change without notice; the module degrades to null safely, but Swedish supplemental data could silently stop. Börsdata (paid now) would be the robust replacement.
-- **Stock data currency**: market cap / EPS etc. for `.ST` tickers are SEK but the full-page UI prefixes `$` on the generic stat cards (the dedicated "Nordic Data (Avanza)" section labels SEK correctly). Not currency-aware globally.
 - **Grouping resize for list/card/sub-tab children**: their position follows but their `data.scale` is view-only on reload (no DB column for non-element scale) — same long-standing limitation as standalone hold+scroll scaling.
 - **Deleting a container shape** leaves children with a stale `parentId` (harmless; they just behave as ungrouped). Not auto-cleaned.
 - Portal cross-tab links, portal open/invert animation, multi-point link routing — all still deferred.
 - `app/(app)/settings/SettingsClient.tsx` + `account_links` are dead code — safe to delete.
-- **Supabase Edge Function** `supabase/functions/fetch-stock-data/index.ts` is a documented production alternative to `/api/stocks` (Deno `npm:` imports) — not deployed; the Next.js route is the live path.
 
 ## Key files
 - `components/free/FreeBoardView.tsx` — the canvas: tools, history, units publish, edges, portals wiring, **alignment guides + grouping** (`computeGuides`, `descendantsOf`, `getNodeWH` are module-level helpers near the top). Large; most free-mode logic lives here.
 - `components/free/nodes.tsx` — all node components (List/Card/Shape/Image/Drawing/SubTab/Text/TextFile/**Pdf**/FolderLink/Portal/**Claude**) + `DeletableEdge` + `SideHandles` + portal mini-renderers + the **split Viewers/Tabs chooser**.
-- `components/free/StockPortal.tsx` — embedded stock viewer + `buildViewerContext` (Claude feed).
-- `app/(app)/stocks/{page,StockViewerWrapper,StockViewer}.tsx`, `components/StockViewerSettings.tsx`, `app/(app)/settings/connected-apps/page.tsx`.
-- `app/api/stocks/route.ts` (Yahoo REST + indicators + Avanza merge + cache), `lib/avanza.ts`.
+- `components/free/StockPortal.tsx` — embedded stock chart in a portal node + `buildViewerContext` (Claude feed).
+- `components/StockViewerSettings.tsx`, `app/(app)/settings/connected-apps/page.tsx` — enable toggle.
+- `app/api/stocks/route.ts` — proxy to satellite.
 - `app/api/sync/route.ts`, `app/api/devices/pair/route.ts`, `app/api/claude/route.ts`.
 - `lib/claude/{context,tools}.ts`, `components/claude/{ClaudeChat,ClaudeAgent,ClaudeMark}.tsx`, `lib/claudeDropRegistry.ts`, `lib/crypto.ts`.
 - `lib/pdf.ts`, `lib/files.ts` (drop parsing → `{trees, files, pdfs, skipped}`).
