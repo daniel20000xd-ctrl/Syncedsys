@@ -121,6 +121,7 @@ export default function UnitsPanel() {
   return (
     <div
       className="px-1"
+      onMouseLeave={() => { if (panelSel.size > 0) unitsStore.setPanelSel(new Set()) }}
       onContextMenu={e => {
         if (panelSel.size === 0) return
         e.preventDefault()
