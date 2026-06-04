@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import type { Board, List, Card, BoardElement, BoardEdge } from '@/lib/types'
 import { resetDueRecurringCards } from '@/lib/recur'
 import { isClaudeEnabled } from '@/lib/mcp'
+import BoardDesktop from '@/components/BoardDesktop'
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -86,14 +87,14 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
       />
     )
   } else if (board.mode === 'text') {
-    view = <TextBoardView board={board} />
+    view = <BoardDesktop board={board}><TextBoardView board={board} /></BoardDesktop>
   } else if (board.mode === 'spreadsheet') {
-    view = <SpreadsheetBoardView board={board} />
+    view = <BoardDesktop board={board}><SpreadsheetBoardView board={board} /></BoardDesktop>
   } else if (board.mode === 'folder') {
     const fileElements = elements.filter(e => e.type === 'textfile' || e.type === 'pdf')
-    view = <FolderBoardView board={board} initialFolders={subBoards} initialFiles={fileElements} />
+    view = <BoardDesktop board={board}><FolderBoardView board={board} initialFolders={subBoards} initialFiles={fileElements} /></BoardDesktop>
   } else {
-    view = <BoardView board={board} initialLists={lists} initialCards={cards} />
+    view = <BoardDesktop board={board}><BoardView board={board} initialLists={lists} initialCards={cards} /></BoardDesktop>
   }
 
   return (
