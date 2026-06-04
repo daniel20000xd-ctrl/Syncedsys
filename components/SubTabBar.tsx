@@ -122,14 +122,16 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
                 <button
                   onMouseEnter={() => router.prefetch(`/board/${tab.id}`)}
                   onClick={() => router.push(`/board/${tab.id}`)}
-                  className={`flex items-center gap-1.5 px-2.5 pr-6 py-1 text-xs whitespace-nowrap transition-colors mr-0.5 rounded-t ${
-                    isCurrent ? 'text-white bg-white/10'
-                    : isSelected ? 'text-white/60 bg-white/5'
-                    : 'text-white/40 hover:text-white/70 hover:bg-white/5'
-                  }`}
+                  className="flex items-center pr-6 py-0.5 mr-0.5"
                 >
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tab.color }} />
-                  <span className={`${isCurrent ? 'border-b-2 border-[#579dff]' : isSelected ? 'border-b border-white/20' : ''}`}>{tab.name}</span>
+                  <span className={`flex items-center gap-1.5 px-2.5 py-1 text-xs whitespace-nowrap rounded-t border-b-2 transition-colors ${
+                    isCurrent ? 'text-white border-[#579dff] bg-white/10'
+                    : isSelected ? 'text-white/60 border-white/20 bg-white/5'
+                    : 'text-white/40 border-transparent hover:text-white/70 hover:bg-white/5'
+                  }`}>
+                    <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tab.color }} />
+                    {tab.name}
+                  </span>
                 </button>
                 <button
                   onClick={e => {
