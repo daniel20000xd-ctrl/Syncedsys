@@ -170,7 +170,7 @@ export async function moveTab(boardId: string, newGroupId: string | null, before
     if (target.group_id) throw new Error('Groups can only be nested two levels deep')
   }
 
-  await supabase.from('boards').update({ group_id: newGroupId }).eq('id', boardId).eq('user_id', user.id)
+  await supabase.from('boards').update({ group_id: newGroupId, parent_id: null }).eq('id', boardId).eq('user_id', user.id)
 
   let q = supabase.from('boards').select('id').eq('user_id', user.id).is('parent_id', null)
   q = newGroupId ? q.eq('group_id', newGroupId) : q.is('group_id', null)

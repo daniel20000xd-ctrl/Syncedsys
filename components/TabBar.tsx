@@ -89,8 +89,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     }
   }
 
-  function doMove(groupId: string | null, beforeId: string | null) {
-    const id = draggingRef.current
+  function doMove(id: string | null, groupId: string | null, beforeId: string | null) {
     endDrag()
     if (!id || id === groupId) return
 
@@ -100,7 +99,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
       const from = next.findIndex(b => b.id === id)
       if (from === -1) return prev
       const [moved] = next.splice(from, 1)
-      const updated = { ...moved, group_id: groupId ?? null }
+      const updated = { ...moved, group_id: groupId ?? null, parent_id: null }
       if (beforeId) {
         const to = next.findIndex(b => b.id === beforeId)
         next.splice(to >= 0 ? to : next.length, 0, updated)
@@ -138,8 +137,8 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
           if (draggedId === board.id) return
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
           const xRatio = (e.clientX - rect.left) / rect.width
-          // Centre 40 % → will become a sub-tab; edges → reorder
-          setDragOverId(xRatio >= 0.3 && xRatio <= 0.7 ? `${board.id}:sub` : board.id)
+          // Centre 20 % → will become a sub-tab; edges → reorder
+          setDragOverId(xRatio >= 0.4 && xRatio <= 0.6 ? `${board.id}:sub` : board.id)
         }}
         onDragLeave={() => setDragOverId(prev => (prev === board.id || prev === `${board.id}:sub`) ? null : prev)}
         onDrop={e => {
@@ -147,11 +146,11 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
           const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
           const xRatio = (e.clientX - rect.left) / rect.width
           const draggedId = draggingRef.current ?? e.dataTransfer.getData(BOARD_TAB_MIME)
-          if (draggedId && draggedId !== board.id && xRatio >= 0.3 && xRatio <= 0.7) {
+          if (draggedId && draggedId !== board.id && xRatio >= 0.4 && xRatio <= 0.6) {
             endDrag()
             handleMakeSubtab(draggedId, board.id)
           } else {
-            doMove(board.group_id ?? null, board.id)
+            doMove(draggedId ?? null, board.group_id ?? null, board.id)
           }
         }}
         className={`relative group/tab shrink-0 transition-colors
@@ -197,7 +196,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
         onDragEnd={endDrag}
         onDragOver={e => { e.preventDefault(); if (draggingRef.current && draggingRef.current !== group.id) setDragOverId(group.id) }}
         onDragLeave={() => setDragOverId(prev => prev === group.id ? null : prev)}
-        onDrop={e => { e.preventDefault(); e.stopPropagation(); doMove(group.id, null) }}
+        onDrop={e => { e.preventDefault(); e.stopPropagation(); doMove(draggingRef.current ?? e.dataTransfer.getData(BOARD_TAB_MIME), group.id, null) }}
         className={`shrink-0 flex flex-col mx-0.5 my-1 rounded-md ${dragOverId === group.id ? 'ring-2 ring-offset-0' : ''}`}
         style={{ backgroundColor: `${group.color}1a`, ...(dragOverId === group.id ? { boxShadow: `inset 0 0 0 2px ${group.color}` } : {}) }}
       >
@@ -233,8 +232,8 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     <>
       <div
         className="flex items-stretch bg-[#1d2125] border-b border-white/10 overflow-x-auto shrink-0 px-1"
-        onDragOver={e => { if (draggingRef.current) { e.preventDefault(); setDragOverId('__strip__') } }}
-        onDrop={e => { e.preventDefault(); doMove(null, null) }}
+        onDragOver={e => { if (draggingRef.current || e.dataTransfer.types.includes(BOARD_TAB_MIME)) { e.preventDefault(); setDragOverId('__strip__') } }}
+        onDrop={e => { e.preventDefault(); doMove(draggingRef.current ?? e.dataTransfer.getData(BOARD_TAB_MIME), null, null) }}
       >
         <Link
           href="/boards"
