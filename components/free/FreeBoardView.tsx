@@ -1028,7 +1028,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         if (stageZoomRef.current) {
           e.preventDefault()
           e.stopPropagation()
-          const factor = e.deltaY > 0 ? 0.9 : 1.1
+          const factor = Math.pow(0.998, e.deltaY)
           setStageScale(prev => Math.max(0.15, Math.min(8, prev * factor)))
         }
         return
@@ -1698,13 +1698,14 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   function onOverlayWheel(e: React.WheelEvent<SVGSVGElement>) {
     if (heldNodeRef.current) return
     e.preventDefault()
-    const factor = e.deltaY > 0 ? 0.9 : 1.1
     if (stageZoomRef.current) {
+      const factor = Math.pow(0.998, e.deltaY)
       setStageScale(prev => Math.max(0.15, Math.min(8, prev * factor)))
       return
     }
+    const canvasFactor = e.deltaY > 0 ? 0.9 : 1.1
     const vp = getViewport()
-    const newZoom = Math.max(0.05, Math.min(4, vp.zoom * factor))
+    const newZoom = Math.max(0.05, Math.min(4, vp.zoom * canvasFactor))
     const f = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     setViewport({ zoom: newZoom, x: vp.x + f.x * (vp.zoom - newZoom), y: vp.y + f.y * (vp.zoom - newZoom) })
   }
@@ -1759,7 +1760,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       ref={wrapperRef}
       className="absolute overflow-hidden"
       style={{
-        inset: Math.max(0, Math.round(48 / (stageZoom ? stageScale : 1))),
+        inset: 48,
+        transform: stageZoom ? `scale(${stageScale})` : undefined,
+        transformOrigin: '50% 50%',
+        willChange: stageZoom ? 'transform' : undefined,
         boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3)',
         backgroundColor: board.color,
       }}
@@ -1828,11 +1832,11 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.2)" gap={24} size={1.5} />
         <Controls showZoom={false}>
           <ControlButton
-            onClick={() => stageZoom ? setStageScale(p => Math.min(8, p * 1.25)) : zoomIn()}
+            onClick={() => stageZoom ? setStageScale(p => Math.min(8, p * 1.4)) : zoomIn()}
             title={stageZoom ? 'Stage zoom in' : 'Zoom in'}
           ><Plus size={12} /></ControlButton>
           <ControlButton
-            onClick={() => stageZoom ? setStageScale(p => Math.max(0.15, p / 1.25)) : zoomOut()}
+            onClick={() => stageZoom ? setStageScale(p => Math.max(0.15, p / 1.4)) : zoomOut()}
             title={stageZoom ? 'Stage zoom out' : 'Zoom out'}
           ><Minus size={12} /></ControlButton>
           <ControlButton
