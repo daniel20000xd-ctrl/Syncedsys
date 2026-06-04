@@ -338,7 +338,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [currentPath, setCurrentPath] = useState<string>('')
 
   // Shape click-move-click state (overlay-relative coords)
-  const [shapeAnchor, setShapeAnchor] = useState<{ x: number; y: number } | null>(null)
+  // shapeAnchor is a ref so reads in pointer handlers are always synchronous —
+  // on dense boards a state update wouldn't commit before the next handler fires.
+  const shapeAnchorRef = useRef<{ x: number; y: number } | null>(null)
   const [shapePreview, setShapePreview] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
   // Scale on hold+scroll
@@ -1367,17 +1369,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   function onShapePointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'shape') return
     const pt = getOverlayPoint(e.clientX, e.clientY)
-    if (!shapeAnchor) {
-      setShapeAnchor(pt)
+    if (!shapeAnchorRef.current) {
+      shapeAnchorRef.current = pt
       setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
       return
     }
     // Second click — commit
-    const x = Math.min(shapeAnchor.x, pt.x)
-    const y = Math.min(shapeAnchor.y, pt.y)
-    const w = Math.abs(pt.x - shapeAnchor.x) || 120
-    const h = Math.abs(pt.y - shapeAnchor.y) || 80
-    setShapeAnchor(null)
+    const x = Math.min(shapeAnchorRef.current.x, pt.x)
+    const y = Math.min(shapeAnchorRef.current.y, pt.y)
+    const w = Math.abs(pt.x - shapeAnchorRef.current.x) || 120
+    const h = Math.abs(pt.y - shapeAnchorRef.current.y) || 80
+    shapeAnchorRef.current = null
     setShapePreview(null)
     const flowPos = overlayToFlow(x, y)
     addElement('shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h }, w, h)
@@ -1388,16 +1390,16 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   function onPortalPointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'portal') return
     const pt = getOverlayPoint(e.clientX, e.clientY)
-    if (!shapeAnchor) {
-      setShapeAnchor(pt)
+    if (!shapeAnchorRef.current) {
+      shapeAnchorRef.current = pt
       setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
       return
     }
-    const x = Math.min(shapeAnchor.x, pt.x)
-    const y = Math.min(shapeAnchor.y, pt.y)
-    const w = Math.abs(pt.x - shapeAnchor.x) || 320
-    const h = Math.abs(pt.y - shapeAnchor.y) || 220
-    setShapeAnchor(null)
+    const x = Math.min(shapeAnchorRef.current.x, pt.x)
+    const y = Math.min(shapeAnchorRef.current.y, pt.y)
+    const w = Math.abs(pt.x - shapeAnchorRef.current.x) || 320
+    const h = Math.abs(pt.y - shapeAnchorRef.current.y) || 220
+    shapeAnchorRef.current = null
     setShapePreview(null)
     const flowPos = overlayToFlow(x, y)
     addElement('portal', flowPos.x, flowPos.y, { targetBoardId: null, home: board.id, vx: 20, vy: 20, zoom: 0.4, width: w, height: h }, w, h, { onOpenFully: navigate })
@@ -1408,16 +1410,16 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   function onClaudePointerDown(e: React.PointerEvent<SVGSVGElement>) {
     if (tool !== 'claude') return
     const pt = getOverlayPoint(e.clientX, e.clientY)
-    if (!shapeAnchor) {
-      setShapeAnchor(pt)
+    if (!shapeAnchorRef.current) {
+      shapeAnchorRef.current = pt
       setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
       return
     }
-    const x = Math.min(shapeAnchor.x, pt.x)
-    const y = Math.min(shapeAnchor.y, pt.y)
-    const w = Math.abs(pt.x - shapeAnchor.x) || 340
-    const h = Math.abs(pt.y - shapeAnchor.y) || 420
-    setShapeAnchor(null)
+    const x = Math.min(shapeAnchorRef.current.x, pt.x)
+    const y = Math.min(shapeAnchorRef.current.y, pt.y)
+    const w = Math.abs(pt.x - shapeAnchorRef.current.x) || 340
+    const h = Math.abs(pt.y - shapeAnchorRef.current.y) || 420
+    shapeAnchorRef.current = null
     setShapePreview(null)
     const flowPos = overlayToFlow(x, y)
     addElement('claude', flowPos.x, flowPos.y, { boardId: board.id, width: w, height: h }, w, h)
@@ -1434,19 +1436,19 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }
 
   function onShapePointerMove(e: React.PointerEvent<SVGSVGElement>) {
-    if ((tool !== 'shape' && tool !== 'portal' && tool !== 'claude') || !shapeAnchor) return
+    if ((tool !== 'shape' && tool !== 'portal' && tool !== 'claude') || !shapeAnchorRef.current) return
     const pt = getOverlayPoint(e.clientX, e.clientY)
     setShapePreview({
-      x: Math.min(shapeAnchor.x, pt.x),
-      y: Math.min(shapeAnchor.y, pt.y),
-      w: Math.abs(pt.x - shapeAnchor.x),
-      h: Math.abs(pt.y - shapeAnchor.y),
+      x: Math.min(shapeAnchorRef.current.x, pt.x),
+      y: Math.min(shapeAnchorRef.current.y, pt.y),
+      w: Math.abs(pt.x - shapeAnchorRef.current.x),
+      h: Math.abs(pt.y - shapeAnchorRef.current.y),
     })
   }
 
   // Reset any in-progress shape/stroke when leaving the relevant tool
   useEffect(() => {
-    if (tool !== 'shape' && tool !== 'portal' && tool !== 'claude') { setShapeAnchor(null); setShapePreview(null) }
+    if (tool !== 'shape' && tool !== 'portal' && tool !== 'claude') { shapeAnchorRef.current = null; setShapePreview(null) }
     if (tool !== 'draw') { drawingRef.current = null; setCurrentPath('') }
   }, [tool])
 
