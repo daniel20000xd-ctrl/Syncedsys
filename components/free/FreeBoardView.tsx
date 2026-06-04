@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState, useEffect } from 'react'
 import {
-  ReactFlow, Background, Controls, BackgroundVariant,
+  ReactFlow, Background, BackgroundVariant,
   useNodesState, useEdgesState, addEdge, ReactFlowProvider,
   useReactFlow, ConnectionMode, type Connection, type Node, type Edge,
   type NodeTypes, type EdgeTypes, type NodeChange,
@@ -16,13 +16,14 @@ import {
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
+  loadBoardForFloat,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode, PdfNode } from './nodes'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { uploadPdf, extractPdfText, renderPdfThumbnail } from '@/lib/pdf'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
-import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME } from '@/lib/files'
+import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME, FLOAT_BOARD_MIME } from '@/lib/files'
 import { claudeDropRegistry } from '@/lib/claudeDropRegistry'
 
 const nodeTypes: NodeTypes = {
@@ -295,9 +296,11 @@ interface Props {
   initialEdges: BoardEdge[]
   initialElements: BoardElement[]
   initialSubBoards?: Board[]
+  onClose?: () => void
+  initialInset?: { top: number; right: number; bottom: number; left: number }
 }
 
-function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [] }: Props) {
+function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [], onClose, initialInset }: Props) {
   const router = useRouter()
   const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes, zoomIn, zoomOut, fitView } = useReactFlow()
   const [lists, setLists] = useState(initialLists)
@@ -349,11 +352,11 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [allowMarqueeSelection, setAllowMarqueeSelection] = useState(false)
 
   // Board inset: independent per-edge spacing — free-shape corner drag.
-  const [boardInset, setBoardInset] = useState({ top: 48, right: 48, bottom: 48, left: 48 })
-  const boardInsetRef = useRef({ top: 48, right: 48, bottom: 48, left: 48 })
+  const defaultInset = initialInset ?? { top: 48, right: 48, bottom: 48, left: 48 }
+  const [boardInset, setBoardInset] = useState(defaultInset)
+  const boardInsetRef = useRef(defaultInset)
   const [isLocked, setIsLocked] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const outerRef = useRef<HTMLDivElement>(null)
   const cornerDragRef = useRef<{ corner: 'tl' | 'tr' | 'bl' | 'br' } | null>(null)
 
   // Tracks whether the user is currently dragging a connection so the
@@ -1697,7 +1700,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const onCornerPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = cornerDragRef.current
     if (!drag) return
-    const outer = outerRef.current
+    const outer = wrapperRef.current?.parentElement
     if (!outer) return
     const rect = outer.getBoundingClientRect()
     const MIN = 8
@@ -1805,16 +1808,6 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }
 
   return (
-    <div
-      ref={outerRef}
-      className="relative flex-1 h-full overflow-hidden"
-      style={{
-        backgroundImage: "url('/henning-witzel-ukvgqriuOgo-unsplash.jpg')",
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-        backgroundColor: '#0d1117',
-      }}
-    >
     <div
       ref={wrapperRef}
       className="absolute overflow-hidden"
@@ -2167,7 +2160,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
       {/* Title bar — shows board name, drag to reposition the window */}
       <div
-        className="absolute left-0 right-0 flex items-center px-3 select-none"
+        className="absolute left-0 right-0 flex items-center gap-2 px-3 select-none"
         style={{
           top: 0,
           height: 26,
@@ -2181,7 +2174,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onPointerMove={onTitleBarPointerMove}
         onPointerUp={onTitleBarPointerUp}
       >
-        <span className="text-white/75 text-[11px] font-medium tracking-wide truncate">{board.name}</span>
+        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: board.color }} />
+        <span className="text-white/75 text-[11px] font-medium tracking-wide truncate flex-1">{board.name}</span>
+        {onClose && (
+          <button
+            onPointerDown={e => e.stopPropagation()}
+            onClick={onClose}
+            className="text-white/40 hover:text-white/90 transition-colors shrink-0 leading-none"
+            style={{ fontSize: 14, lineHeight: 1 }}
+            title="Close window"
+          >×</button>
+        )}
       </div>
 
       {/* Corner drag handles — appear on hover, drag to resize the board */}
@@ -2214,36 +2217,34 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           />
         </div>
       ))}
-    </div>
-
-    {/* Controls panel — lives in the background layer, never scaled by the board's CSS transform */}
-    <div className="absolute bottom-3 left-3 z-[50] bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center select-none">
-      <button
-        onClick={() => zoomIn()}
-        title="Zoom in"
-        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
-      ><Plus size={14} /></button>
-      <button
-        onClick={() => zoomOut()}
-        title="Zoom out"
-        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
-      ><Minus size={14} /></button>
-      <button
-        onClick={() => fitView()}
-        title="Fit view"
-        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
-      ><Maximize size={14} /></button>
-      <button
-        onClick={() => setIsLocked(p => !p)}
-        title={isLocked ? 'Unlock board' : 'Lock board'}
-        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isLocked ? 'bg-amber-50 text-amber-500' : 'text-gray-600 hover:bg-gray-100'}`}
-      ><Lock size={14} /></button>
-      <button
-        onClick={() => setIsFullscreen(p => !p)}
-        title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isFullscreen ? 'bg-blue-50 text-blue-500' : 'text-gray-600 hover:bg-gray-100'}`}
-      ><Maximize2 size={14} /></button>
-    </div>
+      {/* Controls panel */}
+      <div className="absolute bottom-3 left-3 z-[50] bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center select-none">
+        <button
+          onClick={() => zoomIn()}
+          title="Zoom in"
+          className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+        ><Plus size={14} /></button>
+        <button
+          onClick={() => zoomOut()}
+          title="Zoom out"
+          className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+        ><Minus size={14} /></button>
+        <button
+          onClick={() => fitView()}
+          title="Fit view"
+          className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+        ><Maximize size={14} /></button>
+        <button
+          onClick={() => setIsLocked(p => !p)}
+          title={isLocked ? 'Unlock board' : 'Lock board'}
+          className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isLocked ? 'bg-amber-50 text-amber-500' : 'text-gray-600 hover:bg-gray-100'}`}
+        ><Lock size={14} /></button>
+        <button
+          onClick={() => setIsFullscreen(p => !p)}
+          title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isFullscreen ? 'bg-blue-50 text-blue-500' : 'text-gray-600 hover:bg-gray-100'}`}
+        ><Maximize2 size={14} /></button>
+      </div>
     </div>
   )
 }
@@ -2343,10 +2344,116 @@ function SubtabModePicker({ onPick, onClose }: {
   )
 }
 
-export default function FreeBoardView(props: Props) {
+// ── FloatingWindow: a loaded board ready to render as an extra window ─────────
+
+type FloatingWindow = {
+  instanceId: string
+  board: Board
+  initialLists: List[]
+  initialCards: Card[]
+  initialEdges: BoardEdge[]
+  initialElements: BoardElement[]
+  initialSubBoards: Board[]
+  initialInset: { top: number; right: number; bottom: number; left: number }
+}
+
+// ── FreeBoardDesktop: shared background + multiple board windows ──────────────
+
+function FreeBoardDesktop(props: Props) {
+  const outerRef = useRef<HTMLDivElement>(null)
+  const [extraWindows, setExtraWindows] = useState<FloatingWindow[]>([])
+  const [dropHint, setDropHint] = useState(false)
+
+  function closeWindow(instanceId: string) {
+    setExtraWindows(prev => prev.filter(w => w.instanceId !== instanceId))
+  }
+
+  async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    e.preventDefault()
+    setDropHint(false)
+    const boardId = e.dataTransfer.getData(FLOAT_BOARD_MIME)
+    if (!boardId) return
+    if (boardId === props.board.id) return
+    if (extraWindows.find(w => w.board.id === boardId)) return
+
+    const outer = outerRef.current
+    if (!outer) return
+    const rect = outer.getBoundingClientRect()
+    // Default window size: ~45% wide, ~65% tall, centred on drop point
+    const winW = rect.width * 0.45
+    const winH = rect.height * 0.65
+    const cx = e.clientX - rect.left
+    const cy = e.clientY - rect.top
+    const startInset = {
+      top: Math.max(4, cy - winH / 2),
+      bottom: Math.max(4, rect.height - cy - winH / 2),
+      left: Math.max(4, cx - winW / 2),
+      right: Math.max(4, rect.width - cx - winW / 2),
+    }
+
+    const data = await loadBoardForFloat(boardId)
+    if (!data) return
+    setExtraWindows(prev => [...prev, {
+      instanceId: crypto.randomUUID(),
+      board: data.board as Board,
+      initialLists: data.lists as List[],
+      initialCards: data.cards as Card[],
+      initialEdges: data.edges as BoardEdge[],
+      initialElements: data.elements as BoardElement[],
+      initialSubBoards: data.subBoards as Board[],
+      initialInset: startInset,
+    }])
+  }
+
   return (
-    <ReactFlowProvider>
-      <FlowCanvas {...props} />
-    </ReactFlowProvider>
+    <div
+      ref={outerRef}
+      className="relative flex-1 h-full overflow-hidden"
+      style={{
+        backgroundImage: "url('/henning-witzel-ukvgqriuOgo-unsplash.jpg')",
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundColor: '#0d1117',
+      }}
+      onDragOver={e => {
+        if (e.dataTransfer.types.includes(FLOAT_BOARD_MIME)) {
+          e.preventDefault()
+          setDropHint(true)
+        }
+      }}
+      onDragLeave={e => { if (!outerRef.current?.contains(e.relatedTarget as unknown as globalThis.Node)) setDropHint(false) }}
+      onDrop={handleDrop}
+    >
+      {dropHint && (
+        <div className="pointer-events-none absolute inset-0 z-[999] border-2 border-dashed border-white/30 rounded-none flex items-center justify-center">
+          <span className="text-white/50 text-sm font-medium bg-black/30 px-4 py-2 rounded-xl backdrop-blur-sm">Drop to open as window</span>
+        </div>
+      )}
+
+      {/* Primary board window */}
+      <ReactFlowProvider>
+        <FlowCanvas {...props} />
+      </ReactFlowProvider>
+
+      {/* Extra floating windows dragged in from the tab bar */}
+      {extraWindows.map(w => (
+        <ReactFlowProvider key={w.instanceId}>
+          <FlowCanvas
+            board={w.board}
+            initialLists={w.initialLists}
+            initialCards={w.initialCards}
+            initialEdges={w.initialEdges}
+            initialElements={w.initialElements}
+            initialSubBoards={w.initialSubBoards}
+            initialInset={w.initialInset}
+            onClose={() => closeWindow(w.instanceId)}
+          />
+        </ReactFlowProvider>
+      ))}
+    </div>
   )
+}
+
+export default function FreeBoardView(props: Props) {
+  return <FreeBoardDesktop {...props} />
 }

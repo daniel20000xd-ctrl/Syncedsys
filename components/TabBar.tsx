@@ -7,7 +7,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { Plus, LayoutGrid, ChevronDown, FolderPlus, Check, Trash2 } from 'lucide-react'
 import type { Board } from '@/lib/types'
 import { createBoard, createGroup, moveTab, moveBoardToParent, updateBoard, deleteBoard } from '@/app/actions'
-import { BOARD_TAB_MIME } from '@/lib/files'
+import { BOARD_TAB_MIME, FLOAT_BOARD_MIME } from '@/lib/files'
 import NewBoardModal from './NewBoardModal'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
@@ -74,6 +74,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     setDraggingId(id)
     e.dataTransfer.setData('text/plain', id)
     e.dataTransfer.setData(BOARD_TAB_MIME, id)
+    e.dataTransfer.setData(FLOAT_BOARD_MIME, id)
     e.dataTransfer.effectAllowed = 'move'
   }
   function endDrag() { draggingRef.current = null; setDraggingId(null); setDragOverId(null) }

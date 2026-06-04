@@ -833,3 +833,30 @@ export async function removeLink(linkId: string) {
   revalidatePath('/settings')
   revalidatePath('/overview')
 }
+
+// ── Float-board: fetch all data for a board to render it as a floating window ──
+export async function loadBoardForFloat(boardId: string) {
+  const supabase = await createClient()
+  const [boardRes, subRes] = await Promise.all([
+    supabase
+      .from('boards')
+      .select('*, lists(*, cards(*)), board_elements(*), board_edges(*)')
+      .eq('id', boardId)
+      .single(),
+    supabase
+      .from('boards')
+      .select('*')
+      .eq('parent_id', boardId)
+      .order('tab_position', { ascending: true }),
+  ])
+  if (!boardRes.data) return null
+  const board = boardRes.data
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lists = ((board.lists ?? []) as any[]).sort((a: any, b: any) => a.position - b.position)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cards = lists.flatMap((l: any) => l.cards ?? []).sort((a: any, b: any) => a.position - b.position)
+  const elements = board.board_elements ?? []
+  const edges = board.board_edges ?? []
+  const subBoards = subRes.data ?? []
+  return { board, lists, cards, elements, edges, subBoards }
+}

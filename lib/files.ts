@@ -15,6 +15,8 @@ const MAX_BYTES = 1_000_000 // 1 MB — generous for text, keeps the DB row sane
 export const PORTAL_ITEM_MIME = 'application/x-syncedsys-portalitem'
 // Drag payload used when dragging a board tab to become a sub-tab of another.
 export const BOARD_TAB_MIME = 'application/x-syncedsys-boardtab'
+// Drag payload used when dragging a tab onto the canvas to float it as a window.
+export const FLOAT_BOARD_MIME = 'application/x-syncedsys-floatboard'
 
 // Trigger a browser download of text content as a file.
 export function downloadTextFile(name: string, content: string) {

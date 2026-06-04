@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { Plus, ChevronDown } from 'lucide-react'
 import type { Board } from '@/lib/types'
 import { createSubTab, deleteBoard, moveBoardToParent } from '@/app/actions'
-import { BOARD_TAB_MIME } from '@/lib/files'
+import { BOARD_TAB_MIME, FLOAT_BOARD_MIME } from '@/lib/files'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
 function getAncestorChain(allBoards: Board[], boardId: string): Board[] {
@@ -114,7 +114,7 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
                 key={tab.id}
                 className={`relative group/tab shrink-0 ${dragOverId === tab.id ? 'ring-1 ring-[#579dff] rounded bg-[#579dff]/20' : ''}`}
                 draggable
-                onDragStart={e => { e.dataTransfer.setData('text/plain', tab.id); e.dataTransfer.setData(BOARD_TAB_MIME, tab.id); e.dataTransfer.effectAllowed = 'move' }}
+                onDragStart={e => { e.dataTransfer.setData('text/plain', tab.id); e.dataTransfer.setData(BOARD_TAB_MIME, tab.id); e.dataTransfer.setData(FLOAT_BOARD_MIME, tab.id); e.dataTransfer.effectAllowed = 'move' }}
                 onDragOver={e => { if (e.dataTransfer.types.includes(BOARD_TAB_MIME)) { e.preventDefault(); setDragOverId(tab.id) } }}
                 onDragLeave={() => setDragOverId(prev => prev === tab.id ? null : prev)}
                 onDrop={e => handleSubtabDrop(e, tab.id)}
