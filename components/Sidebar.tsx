@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid, BarChart2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid } from 'lucide-react'
 import type { Board, List as ListType } from '@/lib/types'
 import { useUnits } from '@/lib/unitsStore'
 import { useDocTabs } from '@/lib/docTabsStore'
@@ -108,32 +108,6 @@ export default function Sidebar({ boards, isAdmin }: { boards: Board[]; userId: 
 
       {/* Footer */}
       <div className="border-t border-white/10 p-2 space-y-0.5">
-        {/* Stock Viewer — top of footer (formerly where Connected apps lived) */}
-        {!collapsed && (
-          <div className="mb-1">
-            <div className="px-2 py-1">
-              <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wider">Stock Viewer</span>
-            </div>
-            <button
-              onClick={() => window.open('https://stocks.syncedsys.com', '_blank')}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm transition-colors text-white/60 hover:bg-white/10 hover:text-white"
-            >
-              <BarChart2 size={15} />
-              <span>Open Stocks</span>
-            </button>
-            <div className="my-1 border-t border-white/10" />
-          </div>
-        )}
-        {collapsed && (
-          <button
-            onClick={() => window.open('https://stocks.syncedsys.com', '_blank')}
-            className="w-full flex items-center justify-center px-2 py-2 rounded text-sm transition-colors text-white/60 hover:bg-white/10 hover:text-white"
-            title="Stocks"
-          >
-            <BarChart2 size={15} />
-          </button>
-        )}
-
         {isAdmin && (
           <button
             onClick={() => router.push('/overview')}
