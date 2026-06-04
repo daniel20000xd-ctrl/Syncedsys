@@ -354,7 +354,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [stageScale, setStageScale] = useState(1.0)
   // Board size: expands/shrinks the board's physical inset without scaling content.
   const [boardSize, setBoardSize] = useState(1.0)
+  const boardSizeRef = useRef(1.0)
   const [isLocked, setIsLocked] = useState(false)
+  const outerRef = useRef<HTMLDivElement>(null)
+  const cornerDragRef = useRef<{ startSize: number; startDist: number; cx: number; cy: number } | null>(null)
 
   // Tracks whether the user is currently dragging a connection so the
   // proximity handler and CSS can treat handles differently.
@@ -364,6 +367,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const elementsRef = useRef(elements)
   useEffect(() => { elementsRef.current = elements }, [elements])
   useEffect(() => { stageZoomRef.current = stageZoom }, [stageZoom])
+  useEffect(() => { boardSizeRef.current = boardSize }, [boardSize])
 
   // Debounced router.refresh() after any drag/save so the 30 s RSC cache is
   // busted before the user navigates away and back.
@@ -1694,6 +1698,32 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     return () => unitsStore.setHandlers(null)
   }, [setNodes, saveElement]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Corner drag handles for board resizing ────────────────────────────────
+  const onCornerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    const outer = outerRef.current
+    if (!outer) return
+    const rect = outer.getBoundingClientRect()
+    const cx = rect.left + rect.width / 2
+    const cy = rect.top + rect.height / 2
+    const d = Math.hypot(e.clientX - cx, e.clientY - cy)
+    if (d < 1) return
+    cornerDragRef.current = { startSize: boardSizeRef.current, startDist: d, cx, cy }
+  }, [])
+
+  const onCornerPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = cornerDragRef.current
+    if (!drag) return
+    const d = Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy)
+    setBoardSize(Math.max(0.25, Math.min(4, drag.startSize * d / drag.startDist)))
+  }, [])
+
+  const onCornerPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    cornerDragRef.current = null
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+  }, [])
+
   // Overlay (draw/shape/text/portal) intercepts pointer input; hand & select do not
   const overlayActive = tool === 'draw' || tool === 'shape' || tool === 'text' || tool === 'portal' || tool === 'claude'
 
@@ -1751,6 +1781,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   return (
     <div
+      ref={outerRef}
       className="relative flex-1 h-full overflow-hidden"
       style={{
         backgroundImage: "url('/henning-witzel-ukvgqriuOgo-unsplash.jpg')",
@@ -2108,11 +2139,40 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           />
         )
       })()}
+
+      {/* Corner drag handles — appear on hover, drag to resize the board */}
+      {(['tl', 'tr', 'bl', 'br'] as const).map(corner => (
+        <div
+          key={corner}
+          onPointerDown={onCornerPointerDown}
+          onPointerMove={onCornerPointerMove}
+          onPointerUp={onCornerPointerUp}
+          className="absolute w-10 h-10 group"
+          style={{
+            zIndex: 200,
+            cursor: corner === 'tl' || corner === 'br' ? 'nwse-resize' : 'nesw-resize',
+            ...(corner === 'tl' ? { top: 0, left: 0 } :
+                corner === 'tr' ? { top: 0, right: 0 } :
+                corner === 'bl' ? { bottom: 0, left: 0 } :
+                                  { bottom: 0, right: 0 }),
+          }}
+        >
+          <div
+            className="absolute w-2.5 h-2.5 rounded-full bg-white shadow-md opacity-0 group-hover:opacity-90 transition-opacity duration-150"
+            style={{
+              pointerEvents: 'none',
+              ...(corner === 'tl' ? { top: 5, left: 5 } :
+                  corner === 'tr' ? { top: 5, right: 5 } :
+                  corner === 'bl' ? { bottom: 5, left: 5 } :
+                                    { bottom: 5, right: 5 }),
+            }}
+          />
+        </div>
+      ))}
     </div>
 
     {/* Controls panel — lives in the background layer, never scaled by the board's CSS transform */}
     <div className="absolute bottom-3 left-3 z-[50] bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center select-none">
-      <p className="text-[7px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">View</p>
       <button
         onClick={() => stageZoom ? setStageScale(p => Math.min(8, p * 1.4)) : zoomIn()}
         title={stageZoom ? 'Stage zoom in' : 'Zoom in'}
@@ -2138,18 +2198,6 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         title={stageZoom ? 'Switch to canvas zoom' : 'Switch to stage zoom'}
         className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${stageZoom ? 'bg-blue-50 text-blue-500' : 'text-gray-600 hover:bg-gray-100'}`}
       ><Maximize2 size={14} /></button>
-      <div className="w-full h-px bg-gray-100 my-0.5" />
-      <p className="text-[7px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Board</p>
-      <button
-        onClick={() => setBoardSize(p => Math.min(4, p * 1.3))}
-        title="Expand board canvas"
-        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
-      ><Plus size={14} /></button>
-      <button
-        onClick={() => setBoardSize(p => Math.max(0.25, p / 1.3))}
-        title="Shrink board canvas"
-        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
-      ><Minus size={14} /></button>
     </div>
     </div>
   )
