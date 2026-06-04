@@ -348,17 +348,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   const [allowMarqueeSelection, setAllowMarqueeSelection] = useState(false)
 
-  // Stage zoom: scroll/+/- resize the board layer itself rather than the canvas content.
-  const [stageZoom, setStageZoom] = useState(true)
-  const stageZoomRef = useRef(true)
-  const [stageScale, setStageScale] = useState(1.0)
-  // Board size: expands/shrinks the board's physical inset without scaling content.
-  const [boardSize, setBoardSize] = useState(1.0)
-  const boardSizeRef = useRef(1.0)
+  // Board inset: independent per-edge spacing — free-shape corner drag.
+  const [boardInset, setBoardInset] = useState({ top: 48, right: 48, bottom: 48, left: 48 })
+  const boardInsetRef = useRef({ top: 48, right: 48, bottom: 48, left: 48 })
   const [isLocked, setIsLocked] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const outerRef = useRef<HTMLDivElement>(null)
-  const cornerDragRef = useRef<{ startSize: number; startDist: number; cx: number; cy: number } | null>(null)
+  const cornerDragRef = useRef<{ corner: 'tl' | 'tr' | 'bl' | 'br' } | null>(null)
 
   // Tracks whether the user is currently dragging a connection so the
   // proximity handler and CSS can treat handles differently.
@@ -367,8 +363,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // Latest elements for persistence callbacks
   const elementsRef = useRef(elements)
   useEffect(() => { elementsRef.current = elements }, [elements])
-  useEffect(() => { stageZoomRef.current = stageZoom }, [stageZoom])
-  useEffect(() => { boardSizeRef.current = boardSize }, [boardSize])
+  useEffect(() => { boardInsetRef.current = boardInset }, [boardInset])
 
   // Debounced router.refresh() after any drag/save so the 30 s RSC cache is
   // busted before the user navigates away and back.
@@ -1032,15 +1027,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const el = wrapperRef.current
     if (!el) return
     function handleWheel(e: WheelEvent) {
-      if (!heldNodeRef.current) {
-        if (stageZoomRef.current) {
-          e.preventDefault()
-          e.stopPropagation()
-          const factor = Math.pow(0.998, e.deltaY)
-          setStageScale(prev => Math.max(0.15, Math.min(8, prev * factor)))
-        }
-        return
-      }
+      if (!heldNodeRef.current) return
       e.preventDefault()
       e.stopPropagation()
       const factor = e.deltaY > 0 ? 0.9 : 1.1
@@ -1703,23 +1690,36 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const onCornerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
-    const outer = outerRef.current
-    if (!outer) return
-    const rect = outer.getBoundingClientRect()
-    const cx = rect.left + rect.width / 2
-    const cy = rect.top + rect.height / 2
-    const d = Math.hypot(e.clientX - cx, e.clientY - cy)
-    if (d < 1) return
-    cornerDragRef.current = { startSize: boardSizeRef.current, startDist: d, cx, cy }
+    const corner = e.currentTarget.dataset.corner as 'tl' | 'tr' | 'bl' | 'br'
+    cornerDragRef.current = { corner }
   }, [])
 
   const onCornerPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const drag = cornerDragRef.current
     if (!drag) return
-    const d = Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy)
-    // Amplify the delta 3× so small movements feel responsive
-    const amplified = 1 + (d / drag.startDist - 1) * 3
-    setBoardSize(Math.max(0.25, Math.min(4, drag.startSize * amplified)))
+    const outer = outerRef.current
+    if (!outer) return
+    const rect = outer.getBoundingClientRect()
+    const MIN = 8
+    const MIN_SIZE = 80
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    setBoardInset(prev => {
+      const next = { ...prev }
+      if (drag.corner === 'tl' || drag.corner === 'bl') {
+        next.left = Math.max(MIN, Math.min(rect.width - prev.right - MIN_SIZE, x))
+      }
+      if (drag.corner === 'tr' || drag.corner === 'br') {
+        next.right = Math.max(MIN, Math.min(rect.width - prev.left - MIN_SIZE, rect.width - x))
+      }
+      if (drag.corner === 'tl' || drag.corner === 'tr') {
+        next.top = Math.max(MIN, Math.min(rect.height - prev.bottom - MIN_SIZE, y))
+      }
+      if (drag.corner === 'bl' || drag.corner === 'br') {
+        next.bottom = Math.max(MIN, Math.min(rect.height - prev.top - MIN_SIZE, rect.height - y))
+      }
+      return next
+    })
   }, [])
 
   const onCornerPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -1734,11 +1734,6 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   function onOverlayWheel(e: React.WheelEvent<SVGSVGElement>) {
     if (heldNodeRef.current) return
     e.preventDefault()
-    if (stageZoomRef.current) {
-      const factor = Math.pow(0.998, e.deltaY)
-      setStageScale(prev => Math.max(0.15, Math.min(8, prev * factor)))
-      return
-    }
     const canvasFactor = e.deltaY > 0 ? 0.9 : 1.1
     const vp = getViewport()
     const newZoom = Math.max(0.05, Math.min(4, vp.zoom * canvasFactor))
@@ -1797,11 +1792,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       ref={wrapperRef}
       className="absolute overflow-hidden"
       style={{
-        inset: isFullscreen ? 0 : Math.max(4, Math.round(48 / boardSize)),
-        transform: stageZoom ? `scale(${stageScale})` : undefined,
-        transformOrigin: '50% 50%',
-        willChange: stageZoom ? 'transform' : undefined,
-        transition: 'inset 0.25s ease',
+        top: isFullscreen ? 0 : boardInset.top,
+        right: isFullscreen ? 0 : boardInset.right,
+        bottom: isFullscreen ? 0 : boardInset.bottom,
+        left: isFullscreen ? 0 : boardInset.left,
         boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3)',
         backgroundColor: board.color,
       }}
@@ -1855,8 +1849,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           false
         }
         zoomOnDoubleClick={false}
-        zoomOnScroll={!stageZoom}
-        zoomOnPinch={!stageZoom}
+        zoomOnScroll={true}
+        zoomOnPinch={true}
         onPaneClick={e => {
           // Close context menu on any background left-click; no longer opens it
           if (contextMenu) setContextMenu(null)
@@ -2148,6 +2142,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       {(['tl', 'tr', 'bl', 'br'] as const).map(corner => (
         <div
           key={corner}
+          data-corner={corner}
           onPointerDown={onCornerPointerDown}
           onPointerMove={onCornerPointerMove}
           onPointerUp={onCornerPointerUp}
@@ -2178,13 +2173,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     {/* Controls panel — lives in the background layer, never scaled by the board's CSS transform */}
     <div className="absolute bottom-3 left-3 z-[50] bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center select-none">
       <button
-        onClick={() => stageZoom ? setStageScale(p => Math.min(8, p * 1.4)) : zoomIn()}
-        title={stageZoom ? 'Stage zoom in' : 'Zoom in'}
+        onClick={() => zoomIn()}
+        title="Zoom in"
         className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
       ><Plus size={14} /></button>
       <button
-        onClick={() => stageZoom ? setStageScale(p => Math.max(0.15, p / 1.4)) : zoomOut()}
-        title={stageZoom ? 'Stage zoom out' : 'Zoom out'}
+        onClick={() => zoomOut()}
+        title="Zoom out"
         className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
       ><Minus size={14} /></button>
       <button
