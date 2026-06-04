@@ -1368,12 +1368,6 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool !== 'shape') return
     const pt = getOverlayPoint(e.clientX, e.clientY)
     if (!shapeAnchor) {
-      // If the click lands on an existing node, switch to select tool so the
-      // user can interact with it (type inside, resize, link) rather than
-      // accidentally starting a new shape on top of it.
-      const flowPt = overlayToFlow(pt.x, pt.y)
-      const hit = getIntersectingNodes({ x: flowPt.x - 4, y: flowPt.y - 4, width: 8, height: 8 })
-      if (hit.length > 0) { setTool('select'); return }
       setShapeAnchor(pt)
       setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
       return
