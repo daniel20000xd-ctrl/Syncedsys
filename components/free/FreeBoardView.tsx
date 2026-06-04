@@ -9,7 +9,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, Lock, Maximize, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, Lock, Maximize, Eye, EyeOff, Trash2, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, deleteEdge, deleteBoard,
@@ -311,6 +311,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [selectedShape, setSelectedShape] = useState<ShapeType>('rect')
   const [drawColor, setDrawColor] = useState('#1d4ed8')
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null)
+  const [selContextMenu, setSelContextMenu] = useState<{ x: number; y: number; count: number } | null>(null)
   const [shapeColorPicker, setShapeColorPicker] = useState<string>(SHAPE_COLORS[0])
   const [subPanel, setSubPanel] = useState<{ boardId: string; rect: DOMRect } | null>(null)
   const [expiryPanel, setExpiryPanel] = useState<string | null>(null) // nodeId of element being given a deadline
@@ -1322,6 +1323,22 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (action === 'shape') setTool('shape')
   }
 
+  function handleSelAction(action: 'hide' | 'show' | 'delete') {
+    const ids = [...unitsStore.getPanelSel()]
+    if (action === 'hide') {
+      ids.forEach(id => unitsStore.setHidden(id, true))
+    } else if (action === 'show') {
+      ids.forEach(id => unitsStore.setHidden(id, false))
+    } else {
+      for (const id of ids) {
+        const kind = nodeKind(id)
+        if (kind) handleDeleteNode(id, kind)
+      }
+    }
+    unitsStore.setPanelSel(new Set())
+    setSelContextMenu(null)
+  }
+
   // Overlay-relative point from any pointer/mouse event
   function getOverlayPoint(clientX: number, clientY: number) {
     const rect = svgOverlayRef.current!.getBoundingClientRect()
@@ -1476,6 +1493,23 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       window.removeEventListener('keydown', onKey)
     }
   }, [contextMenu])
+
+  useEffect(() => {
+    if (!selContextMenu) return
+    const close = () => setSelContextMenu(null)
+    const onVis = () => { if (document.hidden) close() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close() }
+    window.addEventListener('blur', close)
+    document.addEventListener('mouseleave', close)
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('blur', close)
+      document.removeEventListener('mouseleave', close)
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [selContextMenu])
 
   // Double-click-hold-drag on canvas background → marquee selection.
   // Strategy: pre-stage allowMarqueeSelection=true on the FIRST click's release so
@@ -1683,6 +1717,12 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         if (n && id.startsWith('el-')) saveElement(id, { ...n.data, opacity }, n.data.width as number | undefined, n.data.height as number | undefined)
       },
       setHidden: (id: string, hidden: boolean) => hideUnit(id, hidden),
+      delete: (ids: string[]) => {
+        for (const id of ids) {
+          const kind = nodeKind(id)
+          if (kind) handleDeleteNode(id, kind)
+        }
+      },
       rename: (id: string, label: string) => {
         // Route rename to the right underlying node type
         if (id.startsWith('list-')) {
@@ -1899,8 +1939,21 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onPaneContextMenu={e => {
           if (tool !== 'select') return
           e.preventDefault()
+          const sel = unitsStore.getPanelSel()
+          if (sel.size > 0) {
+            setSelContextMenu({ x: e.clientX, y: e.clientY, count: sel.size })
+            return
+          }
           const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
           setContextMenu({ x: e.clientX, y: e.clientY, flowX: flowPos.x, flowY: flowPos.y })
+        }}
+        onNodeContextMenu={e => {
+          if (tool !== 'select') return
+          e.preventDefault()
+          const sel = unitsStore.getPanelSel()
+          if (sel.size > 0) {
+            setSelContextMenu({ x: e.clientX, y: e.clientY, count: sel.size })
+          }
         }}
         proOptions={{ hideAttribution: true }}
       >
@@ -2115,6 +2168,37 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
               {label}
             </button>
           ))}
+        </div>
+      )}
+
+      {selContextMenu && (
+        <div
+          className="fixed bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-50 w-48"
+          style={{ top: selContextMenu.y, left: selContextMenu.x }}
+          onMouseLeave={() => setSelContextMenu(null)}
+        >
+          <div className="px-4 py-1 text-[10px] text-gray-400 font-medium border-b border-gray-100 mb-1">
+            {selContextMenu.count} selected
+          </div>
+          <button
+            onClick={() => handleSelAction('hide')}
+            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-2"
+          >
+            <EyeOff size={13} /> Hide
+          </button>
+          <button
+            onClick={() => handleSelAction('show')}
+            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-2"
+          >
+            <Eye size={13} /> Show
+          </button>
+          <div className="border-t border-gray-100 my-1" />
+          <button
+            onClick={() => handleSelAction('delete')}
+            className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors flex items-center gap-2"
+          >
+            <Trash2 size={13} /> Delete
+          </button>
         </div>
       )}
 

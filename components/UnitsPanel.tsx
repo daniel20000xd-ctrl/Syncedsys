@@ -1,14 +1,13 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Frame, Eye, EyeOff, FileText, LayoutDashboard, AlignLeft, TableProperties, X } from 'lucide-react'
-import { useUnits, unitsStore, type Unit } from '@/lib/unitsStore'
+import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Frame, Eye, EyeOff, FileText, LayoutDashboard, AlignLeft, TableProperties, X, Trash2 } from 'lucide-react'
+import { useUnits, usePanelSel, unitsStore, type Unit } from '@/lib/unitsStore'
 
 function UnitIcon({ u }: { u: Unit }) {
   if (u.kind === 'subtab') {
     if (u.mode === 'text')        return <AlignLeft size={13} className="shrink-0 text-white/50" />
     if (u.mode === 'folder')      return <FileText size={13} className="shrink-0 text-white/50" />
-    if (u.mode === 'spreadsheet') return <TableProperties size={13} className="shrink-0 text-white/50" />
     if (u.mode === 'trello')      return <LayoutDashboard size={13} className="shrink-0 text-white/50" />
     return <Square size={13} className="shrink-0 text-white/50" />
   }
@@ -56,9 +55,10 @@ export default function UnitsPanel() {
   const [settingsId, setSettingsId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
 
-  // Panel multi-select
-  const [panelSel, setPanelSel] = useState<Set<string>>(new Set())
+  // Panel multi-select — selection state lives in the store so FreeBoardView can read it
+  const panelSel = usePanelSel()
   const [lastSelIdx, setLastSelIdx] = useState<number | null>(null)
+  const [selCtxMenu, setSelCtxMenu] = useState<{ x: number; y: number } | null>(null)
   const isLassoDown = useRef(false)
   const didLassoDrag = useRef(false)
   const lassoStartId = useRef<string | null>(null)
@@ -68,6 +68,13 @@ export default function UnitsPanel() {
     window.addEventListener('mouseup', onUp)
     return () => window.removeEventListener('mouseup', onUp)
   }, [])
+
+  useEffect(() => {
+    if (!selCtxMenu) return
+    const close = () => setSelCtxMenu(null)
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [selCtxMenu])
 
   if (units.length === 0) {
     return <p className="px-3 py-1 text-xs text-white/30">No units yet</p>
@@ -92,19 +99,15 @@ export default function UnitsPanel() {
     if (e.shiftKey && lastSelIdx !== null) {
       const lo = Math.min(lastSelIdx, idx)
       const hi = Math.max(lastSelIdx, idx)
-      setPanelSel(prev => {
-        const next = new Set(prev)
-        units.slice(lo, hi + 1).forEach(u => next.add(u.id))
-        return next
-      })
+      const next = new Set(unitsStore.getPanelSel())
+      units.slice(lo, hi + 1).forEach(u => next.add(u.id))
+      unitsStore.setPanelSel(next)
     } else {
       const wasSelected = panelSel.has(id)
-      setPanelSel(prev => {
-        const next = new Set(prev)
-        if (next.has(id)) next.delete(id)
-        else next.add(id)
-        return next
-      })
+      const next = new Set(unitsStore.getPanelSel())
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      unitsStore.setPanelSel(next)
       setLastSelIdx(idx)
       if (!wasSelected && !isHidden) unitsStore.select(id)
     }
@@ -112,11 +115,18 @@ export default function UnitsPanel() {
 
   function applyVisibility(hidden: boolean) {
     panelSel.forEach(id => unitsStore.setHidden(id, hidden))
-    setPanelSel(new Set())
+    unitsStore.setPanelSel(new Set())
   }
 
   return (
-    <div className="px-1">
+    <div
+      className="px-1"
+      onContextMenu={e => {
+        if (panelSel.size === 0) return
+        e.preventDefault()
+        setSelCtxMenu({ x: e.clientX, y: e.clientY })
+      }}
+    >
       <p className="px-2 py-1 text-[9px] text-white/30">Top = front layer · drag grip to reorder · click or drag to select</p>
 
       {panelSel.size > 0 && (
@@ -135,7 +145,7 @@ export default function UnitsPanel() {
             <Eye size={10} /> Show
           </button>
           <button
-            onClick={() => setPanelSel(new Set())}
+            onClick={() => unitsStore.setPanelSel(new Set())}
             onMouseDown={e => e.stopPropagation()}
             className="p-0.5 rounded text-white/30 hover:text-white hover:bg-white/10 transition-colors"
           >
@@ -164,12 +174,10 @@ export default function UnitsPanel() {
               onMouseEnter={() => {
                 if (!isLassoDown.current || u.id === lassoStartId.current) return
                 didLassoDrag.current = true
-                setPanelSel(prev => {
-                  const next = new Set(prev)
-                  if (lassoStartId.current) next.add(lassoStartId.current)
-                  next.add(u.id)
-                  return next
-                })
+                const next = new Set(unitsStore.getPanelSel())
+                if (lassoStartId.current) next.add(lassoStartId.current)
+                next.add(u.id)
+                unitsStore.setPanelSel(next)
               }}
               onClick={e => handleRowClick(e, u.id, idx, u.hidden)}
               onDoubleClick={() => { if (!u.hidden) { setSettingsId(null); setRenamingId(u.id) } }}
@@ -255,6 +263,37 @@ export default function UnitsPanel() {
           </div>
         )
       })}
+
+      {selCtxMenu && (
+        <div
+          className="fixed bg-white rounded-xl shadow-xl border border-gray-200 py-1.5 z-[300] w-48"
+          style={{ top: selCtxMenu.y, left: selCtxMenu.x }}
+          onMouseDown={e => e.stopPropagation()}
+        >
+          <div className="px-4 py-1 text-[10px] text-gray-400 font-medium border-b border-gray-100 mb-1">
+            {panelSel.size} selected
+          </div>
+          <button
+            onClick={() => { applyVisibility(true); setSelCtxMenu(null) }}
+            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-2"
+          >
+            <EyeOff size={13} /> Hide
+          </button>
+          <button
+            onClick={() => { applyVisibility(false); setSelCtxMenu(null) }}
+            className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors flex items-center gap-2"
+          >
+            <Eye size={13} /> Show
+          </button>
+          <div className="border-t border-gray-100 my-1" />
+          <button
+            onClick={() => { unitsStore.delete([...panelSel]); unitsStore.setPanelSel(new Set()); setSelCtxMenu(null) }}
+            className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors flex items-center gap-2"
+          >
+            <Trash2 size={13} /> Delete
+          </button>
+        </div>
+      )}
     </div>
   )
 }

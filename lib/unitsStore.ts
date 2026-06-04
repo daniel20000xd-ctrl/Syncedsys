@@ -19,6 +19,7 @@ type Handlers = {
   setOpacity: (id: string, opacity: number) => void
   setHidden: (id: string, hidden: boolean) => void
   rename: (id: string, label: string) => void
+  delete: (ids: string[]) => void
 }
 
 let units: Unit[] = []
@@ -26,9 +27,13 @@ let handlers: Handlers | null = null
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach(l => l())
 
+// Panel selection — shared between UnitsPanel and FreeBoardView
+let panelSel: Set<string> = new Set()
+const selListeners = new Set<() => void>()
+const emitSel = () => selListeners.forEach(l => l())
+
 export const unitsStore = {
   publish(u: Unit[]) {
-    // avoid needless re-renders if nothing meaningful changed
     if (JSON.stringify(u) === JSON.stringify(units)) return
     units = u
     emit()
@@ -42,8 +47,17 @@ export const unitsStore = {
   setOpacity(id: string, o: number) { handlers?.setOpacity(id, o) },
   setHidden(id: string, hidden: boolean) { handlers?.setHidden(id, hidden) },
   rename(id: string, label: string) { handlers?.rename(id, label) },
+  delete(ids: string[]) { handlers?.delete(ids) },
+
+  getPanelSel: () => panelSel,
+  setPanelSel(next: Set<string>) { panelSel = next; emitSel() },
+  subscribePanelSel(l: () => void) { selListeners.add(l); return () => { selListeners.delete(l) } },
 }
 
 export function useUnits(): Unit[] {
   return useSyncExternalStore(unitsStore.subscribe, unitsStore.get, () => units)
+}
+
+export function usePanelSel(): Set<string> {
+  return useSyncExternalStore(unitsStore.subscribePanelSel, unitsStore.getPanelSel, () => panelSel)
 }
