@@ -42,7 +42,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
     if (mode === 'text') {
       warnings.push('Lists, cards and any canvas items stay saved but are hidden in Text mode.')
       warnings.push('Text tabs are locked to text — you won’t be able to switch this tab to another mode afterwards.')
-    } else if (mode === ‘folder’) {
+    } else if (mode === 'folder') {
       warnings.push('Folder view shows sub-folders and text files only. Lists, cards, shapes, drawings and connections stay saved but are hidden here.')
     } else if (board.mode === 'classic' && mode === 'trello') {
       warnings.push('Shapes, drawings, connections and sub-tabs stay saved but are hidden until you switch back to Classic.')

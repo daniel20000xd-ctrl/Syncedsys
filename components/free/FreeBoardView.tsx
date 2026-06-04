@@ -2430,11 +2430,10 @@ const SUBTAB_MODES = [
   { mode: 'trello' as const,      emoji: '🗂',  label: 'Kanban',      desc: 'Lists & cards' },
   { mode: 'text' as const,        emoji: '📝', label: 'Document',    desc: 'Rich text editor' },
   { mode: 'folder' as const,      emoji: '📁', label: 'Folder',      desc: 'Files & sub-folders' },
-  { mode: 'spreadsheet' as const, emoji: '📊', label: 'Spreadsheet', desc: 'Grid with formulas' },
 ]
 
 function SubtabModePicker({ onPick, onClose }: {
-  onPick: (mode: 'classic' | 'trello' | 'text' | 'folder' | 'spreadsheet') => void
+  onPick: (mode: 'classic' | 'trello' | 'text' | 'folder') => void
   onClose: () => void
 }) {
   return (
