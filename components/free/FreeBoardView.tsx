@@ -475,7 +475,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       const map: Record<string, boolean> = stored ? JSON.parse(stored) : {}
       if (hidden) { map[nodeId] = true } else { delete map[nodeId] }
       localStorage.setItem(key, JSON.stringify(map))
-    } catch {}
+      console.log('[hiddenmap] saved', key, map)
+    } catch (e) { console.error('[hiddenmap] save failed', e) }
     const rawId = nodeId.replace(/^(el-|list-|card-)/, '')
     if (nodeId.startsWith('el-')) {
       const el = elements.find(e => e.id === rawId)
@@ -1644,12 +1645,18 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // Restore hidden state from localStorage so visibility survives tab switches and reloads.
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(`hiddenmap-${board.id}`)
+      const key = `hiddenmap-${board.id}`
+      const stored = localStorage.getItem(key)
+      console.log('[hiddenmap] restore attempt', key, stored)
       if (!stored) return
       const map = JSON.parse(stored) as Record<string, boolean>
       if (!map || typeof map !== 'object') return
-      setNodes(prev => prev.map(n => map[n.id] != null ? { ...n, hidden: map[n.id], data: { ...n.data, hidden: map[n.id] } } : n))
-    } catch {}
+      setNodes(prev => {
+        const next = prev.map(n => map[n.id] != null ? { ...n, hidden: map[n.id], data: { ...n.data, hidden: map[n.id] } } : n)
+        console.log('[hiddenmap] restored nodes', next.filter(n => n.hidden).map(n => n.id))
+        return next
+      })
+    } catch (e) { console.error('[hiddenmap] restore failed', e) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board.id])
 
