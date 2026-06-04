@@ -356,6 +356,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [boardSize, setBoardSize] = useState(1.0)
   const boardSizeRef = useRef(1.0)
   const [isLocked, setIsLocked] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
   const outerRef = useRef<HTMLDivElement>(null)
   const cornerDragRef = useRef<{ startSize: number; startDist: number; cx: number; cy: number } | null>(null)
 
@@ -1796,10 +1797,11 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       ref={wrapperRef}
       className="absolute overflow-hidden"
       style={{
-        inset: Math.max(4, Math.round(48 / boardSize)),
+        inset: isFullscreen ? 0 : Math.max(4, Math.round(48 / boardSize)),
         transform: stageZoom ? `scale(${stageScale})` : undefined,
         transformOrigin: '50% 50%',
         willChange: stageZoom ? 'transform' : undefined,
+        transition: 'inset 0.25s ease',
         boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3)',
         backgroundColor: board.color,
       }}
@@ -2196,9 +2198,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isLocked ? 'bg-amber-50 text-amber-500' : 'text-gray-600 hover:bg-gray-100'}`}
       ><Lock size={14} /></button>
       <button
-        onClick={() => { if (!stageZoom) setStageScale(1.0); setStageZoom(p => !p) }}
-        title={stageZoom ? 'Switch to canvas zoom' : 'Switch to stage zoom'}
-        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${stageZoom ? 'bg-blue-50 text-blue-500' : 'text-gray-600 hover:bg-gray-100'}`}
+        onClick={() => setIsFullscreen(p => !p)}
+        title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isFullscreen ? 'bg-blue-50 text-blue-500' : 'text-gray-600 hover:bg-gray-100'}`}
       ><Maximize2 size={14} /></button>
     </div>
     </div>
