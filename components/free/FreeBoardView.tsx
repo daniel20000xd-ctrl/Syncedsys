@@ -2,14 +2,14 @@
 
 import { useCallback, useRef, useState, useEffect } from 'react'
 import {
-  ReactFlow, Background, Controls, ControlButton, BackgroundVariant,
+  ReactFlow, Background, Controls, BackgroundVariant,
   useNodesState, useEdgesState, addEdge, ReactFlowProvider,
   useReactFlow, ConnectionMode, type Connection, type Node, type Edge,
   type NodeTypes, type EdgeTypes, type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, Lock, Maximize, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, deleteEdge, deleteBoard,
@@ -299,7 +299,7 @@ interface Props {
 
 function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [] }: Props) {
   const router = useRouter()
-  const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes, zoomIn, zoomOut } = useReactFlow()
+  const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes, zoomIn, zoomOut, fitView } = useReactFlow()
   const [lists, setLists] = useState(initialLists)
   const [cards, setCards] = useState(initialCards)
   const [elements, setElements] = useState(initialElements)
@@ -352,6 +352,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const [stageZoom, setStageZoom] = useState(true)
   const stageZoomRef = useRef(true)
   const [stageScale, setStageScale] = useState(1.0)
+  // Board size: expands/shrinks the board's physical inset without scaling content.
+  const [boardSize, setBoardSize] = useState(1.0)
+  const [isLocked, setIsLocked] = useState(false)
 
   // Tracks whether the user is currently dragging a connection so the
   // proximity handler and CSS can treat handles differently.
@@ -1760,7 +1763,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       ref={wrapperRef}
       className="absolute overflow-hidden"
       style={{
-        inset: 48,
+        inset: Math.max(4, Math.round(48 / boardSize)),
         transform: stageZoom ? `scale(${stageScale})` : undefined,
         transformOrigin: '50% 50%',
         willChange: stageZoom ? 'transform' : undefined,
@@ -1806,8 +1809,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         minZoom={0.05}
         maxZoom={4}
         deleteKeyCode="Delete"
-        nodesDraggable={tool === 'select'}
-        selectionOnDrag={allowMarqueeSelection && tool === 'select'}
+        nodesDraggable={tool === 'select' && !isLocked}
+        nodesConnectable={!isLocked}
+        elementsSelectable={!isLocked}
+        selectionOnDrag={allowMarqueeSelection && tool === 'select' && !isLocked}
         panOnDrag={
           tool === 'hand' ? [0, 1, 2] :
           tool === 'select' && allowMarqueeSelection ? [1] :
@@ -1830,21 +1835,6 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.2)" gap={24} size={1.5} />
-        <Controls showZoom={false}>
-          <ControlButton
-            onClick={() => stageZoom ? setStageScale(p => Math.min(8, p * 1.4)) : zoomIn()}
-            title={stageZoom ? 'Stage zoom in' : 'Zoom in'}
-          ><Plus size={12} /></ControlButton>
-          <ControlButton
-            onClick={() => stageZoom ? setStageScale(p => Math.max(0.15, p / 1.4)) : zoomOut()}
-            title={stageZoom ? 'Stage zoom out' : 'Zoom out'}
-          ><Minus size={12} /></ControlButton>
-          <ControlButton
-            onClick={() => { if (!stageZoom) setStageScale(1.0); setStageZoom(p => !p) }}
-            title={stageZoom ? 'Switch to canvas zoom' : 'Switch to stage zoom'}
-            style={{ color: stageZoom ? '#3b82f6' : undefined }}
-          ><Maximize2 size={12} /></ControlButton>
-        </Controls>
       </ReactFlow>
 
       {fileDragOver && (() => {
@@ -2118,6 +2108,48 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           />
         )
       })()}
+    </div>
+
+    {/* Controls panel — lives in the background layer, never scaled by the board's CSS transform */}
+    <div className="absolute top-3 right-3 z-[50] bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center select-none">
+      <p className="text-[7px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">View</p>
+      <button
+        onClick={() => stageZoom ? setStageScale(p => Math.min(8, p * 1.4)) : zoomIn()}
+        title={stageZoom ? 'Stage zoom in' : 'Zoom in'}
+        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+      ><Plus size={14} /></button>
+      <button
+        onClick={() => stageZoom ? setStageScale(p => Math.max(0.15, p / 1.4)) : zoomOut()}
+        title={stageZoom ? 'Stage zoom out' : 'Zoom out'}
+        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+      ><Minus size={14} /></button>
+      <button
+        onClick={() => fitView()}
+        title="Fit view"
+        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+      ><Maximize size={14} /></button>
+      <button
+        onClick={() => setIsLocked(p => !p)}
+        title={isLocked ? 'Unlock board' : 'Lock board'}
+        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isLocked ? 'bg-amber-50 text-amber-500' : 'text-gray-600 hover:bg-gray-100'}`}
+      ><Lock size={14} /></button>
+      <button
+        onClick={() => { if (!stageZoom) setStageScale(1.0); setStageZoom(p => !p) }}
+        title={stageZoom ? 'Switch to canvas zoom' : 'Switch to stage zoom'}
+        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${stageZoom ? 'bg-blue-50 text-blue-500' : 'text-gray-600 hover:bg-gray-100'}`}
+      ><Maximize2 size={14} /></button>
+      <div className="w-full h-px bg-gray-100 my-0.5" />
+      <p className="text-[7px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">Board</p>
+      <button
+        onClick={() => setBoardSize(p => Math.min(4, p * 1.3))}
+        title="Expand board canvas"
+        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+      ><Plus size={14} /></button>
+      <button
+        onClick={() => setBoardSize(p => Math.max(0.25, p / 1.3))}
+        title="Shrink board canvas"
+        className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+      ><Minus size={14} /></button>
     </div>
     </div>
   )
