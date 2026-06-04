@@ -939,6 +939,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const viewerConfig = (data.viewerConfig as { ticker?: string; interval?: string } | undefined) ?? {}
 
   const [choosing, setChoosing] = useState(false)
+  const [accessToken, setAccessToken] = useState<string | null>(null)
   const [boards, setBoards] = useState<{ id: string; name: string; color: string; parent_id: string | null }[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [content, setContent] = useState<PortalContent | null>(null)
@@ -991,6 +992,14 @@ export function PortalNode({ id, data, selected }: NodeProps) {
 
   // Reset internal navigation whenever the base target changes.
   useEffect(() => { setStack([]); setOpenFile(null) }, [targetBoardId])
+
+  useEffect(() => {
+    import('@/lib/supabase/client').then(({ createClient }) => {
+      createClient().auth.getSession().then(({ data: { session } }) => {
+        setAccessToken(session?.access_token ?? null)
+      })
+    })
+  }, [])
 
   useEffect(() => {
     let cancel = false
@@ -1148,7 +1157,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         {/* Text board — satellite editor */}
         {viewId && !openFile && isText && (
           <iframe
-            src={`https://text.syncedsys.com/board/${viewId}?embed=true`}
+            src={`https://text.syncedsys.com/board/${viewId}?embed=true${accessToken ? `&token=${accessToken}` : ''}`}
             className="nodrag nowheel absolute left-0 right-0 bottom-0 border-0"
             style={{ top: 24 }}
             title={viewName || 'Text editor'}
