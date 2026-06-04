@@ -469,6 +469,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setNodes(prev => prev.map(n =>
       n.id === nodeId ? { ...n, hidden, data: { ...n.data, hidden } } : n
     ))
+    try {
+      const key = `hiddenmap-${board.id}`
+      const stored = localStorage.getItem(key)
+      const map: Record<string, boolean> = stored ? JSON.parse(stored) : {}
+      if (hidden) { map[nodeId] = true } else { delete map[nodeId] }
+      localStorage.setItem(key, JSON.stringify(map))
+    } catch {}
     const rawId = nodeId.replace(/^(el-|list-|card-)/, '')
     if (nodeId.startsWith('el-')) {
       const el = elements.find(e => e.id === rawId)
@@ -1630,6 +1637,18 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       const map = JSON.parse(stored) as Record<string, string>
       if (!map || typeof map !== 'object') return
       setNodes(prev => prev.map(n => map[n.id] ? { ...n, data: { ...n.data, parentId: map[n.id] } } : n))
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board.id])
+
+  // Restore hidden state from localStorage so visibility survives tab switches and reloads.
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`hiddenmap-${board.id}`)
+      if (!stored) return
+      const map = JSON.parse(stored) as Record<string, boolean>
+      if (!map || typeof map !== 'object') return
+      setNodes(prev => prev.map(n => map[n.id] != null ? { ...n, hidden: map[n.id], data: { ...n.data, hidden: map[n.id] } } : n))
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board.id])
