@@ -2111,7 +2111,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     </div>
 
     {/* Controls panel — lives in the background layer, never scaled by the board's CSS transform */}
-    <div className="absolute top-3 right-3 z-[50] bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center select-none">
+    <div className="absolute bottom-3 left-3 z-[50] bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center select-none">
       <p className="text-[7px] text-gray-400 uppercase tracking-wide leading-none mb-0.5">View</p>
       <button
         onClick={() => stageZoom ? setStageScale(p => Math.min(8, p * 1.4)) : zoomIn()}
