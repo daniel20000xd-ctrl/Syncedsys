@@ -12,10 +12,10 @@ export default function ClaudeAgent({ boardId }: { boardId: string }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-4 right-4 z-40 flex items-center gap-2 bg-[#30302E] hover:bg-[#3d3d3a] text-[#F0EEE6] rounded-full shadow-lg ring-1 ring-[#D97757]/50 px-4 py-2.5 text-sm font-medium transition-colors"
+        className="fixed bottom-4 right-4 z-40 flex items-center gap-2.5 bg-[#30302E] hover:bg-[#3d3d3a] text-[#F0EEE6] rounded-xl shadow-xl ring-2 ring-[#D97757]/60 px-5 py-3 text-sm font-semibold transition-colors"
         title="Ask Claude"
       >
-        <ClaudeMark size={18} animate /> Claude
+        <ClaudeMark size={20} animate /> Claude
       </button>
     )
   }

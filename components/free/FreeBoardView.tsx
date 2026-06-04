@@ -2036,8 +2036,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       )}
 
       {/* Toolbar — rendered above the drawing overlay (z-20 > overlay z-10) so it stays clickable while drawing */}
-      <div className="absolute top-3 right-3 z-20 bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center">
-        <div className="flex flex-col gap-1">
+      <div className="absolute top-3 right-3 z-20 bg-white rounded-lg shadow-md p-1 flex flex-col gap-0.5 items-center">
+        <div className="flex flex-col gap-0.5">
           {(['select', 'hand', 'draw', 'shape', 'text', 'portal', 'claude'] as Tool[]).map(t => {
             const Icon = TOOL_ICONS[t]
             return (
@@ -2053,43 +2053,43 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
                   t === 'claude' ? 'Claude — chat on canvas (C)' :
                   t.charAt(0).toUpperCase() + t.slice(1)
                 }
-                className={`w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
+                className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${
                   tool === t
                     ? (t === 'claude' ? 'bg-[#D97757] text-white' : 'bg-blue-500 text-white')
-                    : 'text-gray-600 hover:bg-gray-100'
+                    : 'text-gray-500 hover:bg-gray-100'
                 }`}
               >
-                {t === 'claude' ? <ClaudeMark size={16} color={tool === t ? '#ffffff' : '#D97757'} animate={tool === t} /> : <Icon size={16} />}
+                {t === 'claude' ? <ClaudeMark size={14} color={tool === t ? '#ffffff' : '#D97757'} animate={tool === t} /> : <Icon size={14} />}
               </button>
             )
           })}
         </div>
         {tool === 'text' && (
-          <p className="text-[8px] text-gray-400 text-center leading-tight mt-0.5 pt-1 border-t border-gray-100 w-full">place text</p>
+          <p className="text-[7px] text-gray-400 text-center leading-tight mt-0.5 pt-1 border-t border-gray-100 w-full">place text</p>
         )}
         {tool === 'select' && selectedColorable.length > 0 && (
           <div className="flex flex-col items-center gap-1 mt-0.5 pt-1 border-t border-gray-100 w-full">
             <p className="text-[7px] text-gray-400 text-center leading-tight">recolor</p>
             {SHAPE_COLORS.map(c => (
-              <button key={c} onClick={() => recolorSelected(c)} className="w-5 h-5 rounded border-2 border-transparent hover:border-gray-800" style={{ backgroundColor: c }} />
+              <button key={c} onClick={() => recolorSelected(c)} className="w-4 h-4 rounded border-2 border-transparent hover:border-gray-800" style={{ backgroundColor: c }} />
             ))}
           </div>
         )}
         {tool === 'draw' && (
           <div className="flex flex-col items-center gap-1 mt-0.5 pt-1 border-t border-gray-100 w-full">
             {SHAPE_COLORS.map(c => (
-              <button key={c} onClick={() => setDrawColor(c)} className={`w-5 h-5 rounded-full border-2 ${drawColor === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+              <button key={c} onClick={() => setDrawColor(c)} className={`w-4 h-4 rounded-full border-2 ${drawColor === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
             ))}
           </div>
         )}
         {tool === 'shape' && (
           <div className="flex flex-col gap-1 mt-0.5 pt-1 border-t border-gray-100 w-full items-center">
             {(['rect', 'circle', 'diamond'] as ShapeType[]).map(s => (
-              <button key={s} onClick={() => setSelectedShape(s)} className={`text-[9px] px-1.5 py-0.5 rounded border w-full text-center ${selectedShape === s ? 'bg-blue-100 border-blue-400' : 'border-gray-200 text-gray-600'}`}>{s}</button>
+              <button key={s} onClick={() => setSelectedShape(s)} className={`text-[8px] px-1 py-0.5 rounded border w-full text-center ${selectedShape === s ? 'bg-blue-100 border-blue-400' : 'border-gray-200 text-gray-600'}`}>{s}</button>
             ))}
             <div className="flex flex-col items-center gap-1 mt-0.5">
               {SHAPE_COLORS.map(c => (
-                <button key={c} onClick={() => setShapeColorPicker(c)} className={`w-5 h-5 rounded border-2 ${shapeColorPicker === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
+                <button key={c} onClick={() => setShapeColorPicker(c)} className={`w-4 h-4 rounded border-2 ${shapeColorPicker === c ? 'border-gray-800' : 'border-transparent'}`} style={{ backgroundColor: c }} />
               ))}
             </div>
           </div>
@@ -2238,33 +2238,37 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           />
         </div>
       ))}
-      {/* Controls panel */}
-      <div className="absolute bottom-3 left-3 z-[50] bg-white rounded-xl shadow-lg p-1.5 flex flex-col gap-1 items-center select-none">
-        <button
-          onClick={() => zoomIn()}
-          title="Zoom in"
-          className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
-        ><Plus size={14} /></button>
-        <button
-          onClick={() => zoomOut()}
-          title="Zoom out"
-          className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
-        ><Minus size={14} /></button>
-        <button
-          onClick={() => fitView()}
-          title="Fit view"
-          className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
-        ><Maximize size={14} /></button>
-        <button
-          onClick={() => setIsLocked(p => !p)}
-          title={isLocked ? 'Unlock board' : 'Lock board'}
-          className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isLocked ? 'bg-amber-50 text-amber-500' : 'text-gray-600 hover:bg-gray-100'}`}
-        ><Lock size={14} /></button>
-        <button
-          onClick={() => setIsFullscreen(p => !p)}
-          title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-          className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors ${isFullscreen ? 'bg-blue-50 text-blue-500' : 'text-gray-600 hover:bg-gray-100'}`}
-        ><Maximize2 size={14} /></button>
+      {/* Controls panel — hidden until hovered */}
+      <div className="group absolute bottom-3 left-3 z-[50] select-none">
+        <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 bg-white rounded-lg shadow-md p-1 flex flex-col gap-0.5 items-center">
+          <button
+            onClick={() => zoomIn()}
+            title="Zoom in"
+            className="w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 transition-colors"
+          ><Plus size={13} /></button>
+          <button
+            onClick={() => zoomOut()}
+            title="Zoom out"
+            className="w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 transition-colors"
+          ><Minus size={13} /></button>
+          <button
+            onClick={() => fitView()}
+            title="Fit view"
+            className="w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 transition-colors"
+          ><Maximize size={13} /></button>
+          <button
+            onClick={() => setIsLocked(p => !p)}
+            title={isLocked ? 'Unlock board' : 'Lock board'}
+            className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${isLocked ? 'bg-amber-50 text-amber-500' : 'text-gray-500 hover:bg-gray-100'}`}
+          ><Lock size={13} /></button>
+          <button
+            onClick={() => setIsFullscreen(p => !p)}
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+            className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${isFullscreen ? 'bg-blue-50 text-blue-500' : 'text-gray-500 hover:bg-gray-100'}`}
+          ><Maximize2 size={13} /></button>
+        </div>
+        {/* Invisible hover target so there's always something to hover */}
+        <div className="absolute inset-0 -m-2" />
       </div>
     </div>
   )
