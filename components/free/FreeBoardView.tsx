@@ -1323,8 +1323,14 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (action === 'shape') setTool('shape')
   }
 
+  function getEffectiveSel(): string[] {
+    const panelIds = unitsStore.getPanelSel()
+    const canvasIds = nodesRef.current.filter(n => n.selected).map(n => n.id)
+    return [...new Set([...panelIds, ...canvasIds])]
+  }
+
   function handleSelAction(action: 'hide' | 'show' | 'delete') {
-    const ids = [...unitsStore.getPanelSel()]
+    const ids = getEffectiveSel()
     if (action === 'hide') {
       ids.forEach(id => unitsStore.setHidden(id, true))
     } else if (action === 'show') {
@@ -1939,9 +1945,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onPaneContextMenu={e => {
           if (tool !== 'select') return
           e.preventDefault()
-          const sel = unitsStore.getPanelSel()
-          if (sel.size > 0) {
-            setSelContextMenu({ x: e.clientX, y: e.clientY, count: sel.size })
+          const ids = getEffectiveSel()
+          if (ids.length > 0) {
+            setSelContextMenu({ x: e.clientX, y: e.clientY, count: ids.length })
             return
           }
           const flowPos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
@@ -1950,9 +1956,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onNodeContextMenu={e => {
           if (tool !== 'select') return
           e.preventDefault()
-          const sel = unitsStore.getPanelSel()
-          if (sel.size > 0) {
-            setSelContextMenu({ x: e.clientX, y: e.clientY, count: sel.size })
+          const ids = getEffectiveSel()
+          if (ids.length > 0) {
+            setSelContextMenu({ x: e.clientX, y: e.clientY, count: ids.length })
           }
         }}
         proOptions={{ hideAttribution: true }}
