@@ -2,14 +2,14 @@
 
 import { useCallback, useRef, useState, useEffect } from 'react'
 import {
-  ReactFlow, Background, Controls, BackgroundVariant,
+  ReactFlow, Background, Controls, ControlButton, BackgroundVariant,
   useNodesState, useEdgesState, addEdge, ReactFlowProvider,
   useReactFlow, ConnectionMode, type Connection, type Node, type Edge,
   type NodeTypes, type EdgeTypes, type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, deleteEdge, deleteBoard,
@@ -299,7 +299,7 @@ interface Props {
 
 function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [] }: Props) {
   const router = useRouter()
-  const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes } = useReactFlow()
+  const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes, zoomIn, zoomOut } = useReactFlow()
   const [lists, setLists] = useState(initialLists)
   const [cards, setCards] = useState(initialCards)
   const [elements, setElements] = useState(initialElements)
@@ -348,6 +348,11 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   const [allowMarqueeSelection, setAllowMarqueeSelection] = useState(false)
 
+  // Stage zoom: scroll/+/- resize the board layer itself rather than the canvas content.
+  const [stageZoom, setStageZoom] = useState(true)
+  const stageZoomRef = useRef(true)
+  const [stageScale, setStageScale] = useState(1.0)
+
   // Tracks whether the user is currently dragging a connection so the
   // proximity handler and CSS can treat handles differently.
   const isConnectingRef = useRef(false)
@@ -355,6 +360,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // Latest elements for persistence callbacks
   const elementsRef = useRef(elements)
   useEffect(() => { elementsRef.current = elements }, [elements])
+  useEffect(() => { stageZoomRef.current = stageZoom }, [stageZoom])
 
   // Debounced router.refresh() after any drag/save so the 30 s RSC cache is
   // busted before the user navigates away and back.
@@ -1018,7 +1024,15 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const el = wrapperRef.current
     if (!el) return
     function handleWheel(e: WheelEvent) {
-      if (!heldNodeRef.current) return // not holding a unit → let the canvas zoom
+      if (!heldNodeRef.current) {
+        if (stageZoomRef.current) {
+          e.preventDefault()
+          e.stopPropagation()
+          const factor = e.deltaY > 0 ? 0.9 : 1.1
+          setStageScale(prev => Math.max(0.15, Math.min(8, prev * factor)))
+        }
+        return
+      }
       e.preventDefault()
       e.stopPropagation()
       const factor = e.deltaY > 0 ? 0.9 : 1.1
@@ -1682,10 +1696,14 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // ── Navigation that works regardless of the active tool ──
   function onOverlayWheel(e: React.WheelEvent<SVGSVGElement>) {
-    if (heldNodeRef.current) return // node scaling handled by the window wheel listener
+    if (heldNodeRef.current) return
     e.preventDefault()
-    const vp = getViewport()
     const factor = e.deltaY > 0 ? 0.9 : 1.1
+    if (stageZoomRef.current) {
+      setStageScale(prev => Math.max(0.15, Math.min(8, prev * factor)))
+      return
+    }
+    const vp = getViewport()
     const newZoom = Math.max(0.05, Math.min(4, vp.zoom * factor))
     const f = screenToFlowPosition({ x: e.clientX, y: e.clientY })
     setViewport({ zoom: newZoom, x: vp.x + f.x * (vp.zoom - newZoom), y: vp.y + f.y * (vp.zoom - newZoom) })
@@ -1741,7 +1759,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       ref={wrapperRef}
       className="absolute overflow-hidden"
       style={{
-        inset: 48,
+        inset: Math.max(0, Math.round(48 / (stageZoom ? stageScale : 1))),
         boxShadow: '0 8px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3)',
         backgroundColor: board.color,
       }}
@@ -1793,8 +1811,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           false
         }
         zoomOnDoubleClick={false}
-        zoomOnScroll
-        zoomOnPinch
+        zoomOnScroll={!stageZoom}
+        zoomOnPinch={!stageZoom}
         onPaneClick={e => {
           // Close context menu on any background left-click; no longer opens it
           if (contextMenu) setContextMenu(null)
@@ -1808,7 +1826,21 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.2)" gap={24} size={1.5} />
-        <Controls />
+        <Controls showZoom={false}>
+          <ControlButton
+            onClick={() => stageZoom ? setStageScale(p => Math.min(8, p * 1.25)) : zoomIn()}
+            title={stageZoom ? 'Stage zoom in' : 'Zoom in'}
+          ><Plus size={12} /></ControlButton>
+          <ControlButton
+            onClick={() => stageZoom ? setStageScale(p => Math.max(0.15, p / 1.25)) : zoomOut()}
+            title={stageZoom ? 'Stage zoom out' : 'Zoom out'}
+          ><Minus size={12} /></ControlButton>
+          <ControlButton
+            onClick={() => { if (!stageZoom) setStageScale(1.0); setStageZoom(p => !p) }}
+            title={stageZoom ? 'Switch to canvas zoom' : 'Switch to stage zoom'}
+            style={{ color: stageZoom ? '#3b82f6' : undefined }}
+          ><Maximize2 size={12} /></ControlButton>
+        </Controls>
       </ReactFlow>
 
       {fileDragOver && (() => {
