@@ -1590,11 +1590,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (kind === 'list' || kind === 'subtab') return (d.name as string) || kind
     if (kind === 'card') return (d.title as string) || 'Card'
     if (kind === 'shape') return (d.label as string) || `${(d.shape as string) || 'Shape'}`
-    if (kind === 'text') return (d.text as string) || 'Text'
+    if (kind === 'text') return (d.name as string) || ((d.text as string) || '').slice(0, 40) || 'Text'
     if (kind === 'file') return (d.name as string) || 'File'
-    if (kind === 'image') return 'Image'
-    if (kind === 'drawing') return 'Drawing'
-    if (kind === 'portal') return 'Portal'
+    if (kind === 'image') return (d.name as string) || 'Image'
+    if (kind === 'drawing') return (d.name as string) || 'Drawing'
+    if (kind === 'portal') {
+      if (d.viewerKind) return 'Stock Viewer'
+      if (d.targetBoardName) return d.targetBoardName as string
+      const matched = subBoards.find(b => b.id === (d.targetBoardId as string))
+      if (matched) return matched.name
+      return 'Portal'
+    }
     return 'Unit'
   }
 
@@ -1694,7 +1700,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         } else if (id.startsWith('el-')) {
           const n = nodesRef.current.find(x => x.id === id)
           if (!n) return
-          const key = n.type === 'shapeNode' ? 'label' : n.type === 'textNode' ? 'text' : 'name'
+          const key = n.type === 'shapeNode' ? 'label' : 'name'
           const newData = { ...n.data, [key]: label }
           setNodes(prev => prev.map(x => x.id === id ? { ...x, data: newData } : x))
           saveElement(id, newData, n.data.width as number | undefined, n.data.height as number | undefined)

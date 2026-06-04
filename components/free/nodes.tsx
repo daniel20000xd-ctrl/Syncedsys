@@ -954,6 +954,7 @@ function SheetPreview({ data }: { data: SheetData }) {
 
 export function PortalNode({ id, data, selected }: NodeProps) {
   const targetBoardId = (data.targetBoardId as string | null) ?? null
+  const targetBoardName = (data.targetBoardName as string | null) ?? null
   const home = (data.home as string | null) ?? null
   const locked = (data.locked as boolean) ?? false
   const fitted = (data.fitted as boolean) ?? false
@@ -1007,6 +1008,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
     // aren't lost on unrelated persists (pan/zoom/resize).
     const next = {
       targetBoardId, home,
+      ...(targetBoardName ? { targetBoardName } : {}),
       vx: pan.x, vy: pan.y, zoom,
       width: data.width, height: data.height,
       locked: data.locked,
@@ -1336,8 +1338,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         async function pickBoard(boardId: string) {
           setChoosing(false)
           fittedRef.current = null
-          // Clear viewer mode + context when switching to a board tab
-          persist({ targetBoardId: boardId, viewerKind: null, viewerConfig: null, viewer_context: null })
+          const bName = boards.find(b => b.id === boardId)?.name ?? null
+          persist({ targetBoardId: boardId, targetBoardName: bName, viewerKind: null, viewerConfig: null, viewer_context: null })
           if (home) {
             const { createClient } = await import('@/lib/supabase/client')
             const { data: bd } = await createClient().from('boards').select('mode').eq('id', boardId).single()
