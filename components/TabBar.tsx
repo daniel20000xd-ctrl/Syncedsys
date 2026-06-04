@@ -161,15 +161,19 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
       >
         <Link
           href={`/board/${board.id}`}
-          className={`flex items-center gap-2 ${inGroup ? 'px-2.5 py-1 text-xs' : 'px-4 py-2.5 text-sm'} pr-7 whitespace-nowrap border-t-2 transition-colors select-none ${
-            isActive ? 'bg-white/10 text-white border-[#579dff]'
-            : expired ? 'text-red-400/70 border-red-500/40 hover:text-red-300 hover:bg-white/5'
-            : 'text-white/50 border-transparent hover:text-white/80 hover:bg-white/5'
+          className={`flex items-center ${inGroup ? 'pr-6 py-0.5 text-xs' : 'pr-7 py-0.5 text-sm'} whitespace-nowrap border-t-2 transition-colors select-none ${
+            isActive ? 'text-white border-[#579dff]'
+            : expired ? 'text-red-400/70 border-red-500/40 hover:text-red-300'
+            : 'text-white/50 border-transparent hover:text-white/80'
           }`}
         >
-          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: board.color }} />
-          {board.name}
-          {expired && <span className="text-[10px] text-red-400 ml-1">Expired</span>}
+          <span className={`flex items-center gap-2 ${inGroup ? 'px-2.5 py-1' : 'px-4 py-2'} rounded transition-colors ${
+            isActive ? 'bg-white/10' : 'hover:bg-white/5'
+          }`}>
+            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: board.color }} />
+            {board.name}
+            {expired && <span className="text-[10px] text-red-400 ml-1">Expired</span>}
+          </span>
         </Link>
         <button
           onClick={e => { e.preventDefault(); const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setGroupMenu(null); setOpenPanel(openPanel?.boardId === board.id ? null : { boardId: board.id, rect }) }}
