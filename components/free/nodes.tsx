@@ -13,7 +13,6 @@ import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
 import { downloadTextFile, PORTAL_ITEM_MIME } from '@/lib/files'
-import { parseSheet, computeSheet, colToLetter, cellAddr, type SheetData } from '@/lib/spreadsheet'
 import { activeDocBody, withActiveBody } from '@/lib/doctabs'
 
 type SaveFn = (id: string, dataObj: Record<string, unknown>, w?: number, h?: number) => void
@@ -920,37 +919,7 @@ type FolderContent = {
   folders: { id: string; name: string; color: string; mode: string }[]
   files: { id: string; name: string; content: string }[]
 }
-const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁', spreadsheet: '📊' }
-
-// Read-only spreadsheet preview shown inside a portal (capped for size).
-function SheetPreview({ data }: { data: SheetData }) {
-  const computed = useMemo(() => computeSheet(data), [data])
-  const rows = Math.min(data.rows, 40), cols = Math.min(data.cols, 12)
-  return (
-    <table className="border-collapse text-[10px]">
-      <thead>
-        <tr>
-          <th className="sticky left-0 bg-gray-100 border border-gray-200 w-8" />
-          {Array.from({ length: cols }, (_, c) => (
-            <th key={c} className="bg-gray-100 border border-gray-200 font-semibold text-gray-500 px-1" style={{ minWidth: 64 }}>{colToLetter(c)}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {Array.from({ length: rows }, (_, r) => (
-          <tr key={r}>
-            <td className="sticky left-0 bg-gray-100 border border-gray-200 text-center font-semibold text-gray-500">{r + 1}</td>
-            {Array.from({ length: cols }, (_, c) => {
-              const cell = computed[cellAddr(r, c)]
-              const err = typeof cell?.value === 'object'
-              return <td key={c} className={`border border-gray-200 px-1 whitespace-nowrap overflow-hidden ${err ? 'text-red-500' : 'text-gray-800'}`} style={{ maxWidth: 90 }}>{cell?.display ?? ''}</td>
-            })}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
-}
+const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
 
 export function PortalNode({ id, data, selected }: NodeProps) {
   const targetBoardId = (data.targetBoardId as string | null) ?? null
@@ -974,7 +943,6 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [content, setContent] = useState<PortalContent | null>(null)
   const [folderContent, setFolderContent] = useState<FolderContent | null>(null)
-  const [sheet, setSheet] = useState<SheetData | null>(null)
   const [viewMode, setViewMode] = useState<string>('classic')
   const [viewName, setViewName] = useState<string>('')
   const [viewColor, setViewColor] = useState<string>('#0079bf')
@@ -996,8 +964,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const isBase = viewId === targetBoardId
   const isText = viewMode === 'text'
   const isFolder = viewMode === 'folder'
-  const isSheet = viewMode === 'spreadsheet'
-  const isPannable = !isText && !isFolder && !isSheet
+  const isPannable = !isText && !isFolder
   const canGoBack = !!openFile || stack.length > 0
 
   function navInto(boardId: string) { setOpenFile(null); setStack(prev => [...prev, boardId]) }
@@ -1046,9 +1013,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       rawContentRef.current = (bd?.content as string) ?? ''
       setText(activeDocBody(bd?.content as string))
 
-      if (mode === 'text') { setContent(null); setFolderContent(null); setSheet(null); return }
-
-      if (mode === 'spreadsheet') { setSheet(parseSheet(activeDocBody(bd?.content as string))); setContent(null); setFolderContent(null); return }
+      if (mode === 'text') { setContent(null); setFolderContent(null); return }
 
       if (mode === 'folder') {
         const [{ data: subs }, { data: els }] = await Promise.all([
@@ -1060,7 +1025,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           folders: subs ?? [],
           files: (els ?? []).map(e => ({ id: e.id, name: ((e.data as Record<string, unknown>)?.name as string) ?? 'Untitled', content: ((e.data as Record<string, unknown>)?.content as string) ?? '' })),
         })
-        setContent(null); setSheet(null)
+        setContent(null)
         return
       }
 
@@ -1074,7 +1039,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       const cardsRes = listIds.length ? await s.from('cards').select('id,list_id,title,x,y').in('list_id', listIds) : { data: [] }
       if (cancel) return
       const c: PortalContent = { lists: lists ?? [], cards: cardsRes.data ?? [], elements: elements ?? [], edges: edges ?? [] }
-      setContent(c); setFolderContent(null); setSheet(null)
+      setContent(c); setFolderContent(null)
       // Auto-fit once per viewed board. The base view respects a saved/locked view.
       const shouldFit = isBase ? (!locked && !fitted && fittedRef.current !== viewId) : fittedRef.current !== viewId
       if (shouldFit) {
@@ -1231,13 +1196,6 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           </div>
         )}
 
-        {/* Spreadsheet preview (read-only) */}
-        {targetBoardId && !openFile && isSheet && sheet && (
-          <div className="nodrag nowheel absolute inset-0 pt-7 overflow-auto bg-white" onPointerDown={e => e.stopPropagation()}>
-            <SheetPreview data={sheet} />
-          </div>
-        )}
-
         {/* Classic / Trello mini-canvas */}
         {targetBoardId && !openFile && isPannable && (
           <div
@@ -1351,8 +1309,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           persist({ viewerKind: kind, viewerConfig: {}, targetBoardId: null })
         }
 
-        const topBoards = boards.filter(b => !b.parent_id && b.id !== home)
-        const childrenOf = (pid: string) => boards.filter(b => b.parent_id === pid && b.id !== home)
+        const topBoards = boards.filter(b => !b.parent_id)
+        const childrenOf = (pid: string) => boards.filter(b => b.parent_id === pid)
 
         return (
           <div
@@ -1386,18 +1344,23 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             {boards.length === 0 && <p className="px-3 pb-2 text-xs text-gray-400">Loading…</p>}
             {topBoards.map(b => {
               const children = childrenOf(b.id)
-              const isExp = expanded.has(b.id)
+              const isHome = b.id === home
+              // home is always expanded so its children are visible
+              const isExp = isHome || expanded.has(b.id)
               return (
                 <div key={b.id}>
                   <div className="flex items-center">
                     <button
-                      onClick={async e => { e.stopPropagation(); await pickBoard(b.id) }}
-                      className="flex-1 flex items-center gap-2 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100 text-left min-w-0"
+                      onClick={isHome ? undefined : async e => { e.stopPropagation(); await pickBoard(b.id) }}
+                      className={`flex-1 flex items-center gap-2 px-3 py-1.5 text-xs text-left min-w-0 ${
+                        isHome ? 'text-gray-400 cursor-default' : 'text-gray-700 hover:bg-gray-100'
+                      }`}
                     >
-                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${isHome ? 'opacity-40' : ''}`} style={{ backgroundColor: b.color }} />
                       <span className="truncate">{b.name}</span>
+                      {isHome && <span className="ml-auto text-[9px] text-gray-400 shrink-0">here</span>}
                     </button>
-                    {children.length > 0 && (
+                    {children.length > 0 && !isHome && (
                       <button
                         onClick={e => { e.stopPropagation(); setExpanded(prev => { const n = new Set(prev); if (isExp) n.delete(b.id); else n.add(b.id); return n }) }}
                         className="px-2 py-1.5 text-gray-400 hover:text-gray-600 shrink-0"
@@ -1407,16 +1370,22 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                       </button>
                     )}
                   </div>
-                  {isExp && children.map(c => (
-                    <button
-                      key={c.id}
-                      onClick={async e => { e.stopPropagation(); await pickBoard(c.id) }}
-                      className="w-full flex items-center gap-2 pl-6 pr-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 text-left"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: c.color }} />
-                      <span className="truncate">{c.name}</span>
-                    </button>
-                  ))}
+                  {isExp && children.map(c => {
+                    const isChildHome = c.id === home
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={isChildHome ? undefined : async e => { e.stopPropagation(); await pickBoard(c.id) }}
+                        className={`w-full flex items-center gap-2 pl-6 pr-3 py-1.5 text-xs text-left ${
+                          isChildHome ? 'text-gray-400 cursor-default' : 'text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isChildHome ? 'opacity-40' : ''}`} style={{ backgroundColor: c.color }} />
+                        <span className="truncate">{c.name}</span>
+                        {isChildHome && <span className="ml-auto text-[9px] text-gray-400 shrink-0">here</span>}
+                      </button>
+                    )
+                  })}
                 </div>
               )
             })}
