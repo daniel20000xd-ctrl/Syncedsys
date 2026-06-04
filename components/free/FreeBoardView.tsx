@@ -1727,6 +1727,33 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
   }, [])
 
+  // Title bar drag — translate the entire board window
+  const titleBarDragRef = useRef<{ startX: number; startY: number; startInset: { top: number; right: number; bottom: number; left: number } } | null>(null)
+
+  const onTitleBarPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    titleBarDragRef.current = { startX: e.clientX, startY: e.clientY, startInset: { ...boardInsetRef.current } }
+  }, [])
+
+  const onTitleBarPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = titleBarDragRef.current
+    if (!drag) return
+    const dx = e.clientX - drag.startX
+    const dy = e.clientY - drag.startY
+    setBoardInset({
+      top: Math.max(0, drag.startInset.top + dy),
+      bottom: Math.max(0, drag.startInset.bottom - dy),
+      left: Math.max(0, drag.startInset.left + dx),
+      right: Math.max(0, drag.startInset.right - dx),
+    })
+  }, [])
+
+  const onTitleBarPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    titleBarDragRef.current = null
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+  }, [])
+
   // Overlay (draw/shape/text/portal) intercepts pointer input; hand & select do not
   const overlayActive = tool === 'draw' || tool === 'shape' || tool === 'text' || tool === 'portal' || tool === 'claude'
 
@@ -2137,6 +2164,25 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           />
         )
       })()}
+
+      {/* Title bar — shows board name, drag to reposition the window */}
+      <div
+        className="absolute left-0 right-0 flex items-center px-3 select-none"
+        style={{
+          top: 0,
+          height: 26,
+          zIndex: 180,
+          background: 'rgba(0,0,0,0.28)',
+          backdropFilter: 'blur(6px)',
+          cursor: isFullscreen ? 'default' : 'move',
+          pointerEvents: isFullscreen ? 'none' : 'auto',
+        }}
+        onPointerDown={onTitleBarPointerDown}
+        onPointerMove={onTitleBarPointerMove}
+        onPointerUp={onTitleBarPointerUp}
+      >
+        <span className="text-white/75 text-[11px] font-medium tracking-wide truncate">{board.name}</span>
+      </div>
 
       {/* Corner drag handles — appear on hover, drag to resize the board */}
       {(['tl', 'tr', 'bl', 'br'] as const).map(corner => (
