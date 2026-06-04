@@ -2179,15 +2179,13 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         )
       })()}
 
-      {/* Title bar — shows board name, drag to reposition the window */}
+      {/* Title bar — transparent drag handle; bg confined to name chip */}
       <div
-        className="absolute left-0 right-0 flex items-center gap-2 px-3 select-none"
+        className="absolute left-0 right-0 flex items-center px-2 select-none"
         style={{
           top: 0,
           height: 26,
           zIndex: 180,
-          background: 'rgba(0,0,0,0.28)',
-          backdropFilter: 'blur(6px)',
           cursor: isFullscreen ? 'default' : 'move',
           pointerEvents: isFullscreen ? 'none' : 'auto',
         }}
@@ -2195,17 +2193,22 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onPointerMove={onTitleBarPointerMove}
         onPointerUp={onTitleBarPointerUp}
       >
-        <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: board.color }} />
-        <span className="text-white/75 text-[11px] font-medium tracking-wide truncate flex-1">{board.name}</span>
-        {onClose && (
-          <button
-            onPointerDown={e => e.stopPropagation()}
-            onClick={onClose}
-            className="text-white/40 hover:text-white/90 transition-colors shrink-0 leading-none"
-            style={{ fontSize: 14, lineHeight: 1 }}
-            title="Close window"
-          >×</button>
-        )}
+        <span
+          className="flex items-center gap-1.5 px-2 py-0.5 rounded"
+          style={{ background: 'rgba(0,0,0,0.28)', backdropFilter: 'blur(6px)' }}
+        >
+          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: board.color }} />
+          <span className="text-white/75 text-[11px] font-medium tracking-wide max-w-[220px] truncate">{board.name}</span>
+          {onClose && (
+            <button
+              onPointerDown={e => e.stopPropagation()}
+              onClick={onClose}
+              className="text-white/40 hover:text-white/90 transition-colors shrink-0 leading-none ml-0.5"
+              style={{ fontSize: 14, lineHeight: 1 }}
+              title="Close window"
+            >×</button>
+          )}
+        </span>
       </div>
 
       {/* Corner drag handles — appear on hover, drag to resize the board */}
