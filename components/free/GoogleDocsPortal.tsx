@@ -2,8 +2,27 @@
 
 import * as React from 'react'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Loader2, RefreshCw, ExternalLink, Search, X } from 'lucide-react'
+import { Loader2, RefreshCw, ExternalLink, Search, X, FileText } from 'lucide-react'
 import { getGoogleConnectionStatus } from '@/app/actions'
+
+// Mirrors lib/google/drive.DriveFile — declared locally so this client component
+// never imports the server-only drive module (which pulls in token/crypto code).
+type DriveFile = { id: string; name: string; modifiedTime: string }
+
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return ''
+  const min = Math.floor((Date.now() - then) / 60000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const day = Math.floor(hr / 24)
+  if (day < 30) return `${day}d ago`
+  const mo = Math.floor(day / 30)
+  if (mo < 12) return `${mo}mo ago`
+  return `${Math.floor(mo / 12)}y ago`
+}
 
 // A read-only Google Doc viewer in a portal frame. Fetches HTML rendered
 // server-side by lib/google/docs.renderDocumentToHtml and shows it in a clean,
@@ -114,6 +133,13 @@ export default function GoogleDocsPortal({ config, onPersistConfig, onUpdateCont
   const [query, setQuery] = useState('')
   const [matches, setMatches] = useState(0)
 
+  // Drive file picker (shown when no document is selected yet)
+  const [files, setFiles] = useState<DriveFile[]>([])
+  const [pickerLoading, setPickerLoading] = useState(false)
+  const [pickerError, setPickerError] = useState<string | null>(null)
+  const [pickerSearch, setPickerSearch] = useState('')
+  const [showUrlInput, setShowUrlInput] = useState(false)
+
   const onContextRef = useRef(onUpdateContext)
   useEffect(() => { onContextRef.current = onUpdateContext }, [onUpdateContext])
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -157,6 +183,28 @@ export default function GoogleDocsPortal({ config, onPersistConfig, onUpdateCont
   useEffect(() => {
     if (connected && documentId) load(documentId)
   }, [connected, documentId, load])
+
+  // Load the user's Docs from Drive while the picker is showing; debounce search.
+  useEffect(() => {
+    if (!connected || documentId) return
+    let cancel = false
+    setPickerLoading(true)
+    const term = pickerSearch.trim()
+    const t = setTimeout(() => {
+      fetch(`/api/google/drive?type=document${term ? `&q=${encodeURIComponent(term)}` : ''}`, { cache: 'no-store' })
+        .then(async r => {
+          if (!r.ok) {
+            const j = await r.json().catch(() => null)
+            throw new Error(j?.error ?? `Failed to list documents (${r.status})`)
+          }
+          return r.json() as Promise<{ files: DriveFile[] }>
+        })
+        .then(d => { if (!cancel) { setFiles(d.files); setPickerError(null) } })
+        .catch(e => { if (!cancel) setPickerError(e instanceof Error ? e.message : 'Failed to list documents') })
+        .finally(() => { if (!cancel) setPickerLoading(false) })
+    }, term ? 300 : 0)
+    return () => { cancel = true; clearTimeout(t) }
+  }, [connected, documentId, pickerSearch])
 
   // Inject the rendered HTML into the (uncontrolled) body container.
   useEffect(() => {
@@ -206,17 +254,65 @@ export default function GoogleDocsPortal({ config, onPersistConfig, onUpdateCont
   if (!documentId) {
     return (
       <Shell>
-        <div className="flex flex-col items-center justify-center flex-1 gap-2 px-6">
-          <p className="text-white/60 text-xs mb-1">Open a Google Doc</p>
-          <input
-            value={urlInput}
-            onChange={e => setUrlInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') confirmUrl() }}
-            placeholder="Paste Google Docs URL"
-            className="w-full max-w-[280px] bg-white/5 rounded px-2 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-white/30"
-          />
-          <button onClick={confirmUrl} className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium">Open</button>
-          {error && <p className="text-red-400/80 text-[11px]">{error}</p>}
+        <div className="flex flex-col flex-1 min-h-0">
+          {/* Search your Docs */}
+          <div className="px-3 pt-3 pb-2 shrink-0">
+            <p className="text-white/80 text-xs font-medium mb-2">Open a Google Doc</p>
+            <div className="flex items-center gap-1.5 bg-white/5 rounded px-2 py-1.5">
+              <Search size={12} className="text-white/30 shrink-0" />
+              <input
+                value={pickerSearch}
+                onChange={e => setPickerSearch(e.target.value)}
+                placeholder="Search your Docs"
+                autoFocus
+                className="flex-1 min-w-0 bg-transparent text-xs text-white placeholder-white/30 focus:outline-none"
+              />
+              {pickerLoading && <Loader2 size={12} className="animate-spin text-white/30 shrink-0" />}
+            </div>
+          </div>
+
+          {/* Results */}
+          <div className="flex-1 overflow-auto min-h-0 px-1.5">
+            {pickerError && <p className="px-2 py-2 text-[11px] text-red-400/80">{pickerError}</p>}
+            {!pickerError && !pickerLoading && files.length === 0 && (
+              <p className="px-2 py-6 text-center text-[11px] text-white/30">
+                {pickerSearch.trim() ? 'No documents match.' : 'No documents found.'}
+              </p>
+            )}
+            {files.map(f => (
+              <button
+                key={f.id}
+                onClick={() => { setError(null); onPersistConfig({ documentId: f.id }) }}
+                className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left hover:bg-white/10"
+              >
+                <FileText size={14} className="text-blue-400/80 shrink-0" />
+                <span className="flex-1 min-w-0 truncate text-xs text-white/85">{f.name}</span>
+                <span className="text-[10px] text-white/30 shrink-0">{relativeTime(f.modifiedTime)}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Paste-URL fallback */}
+          <div className="border-t border-white/10 shrink-0 px-3 py-2">
+            {showUrlInput ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={urlInput}
+                  onChange={e => setUrlInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') confirmUrl() }}
+                  placeholder="Paste Google Docs URL"
+                  autoFocus
+                  className="flex-1 min-w-0 bg-white/5 rounded px-2 py-1.5 text-xs text-white placeholder-white/30 focus:outline-none focus:ring-1 focus:ring-white/30"
+                />
+                <button onClick={confirmUrl} className="px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium shrink-0">Open</button>
+              </div>
+            ) : (
+              <button onClick={() => setShowUrlInput(true)} className="text-[11px] text-white/40 hover:text-white/70">
+                or paste a URL
+              </button>
+            )}
+            {error && <p className="text-red-400/80 text-[11px] mt-1">{error}</p>}
+          </div>
         </div>
       </Shell>
     )
