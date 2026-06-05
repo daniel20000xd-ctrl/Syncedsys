@@ -13,6 +13,7 @@ import SlidesPortal from './SlidesPortal'
 import GoogleCalendarPortal from './GoogleCalendarPortal'
 import GoogleSheetsPortal from './GoogleSheetsPortal'
 import GoogleDocsPortal from './GoogleDocsPortal'
+import TextPortal from './TextPortal'
 import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
@@ -1469,6 +1470,13 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             onUpdateContext={ctx => persist({ viewer_context: ctx })}
           />
         )}
+        {viewerKind === 'text' && (
+          <TextPortal
+            config={viewerConfig as Record<string, unknown>}
+            onPersistConfig={cfg => persist({ viewerKind: 'text', viewerConfig: cfg })}
+            onUpdateContext={ctx => persist({ viewer_context: ctx })}
+          />
+        )}
 
         {/* Empty state — two-pane selector shown directly inside the portal */}
         {(!targetBoardId && !viewerKind) && (
@@ -1479,6 +1487,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
               {[
                 { kind: 'stocks',           icon: '📈', label: 'Stock Viewer',      accent: 'text-green-400' },
                 { kind: 'slides',           icon: '🎨', label: 'Slides',            accent: 'text-indigo-400' },
+                { kind: 'text',             icon: '📝', label: 'Text',              accent: 'text-amber-400' },
                 { kind: 'google-calendar',  icon: '📅', label: 'Google Calendar',   accent: 'text-blue-400' },
                 { kind: 'google-sheets',    icon: '📊', label: 'Google Sheets',     accent: 'text-emerald-400' },
                 { kind: 'google-docs',      icon: '📄', label: 'Google Docs',       accent: 'text-sky-400' },
@@ -1563,6 +1572,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 ? (viewerConfig.ticker ? `📈 ${viewerConfig.ticker}` : '📈 Stock Viewer')
                 : viewerKind === 'slides'
                 ? '🎨 Slides'
+                : viewerKind === 'text'
+                ? '📝 Text'
                 : viewerKind === 'google-calendar'
                 ? '📅 Google Calendar'
                 : viewerKind === 'google-sheets'
@@ -1640,6 +1651,18 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 <Presentation size={12} className="text-indigo-500 shrink-0" />
                 <span>Slides Viewer</span>
                 {viewerKind === 'slides' && <span className="ml-auto text-[9px] text-indigo-500">active</span>}
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); pickViewer('text') }}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md text-left transition-colors ${
+                  viewerKind === 'text'
+                    ? 'bg-amber-50 text-amber-700'
+                    : 'text-gray-700 hover:bg-amber-50 hover:text-amber-700'
+                }`}
+              >
+                <FileText size={12} className="text-amber-500 shrink-0" />
+                <span>Text</span>
+                {viewerKind === 'text' && <span className="ml-auto text-[9px] text-amber-500">active</span>}
               </button>
 
               <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1 mt-2">Google Workspace</p>
