@@ -10,6 +10,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [emailSent, setEmailSent] = useState(false)
   const router = useRouter()
 
   async function handleSubmit(e: React.FormEvent) {
@@ -18,9 +19,12 @@ export default function SignupPage() {
     setError('')
 
     const supabase = createClient()
-    const { error } = await supabase.auth.signUp({ email, password })
+    const { data, error } = await supabase.auth.signUp({ email, password })
     if (error) {
       setError(error.message)
+      setLoading(false)
+    } else if (!data.session) {
+      setEmailSent(true)
       setLoading(false)
     } else {
       router.push('/')
@@ -36,6 +40,20 @@ export default function SignupPage() {
         redirectTo: `${window.location.origin}/auth/callback`,
       },
     })
+  }
+
+  if (emailSent) {
+    return (
+      <div className="min-h-screen bg-[#0079bf] flex items-center justify-center">
+        <div className="bg-white rounded-lg p-8 w-full max-w-sm shadow-lg text-center">
+          <h1 className="text-2xl font-bold text-gray-800 mb-3">Check your inbox</h1>
+          <p className="text-gray-600 text-sm mb-4">
+            We sent a confirmation link to <strong>{email}</strong>. Click it to activate your account, then come back to log in.
+          </p>
+          <Link href="/login" className="text-[#0079bf] hover:underline text-sm">Back to login</Link>
+        </div>
+      </div>
+    )
   }
 
   return (
