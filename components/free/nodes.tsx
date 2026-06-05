@@ -11,6 +11,7 @@ import { useRouter } from 'next/navigation'
 import StockPortal from './StockPortal'
 import SlidesPortal from './SlidesPortal'
 import GoogleCalendarPortal from './GoogleCalendarPortal'
+import GoogleSheetsPortal from './GoogleSheetsPortal'
 import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
@@ -1304,6 +1305,13 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             onUpdateContext={ctx => persist({ viewer_context: ctx })}
           />
         )}
+        {viewerKind === 'google-sheets' && (
+          <GoogleSheetsPortal
+            config={viewerConfig as { spreadsheetId?: string; activeSheet?: string }}
+            onPersistConfig={cfg => persist({ viewerKind: 'google-sheets', viewerConfig: cfg })}
+            onUpdateContext={ctx => persist({ viewer_context: ctx })}
+          />
+        )}
 
         {/* Empty state — shown when nothing is chosen yet */}
         {(!targetBoardId && !viewerKind) && (
@@ -1336,6 +1344,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 ? '🎨 Slides'
                 : viewerKind === 'google-calendar'
                 ? '📅 Google Calendar'
+                : viewerKind === 'google-sheets'
+                ? '📊 Google Sheets'
                 : openFile
                   ? openFile.name
                   : (canGoBack ? (viewName || 'Folder') : (target ? `↪ ${target.name}` : 'Portal'))}
@@ -1439,6 +1449,18 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] bg-gradient-to-br from-blue-500 via-red-500 to-yellow-500 text-white text-[7px] font-bold shrink-0">G</span>
                 <span>Google Calendar</span>
                 {viewerKind === 'google-calendar' && <span className="ml-auto text-[9px] text-blue-500">active</span>}
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); pickViewer('google-sheets') }}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md text-left transition-colors ${
+                  viewerKind === 'google-sheets'
+                    ? 'bg-green-50 text-green-700'
+                    : 'text-gray-700 hover:bg-green-50 hover:text-green-700'
+                }`}
+              >
+                <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] bg-gradient-to-br from-green-500 to-emerald-600 text-white text-[7px] font-bold shrink-0">S</span>
+                <span>Google Sheets</span>
+                {viewerKind === 'google-sheets' && <span className="ml-auto text-[9px] text-green-500">active</span>}
               </button>
             </div>
 

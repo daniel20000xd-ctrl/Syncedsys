@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCalendarContext } from '@/lib/google/calendar'
+import { formatSheetsContext } from '@/lib/google/sheets'
 
 // Builds the permission boundary and the system context for a board-scoped Claude.
 //
@@ -140,6 +141,23 @@ async function renderContext(
     } catch {}
   }
 
+  // Pre-fetch each google-sheets portal's summary (per-portal — depends on its
+  // configured spreadsheetId / active sheet).
+  const sheetsCtxMap = new Map<string, string>()
+  const sheetsPortals = elRows.filter(e => e.type === 'portal' && (e.data?.viewerKind as string | undefined) === 'google-sheets')
+  if (sheetsPortals.length) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        await Promise.all(sheetsPortals.map(async e => {
+          const cfg = e.data?.viewerConfig as { spreadsheetId?: string; activeSheet?: string } | undefined
+          if (!cfg?.spreadsheetId) return
+          try { sheetsCtxMap.set(e.id, await formatSheetsContext(user.id, cfg.spreadsheetId, cfg.activeSheet)) } catch {}
+        }))
+      }
+    } catch {}
+  }
+
   const lines: string[] = []
   const seen = new Set<string>()
 
@@ -180,7 +198,17 @@ async function renderContext(
           (excerpt.trim() ? `:\n${indent}      text: ${JSON.stringify(excerpt)}` : ' (no extractable text)')
       }
       else if (e.type === 'portal') {
-        if (d.viewerKind === 'google-calendar') {
+        if (d.viewerKind === 'google-sheets') {
+          const sheetsCtx = sheetsCtxMap.get(e.id) ?? (d.viewer_context ? String(d.viewer_context) : null)
+          if (sheetsCtx) {
+            lines.push(`${indent}    element[${e.id}]: google-sheets-viewer`)
+            lines.push(`${indent}    ---BEGIN GOOGLE SHEETS DATA---`)
+            for (const vline of sheetsCtx.split('\n')) lines.push(`${indent}    ${vline}`)
+            lines.push(`${indent}    ---END GOOGLE SHEETS DATA---`)
+            continue
+          }
+          label = `google-sheets-viewer (no spreadsheet)`
+        } else if (d.viewerKind === 'google-calendar') {
           const calCtx = googleCalendarCtx ?? (d.viewer_context ? String(d.viewer_context) : null)
           if (calCtx) {
             lines.push(`${indent}    element[${e.id}]: google-calendar-viewer`)

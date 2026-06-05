@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type Anthropic from '@anthropic-ai/sdk'
 import { listEvents, createEvent, updateEvent, deleteEvent } from '@/lib/google/calendar'
+import { readRange, writeRange, appendRow, clearRange, batchUpdate } from '@/lib/google/sheets'
 
 // Tools exposed to the board-scoped Claude. READ tools are always available;
 // WRITE tools are only included when the user has enabled "Let Claude make
@@ -29,6 +30,18 @@ export const READ_TOOLS: Anthropic.Tool[] = [
         end: { type: 'string', description: 'Range end (ISO date or datetime).' },
       },
       required: ['start', 'end'],
+    },
+  },
+  {
+    name: 'sheets_read_range',
+    description: 'Read a cell range from a Google Sheet. range is A1 notation, e.g. "Sheet1!A1:C10". Returns a 2D array of values.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        spreadsheetId: { type: 'string' },
+        range: { type: 'string', description: 'A1 range, e.g. Sheet1!A1:C10.' },
+      },
+      required: ['spreadsheetId', 'range'],
     },
   },
 ]
@@ -307,6 +320,57 @@ export const WRITE_TOOLS: Anthropic.Tool[] = [
         eventId: { type: 'string' },
       },
       required: ['eventId'],
+    },
+  },
+  // ── Google Sheets tools ───────────────────────────────────────────────────
+  {
+    name: 'sheets_write_range',
+    description: 'Write a 2D array of values to a range in a Google Sheet (overwrites those cells). range is A1 notation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        spreadsheetId: { type: 'string' },
+        range: { type: 'string', description: 'A1 range, e.g. Sheet1!A1.' },
+        values: { type: 'array', description: '2D array: rows of cell values.', items: { type: 'array', items: { type: 'string' } } },
+      },
+      required: ['spreadsheetId', 'range', 'values'],
+    },
+  },
+  {
+    name: 'sheets_add_row',
+    description: 'Append a row of values to the end of a sheet\'s data.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        spreadsheetId: { type: 'string' },
+        sheetName: { type: 'string' },
+        values: { type: 'array', description: 'Row values, one entry per column.', items: { type: 'string' } },
+      },
+      required: ['spreadsheetId', 'sheetName', 'values'],
+    },
+  },
+  {
+    name: 'sheets_clear_range',
+    description: 'Clear the values in a range (keeps formatting). range is A1 notation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        spreadsheetId: { type: 'string' },
+        range: { type: 'string' },
+      },
+      required: ['spreadsheetId', 'range'],
+    },
+  },
+  {
+    name: 'sheets_create_sheet',
+    description: 'Add a new sheet (tab) to a spreadsheet.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        spreadsheetId: { type: 'string' },
+        title: { type: 'string', description: 'Name for the new sheet.' },
+      },
+      required: ['spreadsheetId', 'title'],
     },
   },
 ]
@@ -597,6 +661,34 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const calendarId = (input.calendarId as string) || 'primary'
       await deleteEvent(ctx.userId, calendarId, String(input.eventId))
       return `Deleted event ${String(input.eventId)}.`
+    }
+
+    // ── Google Sheets tools ──────────────────────────────────────────────────
+    case 'sheets_read_range': {
+      const v = await readRange(ctx.userId, String(input.spreadsheetId), String(input.range))
+      return JSON.stringify(v)
+    }
+
+    case 'sheets_write_range': {
+      const values = (input.values as (string | number)[][]) ?? []
+      await writeRange(ctx.userId, String(input.spreadsheetId), String(input.range), values)
+      return `Wrote ${values.length} row(s) to ${String(input.range)}.`
+    }
+
+    case 'sheets_add_row': {
+      const values = (input.values as (string | number)[]) ?? []
+      await appendRow(ctx.userId, String(input.spreadsheetId), String(input.sheetName), values)
+      return `Appended a row to "${String(input.sheetName)}".`
+    }
+
+    case 'sheets_clear_range': {
+      await clearRange(ctx.userId, String(input.spreadsheetId), String(input.range))
+      return `Cleared ${String(input.range)}.`
+    }
+
+    case 'sheets_create_sheet': {
+      await batchUpdate(ctx.userId, String(input.spreadsheetId), [{ addSheet: { properties: { title: String(input.title) } } }])
+      return `Created sheet "${String(input.title)}".`
     }
 
     default:
