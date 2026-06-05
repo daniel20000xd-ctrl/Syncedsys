@@ -196,6 +196,7 @@ create table if not exists user_secrets (
   user_id uuid primary key references auth.users(id) on delete cascade,
   anthropic_key_encrypted text,          -- AES-256-GCM ciphertext; never returned to the client
   claude_auto_apply boolean not null default false,  -- when true, Claude may make changes (writes)
+  claude_pay_per_use boolean not null default false, -- opt-in to pay past the free platform allowance
   updated_at timestamptz not null default now()
 );
 
@@ -334,6 +335,22 @@ alter table claude_usage enable row level security;
 -- Read-only for the owner; no insert/update/delete policy (default-deny under RLS).
 create policy "claude usage select own" on claude_usage
   for select using (user_id = auth.uid());
+
+-- ── Global app config (kill switch) ───────────────────────────────────────────
+-- One row per flag. 'claude_api' = the platform Claude kill switch (when disabled,
+-- platform-key requests are refused; own-key requests are unaffected). Readable by
+-- any authenticated user (the request gate checks it); writes go through the
+-- service-role admin action only.
+create table if not exists app_config (
+  key        text        primary key,
+  enabled    boolean     not null default true,
+  updated_at timestamptz not null default now()
+);
+insert into app_config (key, enabled) values ('claude_api', true)
+  on conflict (key) do nothing;
+alter table app_config enable row level security;
+create policy "app config readable" on app_config
+  for select using (auth.uid() is not null);
 
 -- ── MCP access tokens (bring your own Claude) ─────────────────────────────────
 -- Per-user opaque tokens (stored as a SHA-256 hash) that let external Claude

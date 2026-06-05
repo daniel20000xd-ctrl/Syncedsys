@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { createAdminClient } from '@/lib/supabase/admin'
-import { getAdminClaudeBilling } from '@/app/actions'
+import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
+import { getAdminClaudeBilling, getClaudeApiEnabled } from '@/app/actions'
+import ClaudeApiSwitch from '@/components/ClaudeApiSwitch'
 
 function fmtUsd(n: number): string {
   if (n <= 0) return '$0.00'
@@ -18,14 +19,15 @@ export default async function OverviewPage() {
 
   const admin = createAdminClient()
 
-  // Get all users + all boards + Claude billing in parallel
-  const [{ data: { users } }, { data: boards }, billing] = await Promise.all([
-    admin.auth.admin.listUsers(),
+  // Get all users + all boards + Claude billing + kill-switch state in parallel
+  const [users, { data: boards }, billing, claudeEnabled] = await Promise.all([
+    listAllAuthUsers(admin),
     admin.from('boards').select('*').order('created_at', { ascending: true }),
     getAdminClaudeBilling(),
+    getClaudeApiEnabled(),
   ])
 
-  const totalBillable = billing.reduce((s, b) => s + b.billableUsd, 0)
+  const totalOwed = billing.reduce((s, b) => s + b.owedUsd, 0)
 
   // Group boards by user, skip users with no boards
   const grouped = users
@@ -50,37 +52,44 @@ export default async function OverviewPage() {
         <span className="text-xs bg-blue-100 text-blue-700 font-medium px-2.5 py-1 rounded-full">Admin</span>
       </div>
 
-      {/* Claude platform-credit billing */}
+      {/* Big red button: platform Claude on/off */}
+      <ClaudeApiSwitch initialEnabled={claudeEnabled} />
+
+      {/* Claude platform-credit billing — current month */}
       <section className="bg-white rounded-xl shadow-sm mb-10 overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-          <h2 className="font-semibold text-gray-800">Claude platform credits</h2>
-          <span className="text-sm text-gray-500">{fmtUsd(totalBillable)} billable total</span>
+          <h2 className="font-semibold text-gray-800">Claude platform credits — this month</h2>
+          <span className="text-sm text-gray-500">{fmtUsd(totalOwed)} owed total</span>
         </div>
         {billing.length === 0 ? (
-          <p className="text-sm text-gray-400 px-5 py-6">No platform-credit usage recorded yet.</p>
+          <p className="text-sm text-gray-400 px-5 py-6">No platform-credit usage this month.</p>
         ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-gray-400 border-b border-gray-100">
                 <th className="font-medium px-5 py-2">Account</th>
+                <th className="font-medium px-3 py-2">Plan</th>
                 <th className="font-medium px-3 py-2 text-right">Requests</th>
                 <th className="font-medium px-3 py-2 text-right">Tokens (in / out)</th>
-                <th className="font-medium px-3 py-2 text-right">Last used</th>
-                <th className="font-medium px-5 py-2 text-right">Billable</th>
+                <th className="font-medium px-3 py-2 text-right">Raw cost</th>
+                <th className="font-medium px-5 py-2 text-right">Owed</th>
               </tr>
             </thead>
             <tbody>
               {billing.map(b => (
                 <tr key={b.userId} className="border-b border-gray-50 last:border-0">
                   <td className="px-5 py-2 text-gray-700">{b.email}</td>
+                  <td className="px-3 py-2">
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${b.payPerUse ? 'bg-fuchsia-100 text-fuchsia-700' : 'bg-gray-100 text-gray-500'}`}>
+                      {b.payPerUse ? 'pay-per-use' : 'free only'}
+                    </span>
+                  </td>
                   <td className="px-3 py-2 text-right text-gray-500">{b.requests}</td>
                   <td className="px-3 py-2 text-right text-gray-500">
                     {b.inputTokens.toLocaleString()} / {b.outputTokens.toLocaleString()}
                   </td>
-                  <td className="px-3 py-2 text-right text-gray-400">
-                    {b.lastUsed ? new Date(b.lastUsed).toLocaleDateString() : '—'}
-                  </td>
-                  <td className="px-5 py-2 text-right font-semibold text-gray-800">{fmtUsd(b.billableUsd)}</td>
+                  <td className="px-3 py-2 text-right text-gray-400">{fmtUsd(b.spentRawUsd)}</td>
+                  <td className="px-5 py-2 text-right font-semibold text-gray-800">{fmtUsd(b.owedUsd)}</td>
                 </tr>
               ))}
             </tbody>

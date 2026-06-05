@@ -2,8 +2,9 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { createAdminClient } from '@/lib/supabase/admin'
+import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
 import { encryptSecret, sha256Hex, randomToken } from '@/lib/crypto'
+import { billableUsd, freeAllowanceUsd, currentPeriodStartIso } from '@/lib/claude/pricing'
 import { GetObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { getR2Client, R2_BUCKET } from '@/lib/r2'
@@ -59,6 +60,20 @@ export async function setClaudeAutoApply(enabled: boolean) {
   revalidatePath('/settings')
 }
 
+// Opt in/out of paying for platform Claude usage beyond the free monthly allowance.
+// Off by default — a non-opted-in user is capped at the free tier and never charged.
+export async function setClaudePayPerUse(enabled: boolean): Promise<{ ok: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated' }
+  const { error } = await supabase
+    .from('user_secrets')
+    .upsert({ user_id: user.id, claude_pay_per_use: enabled, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+  if (error) return { ok: false, error: error.message }
+  revalidatePath('/settings')
+  return { ok: true }
+}
+
 // Status for the settings UI — never returns the key itself, only whether one exists.
 export async function getClaudeStatus(): Promise<{ hasKey: boolean; autoApply: boolean }> {
   const supabase = await createClient()
@@ -72,65 +87,88 @@ export async function getClaudeStatus(): Promise<{ hasKey: boolean; autoApply: b
   return { hasKey: !!data?.anthropic_key_encrypted, autoApply: !!data?.claude_auto_apply }
 }
 
-// Per-user Claude spend for the settings card. Sums the user's own (append-only)
-// ledger rows — the same source the admin invoice reads, so the two never diverge.
-// The user only spends platform credits when they have no key of their own AND a
-// platform key is configured to fall back to. Never returns the key.
+// Per-user Claude usage for the settings card. Sums the user's own (append-only)
+// ledger rows for the current billing period — the same source the admin invoice
+// reads, so the two never diverge. spentUsd is raw cost; the first freeUsd of it is
+// free, and owedUsd is the marked-up overage (0 unless opted in). Never returns the key.
 export async function getClaudeUsage(): Promise<{
   keySource: 'user' | 'platform'
   hasOwnKey: boolean
   usingPlatform: boolean
-  lifetimeUsd: number
+  payPerUse: boolean
+  freeUsd: number
+  spentUsd: number
+  owedUsd: number
 }> {
+  const free = freeAllowanceUsd()
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { keySource: 'platform', hasOwnKey: false, usingPlatform: false, lifetimeUsd: 0 }
+  if (!user) {
+    return { keySource: 'platform', hasOwnKey: false, usingPlatform: false, payPerUse: false, freeUsd: free, spentUsd: 0, owedUsd: 0 }
+  }
 
-  // Read the key flag on its own column (always present) so a missing usage table
-  // pre-migration can never flip the key-source indicator to the wrong value.
-  const { data: secret } = await supabase
-    .from('user_secrets')
-    .select('anthropic_key_encrypted')
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  const hasOwnKey = !!secret?.anthropic_key_encrypted
+  // Read the key flag on its own always-present column so a missing pay_per_use
+  // column pre-migration can never flip the key-source indicator to the wrong value.
+  const { data: keyRow } = await supabase
+    .from('user_secrets').select('anthropic_key_encrypted').eq('user_id', user.id).maybeSingle()
+  const hasOwnKey = !!keyRow?.anthropic_key_encrypted
   const usingPlatform = !hasOwnKey && !!process.env.ANTHROPIC_API_KEY
 
-  const { data: rows } = await supabase
-    .from('claude_usage').select('cost_usd').eq('user_id', user.id).eq('billable', true)
-  const list = (rows ?? []) as { cost_usd: number | string | null }[]
-  const lifetimeUsd = list.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+  // Pay-per-use is tolerant of the pre-migration absence of its column (→ false).
+  const { data: payRow } = await supabase
+    .from('user_secrets').select('claude_pay_per_use').eq('user_id', user.id).maybeSingle()
+  const payPerUse = !!payRow?.claude_pay_per_use
 
-  return { keySource: hasOwnKey ? 'user' : 'platform', hasOwnKey, usingPlatform, lifetimeUsd }
+  const { data: rows } = await supabase
+    .from('claude_usage').select('cost_usd')
+    .eq('user_id', user.id).eq('billable', true)
+    .gte('created_at', currentPeriodStartIso())
+  const list = (rows ?? []) as { cost_usd: number | string | null }[]
+  const spentUsd = list.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+
+  return {
+    keySource: hasOwnKey ? 'user' : 'platform',
+    hasOwnKey, usingPlatform, payPerUse, freeUsd: free, spentUsd,
+    owedUsd: billableUsd(spentUsd, payPerUse),
+  }
 }
 
 export type ClaudeBillingRow = {
   userId: string
   email: string
-  billableUsd: number
+  payPerUse: boolean
+  spentRawUsd: number // raw Anthropic cost this period (includes the free portion)
+  owedUsd: number // marked-up overage above the free allowance (0 if not opted in)
   requests: number
   inputTokens: number
   outputTokens: number
   lastUsed: string | null
 }
 
-// Admin-only: per-user platform-credit spend, for invoicing. Uses the service-role
-// client to read across all users (RLS would otherwise scope to the caller).
+// Admin-only: per-user platform spend for the CURRENT billing period, for invoicing.
+// Uses the service-role client to read across all users (RLS would otherwise scope to
+// the caller). owedUsd applies markup only to the overage above the free allowance,
+// and only for users who opted into pay-per-use.
 export async function getAdminClaudeBilling(): Promise<ClaudeBillingRow[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || user.email !== process.env.ADMIN_EMAIL) return []
 
   const admin = createAdminClient()
-  const [{ data: usersData }, { data: rows }] = await Promise.all([
-    admin.auth.admin.listUsers(),
+  const [allUsers, { data: rows }, { data: secrets }] = await Promise.all([
+    listAllAuthUsers(admin),
     admin.from('claude_usage')
       .select('user_id, cost_usd, input_tokens, output_tokens, created_at')
-      .eq('billable', true),
+      .eq('billable', true)
+      .gte('created_at', currentPeriodStartIso()),
+    admin.from('user_secrets').select('user_id, claude_pay_per_use'),
   ])
 
-  const emailById = new Map((usersData?.users ?? []).map(u => [u.id, u.email ?? '(unknown)']))
+  const emailById = new Map(allUsers.map(u => [u.id, u.email ?? '(unknown)']))
+  const payById = new Map(
+    ((secrets ?? []) as { user_id: string; claude_pay_per_use: boolean | null }[])
+      .map(s => [s.user_id, !!s.claude_pay_per_use]),
+  )
   const agg = new Map<string, ClaudeBillingRow>()
   const list = (rows ?? []) as Array<{
     user_id: string; cost_usd: number | string | null
@@ -140,16 +178,42 @@ export async function getAdminClaudeBilling(): Promise<ClaudeBillingRow[]> {
     const cur = agg.get(r.user_id) ?? {
       userId: r.user_id,
       email: emailById.get(r.user_id) ?? '(unknown)',
-      billableUsd: 0, requests: 0, inputTokens: 0, outputTokens: 0, lastUsed: null as string | null,
+      payPerUse: payById.get(r.user_id) ?? false,
+      spentRawUsd: 0, owedUsd: 0, requests: 0, inputTokens: 0, outputTokens: 0, lastUsed: null as string | null,
     }
-    cur.billableUsd += Number(r.cost_usd ?? 0)
+    cur.spentRawUsd += Number(r.cost_usd ?? 0)
     cur.requests += 1
     cur.inputTokens += r.input_tokens ?? 0
     cur.outputTokens += r.output_tokens ?? 0
     if (!cur.lastUsed || r.created_at > cur.lastUsed) cur.lastUsed = r.created_at
     agg.set(r.user_id, cur)
   }
-  return [...agg.values()].sort((a, b) => b.billableUsd - a.billableUsd)
+  for (const row of agg.values()) row.owedUsd = billableUsd(row.spentRawUsd, row.payPerUse)
+  return [...agg.values()].sort((a, b) => b.owedUsd - a.owedUsd || b.spentRawUsd - a.spentRawUsd)
+}
+
+// ── Platform Claude kill switch (admin) ───────────────────────────────────────
+
+// Read the global platform-Claude toggle. Defaults to enabled (fail-open) so a
+// missing app_config row pre-migration doesn't take Claude down.
+export async function getClaudeApiEnabled(): Promise<boolean> {
+  const supabase = await createClient()
+  const { data } = await supabase.from('app_config').select('enabled').eq('key', 'claude_api').maybeSingle()
+  return data ? data.enabled !== false : true
+}
+
+// Flip the global platform-Claude kill switch. Admin-only; writes via the service
+// role. When disabled, platform-key requests are refused; own-key users are unaffected.
+export async function setClaudeApiEnabled(enabled: boolean): Promise<{ ok: boolean }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || user.email !== process.env.ADMIN_EMAIL) return { ok: false }
+  const admin = createAdminClient()
+  const { error } = await admin.from('app_config')
+    .upsert({ key: 'claude_api', enabled, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+  if (error) return { ok: false } // e.g. app_config table not migrated yet — surface failure to the UI
+  revalidatePath('/overview')
+  return { ok: true }
 }
 
 // ── MCP access tokens (bring your own Claude) ─────────────────────────────────

@@ -1,4 +1,4 @@
-import { costUsd, type UsageTokens } from '@/lib/claude/pricing'
+import { rawCostUsd, type UsageTokens } from '@/lib/claude/pricing'
 import type { KeySource } from '@/lib/claude/key'
 import { createAdminClient } from '@/lib/supabase/admin'
 
@@ -29,9 +29,9 @@ export async function recordClaudeUsage(args: RecordArgs): Promise<void> {
   if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return
 
   const billable = keySource === 'platform'
-  // Round to the ledger column's scale (numeric(12,6)) so the stored value equals
-  // the computed value exactly.
-  const cost = billable ? Number(costUsd(model, usage).toFixed(6)) : 0
+  // Store RAW Anthropic cost (no markup) rounded to the ledger column's scale
+  // (numeric(12,6)). Markup is applied only to billable overage at invoice time.
+  const cost = billable ? Number(rawCostUsd(model, usage).toFixed(6)) : 0
 
   try {
     const admin = createAdminClient()

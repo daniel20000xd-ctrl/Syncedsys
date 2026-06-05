@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { suggestBoardMeta } from '@/app/api/mcp/route'
 import { tryResolveAnthropicKey } from '@/lib/claude/key'
 import { recordClaudeUsage } from '@/lib/claude/usage'
+import { claudeGate } from '@/lib/claude/gate'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +17,9 @@ export async function POST(req: NextRequest) {
 
   const resolved = await tryResolveAnthropicKey(supabase, user.id)
   if (!resolved) return NextResponse.json({ error: 'no_key' }, { status: 400 })
+
+  const gate = await claudeGate(supabase, user.id, resolved.keySource)
+  if (!gate.ok) return NextResponse.json({ error: gate.error }, { status: gate.error === 'claude_disabled' ? 503 : 402 })
 
   const { suggestion, usage } = await suggestBoardMeta(name, mode, resolved.apiKey)
   await recordClaudeUsage({ userId: user.id, model: 'claude-haiku-4-5-20251001', keySource: resolved.keySource, usage })

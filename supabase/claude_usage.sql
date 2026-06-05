@@ -39,3 +39,25 @@ drop policy if exists "users own their claude usage" on claude_usage;
 drop policy if exists "claude usage select own" on claude_usage;
 create policy "claude usage select own" on claude_usage
   for select using (user_id = auth.uid());
+
+-- Pay-per-use opt-in. Off by default: a user is capped at the free allowance and is
+-- NEVER charged unless they explicitly turn this on to keep going past the free tier.
+alter table user_secrets
+  add column if not exists claude_pay_per_use boolean not null default false;
+
+-- ── Global app config (kill switch) ───────────────────────────────────────────
+-- Single-row-per-key flags the admin can flip from the UI. 'claude_api' = the
+-- platform Claude kill switch (when disabled, platform-key requests are refused;
+-- own-key requests are unaffected). Readable by any authenticated user (the gate
+-- checks it); writes go through the service-role admin action only.
+create table if not exists app_config (
+  key        text        primary key,
+  enabled    boolean     not null default true,
+  updated_at timestamptz not null default now()
+);
+insert into app_config (key, enabled) values ('claude_api', true)
+  on conflict (key) do nothing;
+alter table app_config enable row level security;
+drop policy if exists "app config readable" on app_config;
+create policy "app config readable" on app_config
+  for select using (auth.uid() is not null);

@@ -126,6 +126,8 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
       if (!res.ok || !res.body) {
         const j = await res.json().catch(() => ({}))
         if (j.error === 'no_key') setError('Connect your Anthropic API key in Settings first.')
+        else if (j.error === 'claude_disabled') setError('Claude is temporarily unavailable. Please try again later.')
+        else if (j.error === 'free_tier_exhausted') setError('You’ve used your free Claude credit this month. Add your own API key in Settings, or enable pay-per-use there.')
         else setError(j.error || 'Request failed.')
         setMessages(m => m.slice(0, -1))
         setStreaming(false)

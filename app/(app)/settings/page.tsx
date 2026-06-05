@@ -43,7 +43,10 @@ export default async function SettingsPage() {
         <ClaudeUsageCard
           hasOwnKey={claudeUsage.hasOwnKey}
           usingPlatform={claudeUsage.usingPlatform}
-          lifetimeUsd={claudeUsage.lifetimeUsd}
+          initialPayPerUse={claudeUsage.payPerUse}
+          freeUsd={claudeUsage.freeUsd}
+          spentUsd={claudeUsage.spentUsd}
+          owedUsd={claudeUsage.owedUsd}
         />
 
         <ClaudeKeySettings initialHasKey={claude.hasKey} initialAutoApply={claude.autoApply} />

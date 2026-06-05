@@ -5,6 +5,7 @@ import { buildClaudeContext } from '@/lib/claude/context'
 import { READ_TOOLS, WRITE_TOOLS, executeTool, ScopeError, type ToolCtx } from '@/lib/claude/tools'
 import { resolveAnthropicKey, NoClaudeKeyError, KeyDecryptError, type KeySource } from '@/lib/claude/key'
 import { recordClaudeUsage } from '@/lib/claude/usage'
+import { claudeGate } from '@/lib/claude/gate'
 
 // The model used for the in-app assistant. Change here to upgrade.
 const MODEL = 'claude-sonnet-4-5-20250929'
@@ -36,6 +37,15 @@ export async function POST(req: NextRequest) {
     if (e instanceof NoClaudeKeyError) return new Response(JSON.stringify({ error: 'no_key' }), { status: 400 })
     if (e instanceof KeyDecryptError) return new Response(JSON.stringify({ error: 'Could not read your stored key. Please re-enter it in Settings.' }), { status: 500 })
     throw e
+  }
+
+  // Kill switch + free-tier / pay-per-use gate (platform-key requests only).
+  const gate = await claudeGate(supabase, user.id, keySource)
+  if (!gate.ok) {
+    const status = gate.error === 'claude_disabled' ? 503 : 402
+    return new Response(JSON.stringify({ error: gate.error, spentUsd: gate.spentUsd, freeUsd: gate.freeUsd }), {
+      status, headers: { 'content-type': 'application/json' },
+    })
   }
 
   // Verify the root board is owned by the user before building context.

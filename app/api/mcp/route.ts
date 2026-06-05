@@ -10,6 +10,7 @@ import { supabaseAuthContext } from '@/lib/supabase/authContext'
 import { resolveMcpAuth } from '@/lib/mcpAuth'
 import { tryResolveAnthropicKey } from '@/lib/claude/key'
 import { recordClaudeUsage } from '@/lib/claude/usage'
+import { claudeGate } from '@/lib/claude/gate'
 import {
   createBoard, createGroup, moveTab, updateBoardFreePosition, updateBoardContent,
   createSubTab, deleteBoard, renameBoard, updateBoard, layoutBoardGrid, setBoardSynced,
@@ -129,6 +130,8 @@ function buildServer(supabase: SupabaseClient, userId: string) {
     const [boards, resolved] = await Promise.all([fetchBoards(supabase, userId), tryResolveAnthropicKey(supabase, userId)])
     if (!boards) return fail('Failed to fetch boards.')
     if (!resolved)  return fail('No Anthropic API key. Add one in Settings.')
+    const relGate = await claudeGate(supabase, userId, resolved.keySource)
+    if (!relGate.ok) return fail(relGate.error === 'claude_disabled' ? 'Claude is temporarily unavailable.' : 'Free Claude credit for this month is used up — add your own API key or enable pay-per-use in Settings.')
     if (!boards.length) return ok([])
     const list = boards.map(b => `${b.id}\t${b.name}\t${b.meta ?? ''}`).join('\n')
     const response = await new Anthropic({ apiKey: resolved.apiKey }).messages.create({
@@ -212,6 +215,8 @@ function buildServer(supabase: SupabaseClient, userId: string) {
   }, async ({ name, mode }) => {
     const resolved = await tryResolveAnthropicKey(supabase, userId)
     if (!resolved) return fail('No Anthropic API key. Add one in Settings.')
+    const metaGate = await claudeGate(supabase, userId, resolved.keySource)
+    if (!metaGate.ok) return fail(metaGate.error === 'claude_disabled' ? 'Claude is temporarily unavailable.' : 'Free Claude credit for this month is used up — add your own API key or enable pay-per-use in Settings.')
     const { suggestion, usage } = await suggestBoardMeta(name, mode, resolved.apiKey)
     await recordClaudeUsage({ userId, model: HAIKU_MODEL, keySource: resolved.keySource, usage })
     return ok(suggestion)
