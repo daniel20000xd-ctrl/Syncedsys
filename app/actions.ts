@@ -205,15 +205,18 @@ export async function getClaudeApiEnabled(): Promise<boolean> {
 
 // Flip the global platform-Claude kill switch. Admin-only; writes via the service
 // role. When disabled, platform-key requests are refused; own-key users are unaffected.
-export async function setClaudeApiEnabled(enabled: boolean): Promise<{ ok: boolean }> {
+export async function setClaudeApiEnabled(enabled: boolean): Promise<{ ok: boolean; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!isAdminEmail(user?.email)) return { ok: false }
+  if (!isAdminEmail(user?.email)) return { ok: false, error: 'Not authorized.' }
   const admin = createAdminClient()
   const { error } = await admin.from('app_config')
     .upsert({ key: 'claude_api', enabled, updated_at: new Date().toISOString() }, { onConflict: 'key' })
-  if (error) return { ok: false } // e.g. app_config table not migrated yet — surface failure to the UI
-  revalidatePath('/overview')
+  if (error) {
+    // Most likely app_config doesn't exist yet — run supabase/claude_usage.sql.
+    return { ok: false, error: `Couldn't save: ${error.message}` }
+  }
+  revalidatePath('/admin')
   return { ok: true }
 }
 
