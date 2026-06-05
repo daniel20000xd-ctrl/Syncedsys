@@ -28,7 +28,7 @@ export const GOOGLE_IDENTITY_SCOPES = ['openid', 'email', 'profile']
 export const GOOGLE_INTEGRATION_SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/documents.readonly',
+  'https://www.googleapis.com/auth/documents',
   'https://www.googleapis.com/auth/drive.readonly',
 ]
 

@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type Anthropic from '@anthropic-ai/sdk'
 import { listEvents, createEvent, updateEvent, deleteEvent } from '@/lib/google/calendar'
 import { readRange, writeRange, appendRow, clearRange, batchUpdate } from '@/lib/google/sheets'
-import { getDocument, documentPlainText } from '@/lib/google/docs'
+import { getDocument, documentPlainText, createDocument, appendText, insertText, replaceAllText } from '@/lib/google/docs'
 
 // Tools exposed to the board-scoped Claude. READ tools are always available;
 // WRITE tools are only included when the user has enabled "Let Claude make
@@ -395,6 +395,58 @@ export const WRITE_TOOLS: Anthropic.Tool[] = [
       required: ['spreadsheetId', 'title'],
     },
   },
+  // ── Google Docs tools ─────────────────────────────────────────────────────
+  {
+    name: 'docs_create',
+    description: 'Create a new Google Doc with the given title, optionally with initial body text. Returns the new documentId and its URL.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string' },
+        body: { type: 'string', description: 'Optional initial text. Use "\\n" between paragraphs.' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'docs_append_text',
+    description: 'Append text to the end of a Google Doc. Start the text with "\\n" to begin a new paragraph.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        documentId: { type: 'string' },
+        text: { type: 'string' },
+      },
+      required: ['documentId', 'text'],
+    },
+  },
+  {
+    name: 'docs_replace_text',
+    description: 'Replace every occurrence of a string in a Google Doc with another string. The cleanest way to make a targeted edit. Returns the number of replacements.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        documentId: { type: 'string' },
+        find: { type: 'string', description: 'Exact text to find.' },
+        replace: { type: 'string', description: 'Replacement text.' },
+        matchCase: { type: 'boolean', description: 'Case-sensitive match. Default false.' },
+      },
+      required: ['documentId', 'find', 'replace'],
+    },
+  },
+  {
+    name: 'docs_insert_text',
+    description: 'Insert text at a character index in a Google Doc (index 1 = document start). If unsure of the index, prefer docs_append_text or docs_replace_text.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        documentId: { type: 'string' },
+        index: { type: 'number', description: 'Character index; 1 is the start of the document.' },
+        text: { type: 'string' },
+      },
+      required: ['documentId', 'index', 'text'],
+    },
+  },
 ]
 
 export const SLIDES_READ_TOOLS: Anthropic.Tool[] = [
@@ -733,6 +785,33 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
           context: [paras[p.i - 1], p.text, paras[p.i + 1]].filter(Boolean).join(' '),
         }))
       return JSON.stringify({ matches: results.length, results })
+    }
+
+    case 'docs_create': {
+      const { documentId, title } = await createDocument(ctx.userId, String(input.title))
+      if (input.body) await appendText(ctx.userId, documentId, String(input.body))
+      return JSON.stringify({ documentId, title, url: `https://docs.google.com/document/d/${documentId}/edit` })
+    }
+
+    case 'docs_append_text': {
+      await appendText(ctx.userId, String(input.documentId), String(input.text))
+      return `Appended text to the document.`
+    }
+
+    case 'docs_replace_text': {
+      const n = await replaceAllText(
+        ctx.userId,
+        String(input.documentId),
+        String(input.find),
+        String(input.replace),
+        Boolean(input.matchCase),
+      )
+      return `Replaced ${n} occurrence(s).`
+    }
+
+    case 'docs_insert_text': {
+      await insertText(ctx.userId, String(input.documentId), Number(input.index), String(input.text))
+      return `Inserted text at index ${Number(input.index)}.`
     }
 
     default:

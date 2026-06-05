@@ -1,8 +1,9 @@
 import { googleFetch } from '@/lib/google/client'
 
-// Google Docs (read-only) for the shared ecosystem. The authorized scope is
-// documents.readonly, so this module only reads and renders — no write helpers
-// until the scope is expanded. Every call goes through googleFetch.
+// Google Docs for the shared ecosystem. The authorized scope is `documents`
+// (read + write): the top half reads and renders, the write helpers at the
+// bottom create documents and edit content via documents:batchUpdate. Every
+// call goes through googleFetch.
 
 const DOCS_BASE = 'https://docs.googleapis.com/v1/documents'
 
@@ -36,6 +37,8 @@ type TableCell = { content?: StructuralElement[] }
 type TableRow = { tableCells?: TableCell[] }
 type Table = { tableRows?: TableRow[] }
 type StructuralElement = {
+  startIndex?: number
+  endIndex?: number
   paragraph?: Paragraph
   table?: Table
   sectionBreak?: object
@@ -254,4 +257,90 @@ export async function formatDocsContext(userId: string, documentId: string): Pro
   let body = lines.join('\n')
   if (body.length > 7000) body = body.slice(0, 7000) + '\n… (truncated)'
   return header + body
+}
+
+// ── Write helpers (require the `documents` scope) ────────────────────────────
+
+type DocsRequest = Record<string, unknown>
+type BatchReply = { replaceAllText?: { occurrencesChanged?: number } }
+type BatchUpdateResponse = { replies?: BatchReply[] }
+
+// Low-level documents:batchUpdate. Returns the parsed response so callers can
+// read per-request results (e.g. replaceAllText occurrence counts).
+export async function batchUpdate(
+  userId: string,
+  documentId: string,
+  requests: DocsRequest[],
+): Promise<BatchUpdateResponse> {
+  const res = await googleFetch(userId, `${DOCS_BASE}/${encodeURIComponent(documentId)}:batchUpdate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requests }),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Google Docs batchUpdate failed (${res.status}): ${detail}`)
+  }
+  return (await res.json()) as BatchUpdateResponse
+}
+
+// Create a blank document and return its id. Lands in the user's Drive root.
+export async function createDocument(
+  userId: string,
+  title: string,
+): Promise<{ documentId: string; title: string }> {
+  const res = await googleFetch(userId, DOCS_BASE, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(`Google Docs create failed (${res.status}): ${detail}`)
+  }
+  const doc = (await res.json()) as DocsDocument
+  return { documentId: doc.documentId ?? '', title: doc.title ?? title }
+}
+
+// The body segment always ends with a trailing newline; the highest valid
+// insertion index is just before it (endIndex - 1 of the last element).
+function endInsertIndex(doc: DocsDocument): number {
+  const content = doc.body?.content ?? []
+  const last = content[content.length - 1]
+  return Math.max(1, (last?.endIndex ?? 2) - 1)
+}
+
+// Append text to the very end of the document. Include a leading "\n" in `text`
+// to start a new paragraph.
+export async function appendText(userId: string, documentId: string, text: string): Promise<void> {
+  const doc = await getDocument(userId, documentId)
+  await batchUpdate(userId, documentId, [
+    { insertText: { location: { index: endInsertIndex(doc) }, text } },
+  ])
+}
+
+// Insert text at an explicit character index (index 1 = start of the document).
+export async function insertText(
+  userId: string,
+  documentId: string,
+  index: number,
+  text: string,
+): Promise<void> {
+  await batchUpdate(userId, documentId, [
+    { insertText: { location: { index: Math.max(1, index) }, text } },
+  ])
+}
+
+// Replace every occurrence of `find` with `replace`. Returns how many changed.
+export async function replaceAllText(
+  userId: string,
+  documentId: string,
+  find: string,
+  replace: string,
+  matchCase = false,
+): Promise<number> {
+  const res = await batchUpdate(userId, documentId, [
+    { replaceAllText: { containsText: { text: find, matchCase }, replaceText: replace } },
+  ])
+  return res.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0
 }
