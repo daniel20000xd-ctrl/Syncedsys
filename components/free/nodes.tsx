@@ -6,7 +6,7 @@ import {
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, FileType, BarChart2 } from 'lucide-react'
-import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab, getPdfUrl } from '@/app/actions'
+import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab, getPdfUrl, getPresignedReadUrl } from '@/app/actions'
 import { useRouter } from 'next/navigation'
 import StockPortal from './StockPortal'
 import ClaudeChat from '@/components/claude/ClaudeChat'
@@ -349,116 +349,127 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
   )
 }
 
-// ── Text Node ────────────────────────────────────────────────────────────────
+// ── Sticky Note Node ─────────────────────────────────────────────────────────
 
-const TEXT_BG_PRESETS = [
-  { label: 'White',  value: 'rgba(255,255,255,0.92)' },
+const NOTE_COLORS = [
+  { label: 'Yellow', value: 'rgba(254,240,64,0.95)' },
+  { label: 'Pink',   value: 'rgba(255,182,193,0.95)' },
+  { label: 'Blue',   value: 'rgba(147,197,253,0.95)' },
+  { label: 'Green',  value: 'rgba(134,239,172,0.95)' },
+  { label: 'Purple', value: 'rgba(196,181,253,0.95)' },
+  { label: 'Orange', value: 'rgba(253,186,116,0.95)' },
+  { label: 'White',  value: 'rgba(255,255,255,0.95)' },
   { label: 'None',   value: 'transparent' },
-  { label: 'Black',  value: 'rgba(0,0,0,0.75)' },
-  { label: 'Yellow', value: 'rgba(255,240,100,0.90)' },
-  { label: 'Blue',   value: 'rgba(59,130,246,0.85)' },
-  { label: 'Green',  value: 'rgba(34,197,94,0.85)' },
-  { label: 'Red',    value: 'rgba(239,68,68,0.85)' },
-  { label: 'Purple', value: 'rgba(168,85,247,0.85)' },
 ]
 
-export function TextNode({ id, data }: NodeProps) {
+export function TextNode({ id, data, selected }: NodeProps) {
   const { updateNodeData } = useReactFlow()
-  const [editing, setEditing] = useState(!!data.autoEdit)
   const [text, setText] = useState((data.text as string) || '')
-  const [showBgPicker, setShowBgPicker] = useState(false)
+  const [showColorPicker, setShowColorPicker] = useState(false)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+
   const color = (data.color as string) || '#1f2937'
-  const fontSize = (data.fontSize as number) || 18
-  const bgColor = (data.bgColor as string) || 'rgba(255,255,255,0.92)'
+  const fontSize = (data.fontSize as number) || 14
+  const bgColor = (data.bgColor as string) || 'rgba(254,240,64,0.95)'
   const onSave = data.onSave as SaveFn | undefined
 
-  function commit() {
-    updateNodeData(id, { ...data, text, autoEdit: false })
-    setEditing(false)
-    onSave?.(id, { text, color, fontSize, bgColor })
+  // Auto-focus when freshly placed on the board
+  useEffect(() => {
+    if (data.autoEdit) {
+      const t = setTimeout(() => textareaRef.current?.focus(), 30)
+      return () => clearTimeout(t)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function save(t: string) {
+    updateNodeData(id, { ...data, text: t, autoEdit: false })
+    onSave?.(id, { text: t, color, fontSize, bgColor })
   }
 
-  function setBg(value: string) {
-    setShowBgPicker(false)
+  function setNoteColor(value: string) {
+    setShowColorPicker(false)
     updateNodeData(id, { ...data, bgColor: value })
     onSave?.(id, { text, color, fontSize, bgColor: value })
   }
 
   const hasBg = bgColor !== 'transparent'
-  const bgStyle = hasBg ? { backgroundColor: bgColor, padding: '4px 8px', borderRadius: 8 } : {}
 
   return (
-    <div className="relative group">
-      <SideHandles color="!bg-gray-400" />
-      {editing ? (
-        <textarea
-          autoFocus
-          value={text}
-          onChange={e => setText(e.target.value)}
-          onBlur={commit}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
-          placeholder="Type…"
-          className="nodrag min-w-[120px] bg-white rounded-lg px-2 py-1.5 resize-none focus:outline-none shadow-md border border-blue-400 caret-gray-900"
-          style={{ color, fontSize, fontWeight: 500 }}
-          rows={2}
-        />
-      ) : (
-        <div
-          onClick={() => setEditing(true)}
-          className="whitespace-pre-wrap cursor-text min-w-[40px]"
-          style={{ color, fontSize, fontWeight: 500, ...bgStyle }}
-          title="Click to edit"
-        >
-          {text || <span className="opacity-40 text-sm">Text</span>}
-        </div>
-      )}
-
-      {/* Background colour picker button */}
-      <button
-        className="absolute -bottom-2 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 bg-white rounded-full w-4 h-4 shadow border border-gray-300 z-10 flex items-center justify-center"
-        title="Background colour"
-        onClick={e => { e.stopPropagation(); setShowBgPicker(v => !v) }}
-        style={{ backgroundColor: hasBg ? bgColor : '#fff' }}
+    <div
+      className="relative group w-full h-full flex flex-col"
+      style={{
+        backgroundColor: bgColor,
+        borderRadius: 4,
+        boxShadow: '2px 3px 10px rgba(0,0,0,0.20)',
+      }}
+    >
+      <NodeResizer
+        minWidth={120}
+        minHeight={80}
+        isVisible={!!selected}
+        lineClassName="!border-blue-400"
+        handleClassName="!bg-white !border-2 !border-blue-400 !w-2.5 !h-2.5 !rounded-sm"
+        onResizeEnd={(_, p) => onSave?.(id, { text, color, fontSize, bgColor }, p.width, p.height)}
       />
-      {showBgPicker && (
+      <SideHandles color="!bg-yellow-400" />
+
+      {/* Header strip — drag handle + action buttons */}
+      <div
+        className="shrink-0 h-5 flex items-center justify-end px-1 gap-0.5 cursor-grab"
+        style={{ backgroundColor: hasBg ? 'rgba(0,0,0,0.07)' : 'rgba(0,0,0,0.04)' }}
+      >
+        <button
+          className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-gray-500 hover:text-gray-700"
+          title="Note colour"
+          onClick={e => { e.stopPropagation(); setShowColorPicker(v => !v) }}
+        >
+          <div className="w-3 h-3 rounded-full border border-gray-400/60" style={{ backgroundColor: hasBg ? bgColor : '#f3f4f6' }} />
+        </button>
+        <button
+          className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-gray-400 hover:text-gray-600"
+          title="Hide (unhide from dashboard)"
+          onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
+        >
+          <EyeOff size={10} />
+        </button>
+        <button
+          className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-gray-400 hover:text-red-500"
+          onClick={() => (data.onDelete as (id: string) => void)(id)}
+        >
+          <X size={10} />
+        </button>
+      </div>
+
+      {/* Note body — textarea fills the rest */}
+      <textarea
+        ref={textareaRef}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        onBlur={() => save(text)}
+        placeholder="Type…"
+        className="nodrag flex-1 bg-transparent resize-none focus:outline-none px-2 pb-2 leading-snug"
+        style={{ color, fontSize }}
+      />
+
+      {/* Colour picker popup */}
+      {showColorPicker && (
         <div
-          className="nodrag absolute top-full mt-1 left-0 z-50 bg-white rounded-xl shadow-xl border border-gray-200 p-2 flex flex-wrap gap-1.5"
-          style={{ minWidth: 160 }}
+          className="nodrag absolute top-5 right-0 z-50 bg-white rounded-xl shadow-xl border border-gray-200 p-2 flex flex-wrap gap-1.5"
+          style={{ minWidth: 148 }}
           onPointerDown={e => e.stopPropagation()}
         >
-          {TEXT_BG_PRESETS.map(p => (
+          {NOTE_COLORS.map(p => (
             <button
               key={p.value}
               title={p.label}
-              onClick={e => { e.stopPropagation(); setBg(p.value) }}
+              onClick={e => { e.stopPropagation(); setNoteColor(p.value) }}
               className="w-6 h-6 rounded-full border-2 border-gray-300 hover:border-gray-600 shrink-0"
               style={{ backgroundColor: p.value === 'transparent' ? '#f3f4f6' : p.value }}
             />
           ))}
         </div>
       )}
-
-      <button
-        className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500 z-10"
-        onClick={() => (data.onDelete as (id: string) => void)(id)}
-      >
-        <X size={11} />
-      </button>
-      <button
-        className="absolute -top-2 right-3 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-gray-600 z-10"
-        title="Hide (unhide from dashboard)"
-        onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
-      >
-        <EyeOff size={11} />
-      </button>
-      <button
-        className="absolute -top-2 -left-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow z-10"
-        style={{ color: data.deadline && new Date(data.deadline as string) < new Date() ? '#ef4444' : '#9ca3af' }}
-        title={data.deadline ? `Expires ${new Date(data.deadline as string).toLocaleDateString()}` : 'Set expiry'}
-        onClick={e => { e.stopPropagation(); (data.onSetExpiry as (id: string) => void)?.(id) }}
-      >
-        <Clock size={11} />
-      </button>
     </div>
   )
 }
@@ -470,16 +481,38 @@ export function TextFileNode({ id, data }: NodeProps) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState((data.name as string) || 'Untitled.txt')
   const [content, setContent] = useState((data.content as string) || '')
+  const [fetchingContent, setFetchingContent] = useState(false)
   const onSave = data.onSave as SaveFn | undefined
   const expired = data.deadline ? new Date(data.deadline as string) < new Date() : false
+  const isR2 = !!(data.storagePath as string | undefined)
+
+  async function openEditor() {
+    if (isR2 && !content) {
+      setFetchingContent(true)
+      try {
+        const r = await getPresignedReadUrl(data.storagePath as string)
+        if (r.ok && r.url) {
+          const res = await fetch(r.url)
+          if (res.ok) setContent(await res.text())
+        }
+      } catch {}
+      setFetchingContent(false)
+    }
+    setEditing(true)
+  }
 
   function commit() {
-    const next: Record<string, unknown> = { name, content }
+    const next: Record<string, unknown> = { name }
+    if (!isR2) next.content = content
     if (data.hidden) next.hidden = true
     if (typeof data.opacity === 'number') next.opacity = data.opacity
-    updateNodeData(id, { ...data, name, content })
+    updateNodeData(id, { ...data, name, ...(isR2 ? {} : { content }) })
     setEditing(false)
-    onSave?.(id, next)
+    if (isR2) {
+      updateTextFile(id.replace(/^el-/, ''), name, content, '').catch(() => {})
+    } else {
+      onSave?.(id, next)
+    }
   }
 
   return (
@@ -516,15 +549,18 @@ export function TextFileNode({ id, data }: NodeProps) {
       ) : (
         <div
           className="bg-white rounded-lg shadow border border-gray-200 w-44 select-none cursor-pointer overflow-hidden"
-          onDoubleClick={() => setEditing(true)}
+          onDoubleClick={openEditor}
           title="Double-click to open"
         >
           <div className="flex items-center gap-1.5 px-2 py-1.5 bg-indigo-50 border-b border-indigo-100">
-            <FileText size={13} className="text-indigo-500 shrink-0" />
-            <span className="text-[11px] font-medium text-gray-700 truncate">{name}</span>
+            {fetchingContent
+              ? <span className="text-[10px] text-indigo-400 animate-pulse">Loading…</span>
+              : <><FileText size={13} className="text-indigo-500 shrink-0" /><span className="text-[11px] font-medium text-gray-700 truncate">{name}</span></>}
           </div>
           <p className="px-2 py-1.5 text-[10px] text-gray-500 font-mono whitespace-pre-wrap line-clamp-4 break-words min-h-[2.5rem]">
-            {content || <span className="italic text-gray-300">empty</span>}
+            {isR2
+              ? <span className="italic text-gray-300">cloud file</span>
+              : (content || <span className="italic text-gray-300">empty</span>)}
           </p>
         </div>
       )}
@@ -917,7 +953,7 @@ function PortalEdges({ content }: { content: PortalContent }) {
 
 type FolderContent = {
   folders: { id: string; name: string; color: string; mode: string }[]
-  files: { id: string; name: string; content: string }[]
+  files: { id: string; name: string; content: string; storagePath?: string }[]
 }
 const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
 
@@ -951,7 +987,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   // Internal navigation: a stack of board ids browsed into (base target excluded),
   // plus an optionally-open text file. The "out" button pops these.
   const [stack, setStack] = useState<string[]>([])
-  const [openFile, setOpenFile] = useState<{ id: string; name: string; content: string } | null>(null)
+  const [openFile, setOpenFile] = useState<{ id: string; name: string; content: string; storagePath?: string } | null>(null)
   const [pan, setPan] = useState({ x: (data.vx as number) ?? 20, y: (data.vy as number) ?? 20 })
   const [zoom, setZoom] = useState((data.zoom as number) ?? 0.4)
   const panRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
@@ -1032,7 +1068,12 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         if (cancel) return
         setFolderContent({
           folders: subs ?? [],
-          files: (els ?? []).map(e => ({ id: e.id, name: ((e.data as Record<string, unknown>)?.name as string) ?? 'Untitled', content: ((e.data as Record<string, unknown>)?.content as string) ?? '' })),
+          files: (els ?? []).map(e => ({
+            id: e.id,
+            name: ((e.data as Record<string, unknown>)?.name as string) ?? 'Untitled',
+            content: ((e.data as Record<string, unknown>)?.content as string) ?? '',
+            storagePath: (e.data as Record<string, unknown>)?.storagePath as string | undefined,
+          })),
         })
         setContent(null)
         return
@@ -1191,8 +1232,19 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                   <button
                     key={file.id}
                     draggable
-                    onDragStart={e => { e.dataTransfer.setData(PORTAL_ITEM_MIME, JSON.stringify({ kind: 'file', name: file.name, content: file.content })); e.dataTransfer.effectAllowed = 'copy' }}
-                    onClick={e => { e.stopPropagation(); setOpenFile(file) }}
+                    onDragStart={e => { e.dataTransfer.setData(PORTAL_ITEM_MIME, JSON.stringify({ kind: 'file', name: file.name, content: file.content, storagePath: file.storagePath })); e.dataTransfer.effectAllowed = 'copy' }}
+                    onClick={async e => {
+                      e.stopPropagation()
+                      if (file.storagePath && !file.content) {
+                        try {
+                          const r = await getPresignedReadUrl(file.storagePath)
+                          const text = r.ok && r.url ? await (await fetch(r.url)).text() : ''
+                          setOpenFile({ ...file, content: text })
+                        } catch { setOpenFile(file) }
+                      } else {
+                        setOpenFile(file)
+                      }
+                    }}
                     className="flex flex-col items-center gap-0.5 p-1.5 rounded hover:bg-indigo-100"
                     title={`${file.name} — drag onto the canvas to copy`}
                   >

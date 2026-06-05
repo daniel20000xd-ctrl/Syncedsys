@@ -16,7 +16,7 @@ import {
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
-  loadBoardForFloat,
+  loadBoardForFloat, getPresignedReadUrl,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode, PdfNode } from './nodes'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
@@ -25,6 +25,7 @@ import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
 import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME, FLOAT_BOARD_MIME } from '@/lib/files'
 import { claudeDropRegistry } from '@/lib/claudeDropRegistry'
+import { STORAGE_URL } from '@/lib/storageUrl'
 
 const nodeTypes: NodeTypes = {
   listNode: ListNode,
@@ -136,6 +137,7 @@ function buildNodes(
     }
     if (el.type === 'shape' || el.type === 'portal') base.style = { width: el.width ?? 120, height: el.height ?? 80 }
     if (el.type === 'claude') base.style = { width: el.width ?? 340, height: el.height ?? 420 }
+    if (el.type === 'text') base.style = { width: el.width ?? 180, height: el.height ?? 140 }
     const opacity = typeof el.data.opacity === 'number' ? (el.data.opacity as number) : 1
     base.style = { ...(base.style ?? {}), opacity }
     base.zIndex = typeof el.data.z === 'number' ? el.data.z as number : 0
@@ -211,8 +213,8 @@ function buildEdges(
 // ── Alignment-guide + grouping helpers (pure, module-level) ───────────────────
 
 // Fallback dimensions when a node hasn't been measured yet.
-const DEFAULT_W: Record<string, number> = { listNode: 208, cardNode: 176, shapeNode: 120, portalNode: 320, claudeNode: 340, subTabNode: 176, textNode: 120, textFileNode: 176, pdfNode: 176, folderLinkNode: 160, imageNode: 200, drawingNode: 80 }
-const DEFAULT_H: Record<string, number> = { listNode: 60, cardNode: 50, shapeNode: 80, portalNode: 220, claudeNode: 420, subTabNode: 96, textNode: 40, textFileNode: 90, pdfNode: 70, folderLinkNode: 80, imageNode: 150, drawingNode: 80 }
+const DEFAULT_W: Record<string, number> = { listNode: 208, cardNode: 176, shapeNode: 120, portalNode: 320, claudeNode: 340, subTabNode: 176, textNode: 180, textFileNode: 176, pdfNode: 176, folderLinkNode: 160, imageNode: 200, drawingNode: 80 }
+const DEFAULT_H: Record<string, number> = { listNode: 60, cardNode: 50, shapeNode: 80, portalNode: 220, claudeNode: 420, subTabNode: 96, textNode: 140, textFileNode: 90, pdfNode: 70, folderLinkNode: 80, imageNode: 150, drawingNode: 80 }
 
 function getNodeWH(n: Node): [number, number] {
   const sw = typeof n.style?.width === 'number' ? (n.style.width as number) : undefined
@@ -715,7 +717,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'pdf' ? 'pdfNode' : type === 'folderlink' ? 'folderLinkNode' : type === 'portal' ? 'portalNode' : type === 'claude' ? 'claudeNode' : 'imageNode'
     const node: Node = {
       id: nodeId, type: nodeType, position: { x, y },
-      ...(type === 'shape' || type === 'portal' || type === 'claude' ? { style: { width: w, height: h } } : {}),
+      ...(type === 'shape' || type === 'portal' || type === 'claude' || type === 'text' ? { style: { width: w, height: h } } : {}),
       data: {
         ...data,
         onDelete: (i: string) => handleDeleteNode(i, 'element'),
@@ -789,6 +791,22 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     setDropTarget(closest ? { nodeId: closest.nodeId, type: closest.type } : null)
   }
 
+  async function uploadTextToR2(name: string, content: string): Promise<Record<string, unknown> | null> {
+    try {
+      const blob = new Blob([content], { type: 'text/plain' })
+      const file = new File([blob], name, { type: 'text/plain' })
+      const form = new FormData()
+      form.append('file', file); form.append('app', 'hub')
+      form.append('subpath', `textfiles/${crypto.randomUUID()}-${name}`)
+      const res = await fetch(`${STORAGE_URL}/api/storage/upload`, { method: 'POST', body: form })
+      if (!res.ok) return null
+      const { key } = await res.json() as { key: string }
+      return { name, storagePath: key, sizeBytes: blob.size }
+    } catch {
+      return null
+    }
+  }
+
   async function onCanvasDrop(e: React.DragEvent) {
     // A unit dragged out of a portal → copy it onto this canvas.
     const portalRaw = e.dataTransfer.getData(PORTAL_ITEM_MIME)
@@ -804,18 +822,46 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
     if (portalRaw) {
       try {
-        const item = JSON.parse(portalRaw) as { kind: 'file'; name: string; content: string } | { kind: 'folder'; boardId: string; name: string }
+        const item = JSON.parse(portalRaw) as { kind: 'file'; name: string; content: string; storagePath?: string } | { kind: 'folder'; boardId: string; name: string }
         if (item.kind === 'file') {
           // Route portal file to drop target if one is active
           if (currentDropTarget?.type === 'claude') {
             claudeDropRegistry.inject(currentDropTarget.nodeId, { id: crypto.randomUUID(), name: item.name, content: item.content, kind: 'text' })
-          } else if (currentDropTarget?.type === 'subtab') {
-            const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
-            const id = crypto.randomUUID()
-            upsertElement(id, targetBoardId, 'textfile', 20, 20, { name: item.name, content: item.content }, null, null)
-              .catch(err => console.error('Failed to drop file into sub-tab:', err))
           } else {
-            addElement('textfile', origin.x, origin.y, { name: item.name, content: item.content })
+            // R2-backed portal files: fetch content and upload as a new R2 object (true copy).
+            const placeFile = async (elData: Record<string, unknown>) => {
+              if (currentDropTarget?.type === 'subtab') {
+                const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
+                upsertElement(crypto.randomUUID(), targetBoardId, 'textfile', 20, 20, elData, null, null)
+                  .catch(err => console.error('Failed to drop file into sub-tab:', err))
+              } else {
+                addElement('textfile', origin.x, origin.y, elData)
+              }
+            }
+            if (item.storagePath && !item.content) {
+              ;(async () => {
+                try {
+                  const r = await getPresignedReadUrl(item.storagePath!)
+                  if (!r.ok || !r.url) { placeFile({ name: item.name, content: '' }); return }
+                  const fetchRes = await fetch(r.url)
+                  const text = fetchRes.ok ? await fetchRes.text() : ''
+                  const blob = new Blob([text], { type: 'text/plain' })
+                  const f = new File([blob], item.name, { type: 'text/plain' })
+                  const form = new FormData()
+                  form.append('file', f); form.append('app', 'hub')
+                  form.append('subpath', `textfiles/${crypto.randomUUID()}-${item.name}`)
+                  const res = await fetch(`${STORAGE_URL}/api/storage/upload`, { method: 'POST', body: form })
+                  if (res.ok) {
+                    const { key } = await res.json() as { key: string }
+                    placeFile({ name: item.name, storagePath: key, sizeBytes: blob.size })
+                  } else {
+                    placeFile({ name: item.name, content: '' })
+                  }
+                } catch { placeFile({ name: item.name, content: '' }) }
+              })()
+            } else {
+              placeFile({ name: item.name, content: item.content })
+            }
           }
         } else if (item.kind === 'folder') {
           // Default: a live link to the original folder (decouple later to copy).
@@ -836,18 +882,19 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       // Inject all text files directly into the chat composer (append one after another)
       files.forEach(f => claudeDropRegistry.inject(currentDropTarget.nodeId, { id: crypto.randomUUID(), name: f.name, content: f.content, kind: 'text' }))
     } else if (currentDropTarget?.type === 'subtab') {
-      // Drop files into the sub-tab's board (silent — they appear when you navigate there)
       const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
-      files.forEach((f, i) => {
-        const id = crypto.randomUUID()
-        upsertElement(id, targetBoardId, 'textfile', 20 + i * 24, 20 + i * 24, { name: f.name, content: f.content }, null, null)
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]
+        const elData = await uploadTextToR2(f.name, f.content) ?? { name: f.name, content: f.content }
+        upsertElement(crypto.randomUUID(), targetBoardId, 'textfile', 20 + i * 24, 20 + i * 24, elData, null, null)
           .catch(err => console.error('Failed to drop file into sub-tab:', err))
-      })
+      }
     } else {
-      // Default: place on this canvas
-      files.forEach((f, i) => {
-        addElement('textfile', origin.x + i * 24, origin.y + i * 24, { name: f.name, content: f.content })
-      })
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]
+        const elData = await uploadTextToR2(f.name, f.content) ?? { name: f.name, content: f.content }
+        addElement('textfile', origin.x + i * 24, origin.y + i * 24, elData)
+      }
     }
 
     // PDFs: upload the binary to storage + extract text (so Claude can read it),
@@ -855,8 +902,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     for (let i = 0; i < pdfs.length; i++) {
       const pdf = pdfs[i]
       try {
-        const [storagePath, { text, pageCount }] = await Promise.all([uploadPdf(pdf), extractPdfText(pdf)])
-        const pdfData = { name: pdf.name, storagePath, text, pageCount }
+        const [{ key: storagePath, sizeBytes }, { text, pageCount }] = await Promise.all([uploadPdf(pdf, board.id), extractPdfText(pdf)])
+        const pdfData = { name: pdf.name, storagePath, sizeBytes, text, pageCount }
         if (currentDropTarget?.type === 'claude') {
           // Generate thumbnail for the attachment chip (best-effort — non-blocking)
           const thumbnail = await renderPdfThumbnail(pdf).catch(() => '')
@@ -1304,12 +1351,18 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       input.onchange = async e => {
         const file = (e.target as HTMLInputElement).files?.[0]
         if (!file) return
-        const reader = new FileReader()
-        reader.onload = ev => {
-          const url = ev.target?.result as string
-          addElement('image', x, y, { url, alt: file.name })
+        const form = new FormData()
+        form.append('file', file)
+        form.append('app', 'hub')
+        form.append('subpath', `images/${crypto.randomUUID()}-${file.name}`)
+        try {
+          const res = await fetch(`${STORAGE_URL}/api/storage/upload`, { method: 'POST', body: form })
+          if (!res.ok) { console.error('Image upload failed:', res.status); return }
+          const { key, presignedUrl } = await res.json() as { key: string; presignedUrl: string }
+          addElement('image', x, y, { url: presignedUrl, storagePath: key, sizeBytes: file.size, alt: file.name })
+        } catch (err) {
+          console.error('Image upload error:', err)
         }
-        reader.readAsDataURL(file)
       }
       input.click()
     }
@@ -1461,7 +1514,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool !== 'text') return
     const op = getOverlayPoint(e.clientX, e.clientY)
     const flowPos = overlayToFlow(op.x, op.y)
-    addElement('text', flowPos.x, flowPos.y, { text: '', color: '#1f2937', fontSize: 18 }, undefined, undefined, { autoEdit: true })
+    addElement('text', flowPos.x, flowPos.y, { text: '', color: '#1f2937', fontSize: 14 }, 180, 140, { autoEdit: true })
     setTool('select') // drop the overlay so you can immediately type
   }
 
