@@ -1,10 +1,10 @@
 import { NextRequest } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@/lib/supabase/server'
-import { decryptSecret } from '@/lib/crypto'
 import { buildClaudeContext } from '@/lib/claude/context'
 import { READ_TOOLS, WRITE_TOOLS, executeTool, ScopeError, type ToolCtx } from '@/lib/claude/tools'
-import { isClaudeEnabled } from '@/lib/mcp'
+import { resolveAnthropicKey, NoClaudeKeyError, KeyDecryptError, type KeySource } from '@/lib/claude/key'
+import { recordClaudeUsage } from '@/lib/claude/usage'
 
 // The model used for the in-app assistant. Change here to upgrade.
 const MODEL = 'claude-sonnet-4-5-20250929'
@@ -27,31 +27,29 @@ export async function POST(req: NextRequest) {
   const messages = (body.messages ?? []).filter(m => m.role && typeof m.content === 'string')
   if (!boardId || messages.length === 0) return new Response(JSON.stringify({ error: 'boardId and messages required' }), { status: 400 })
 
-  if (!await isClaudeEnabled(supabase, user.id)) {
-    return new Response(JSON.stringify({ error: 'no_key' }), { status: 400 })
+  // Resolve which key this request runs on: the user's own key if they've saved
+  // one, otherwise the platform key (billed to them at markup). See lib/claude/key.
+  let apiKey: string, keySource: KeySource, writesEnabled: boolean
+  try {
+    ({ apiKey, keySource, writesEnabled } = await resolveAnthropicKey(supabase, user.id))
+  } catch (e) {
+    if (e instanceof NoClaudeKeyError) return new Response(JSON.stringify({ error: 'no_key' }), { status: 400 })
+    if (e instanceof KeyDecryptError) return new Response(JSON.stringify({ error: 'Could not read your stored key. Please re-enter it in Settings.' }), { status: 500 })
+    throw e
   }
-
-  // Load + decrypt this user's key, and their auto-apply setting.
-  const { data: secrets } = await supabase
-    .from('user_secrets').select('anthropic_key_encrypted, claude_auto_apply').eq('user_id', user.id).maybeSingle()
-  if (!secrets?.anthropic_key_encrypted) {
-    return new Response(JSON.stringify({ error: 'no_key' }), { status: 400 })
-  }
-  let apiKey: string
-  try { apiKey = decryptSecret(secrets.anthropic_key_encrypted) }
-  catch { return new Response(JSON.stringify({ error: 'Could not read your stored key. Please re-enter it in Settings.' }), { status: 500 }) }
-
-  const writesEnabled = !!secrets.claude_auto_apply
 
   // Verify the root board is owned by the user before building context.
   const { data: rootBoard } = await supabase.from('boards').select('id').eq('id', boardId).single()
   if (!rootBoard) return new Response(JSON.stringify({ error: 'Board not found' }), { status: 404 })
 
-  const { allowedIds, systemContext } = await buildClaudeContext(supabase, boardId)
+  const { data: { session } } = await supabase.auth.getSession()
+  const accessToken = session?.access_token
+
+  const { allowedIds, systemContext } = await buildClaudeContext(supabase, boardId, accessToken)
 
   const anthropic = new Anthropic({ apiKey })
   const tools = writesEnabled ? [...READ_TOOLS, ...WRITE_TOOLS] : READ_TOOLS
-  const toolCtx: ToolCtx = { supabase, userId: user.id, allowedIds }
+  const toolCtx: ToolCtx = { supabase, userId: user.id, allowedIds, accessToken }
 
   const system = [
     'You are an assistant embedded inside a visual workspace app, living inside one board ("tab").',
@@ -72,6 +70,11 @@ export async function POST(req: NextRequest) {
 
   const stream = new ReadableStream({
     async start(controller) {
+      // Accumulate token usage across every turn of the agent loop — each
+      // messages.stream call is a separate billable API request.
+      const agg = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+      let turnsUsed = 0
+      let errored = false
       try {
         for (let turn = 0; turn < MAX_TURNS; turn++) {
           const msgStream = anthropic.messages.stream({ model: MODEL, max_tokens: 2048, system, tools, messages: apiMessages })
@@ -79,6 +82,12 @@ export async function POST(req: NextRequest) {
           msgStream.on('text', (delta: string) => controller.enqueue(sse({ type: 'text', delta })))
 
           const final = await msgStream.finalMessage()
+          turnsUsed++
+          const u = final.usage
+          agg.input_tokens += u.input_tokens ?? 0
+          agg.output_tokens += u.output_tokens ?? 0
+          agg.cache_read_input_tokens += u.cache_read_input_tokens ?? 0
+          agg.cache_creation_input_tokens += u.cache_creation_input_tokens ?? 0
 
           // Collect any tool_use blocks the model emitted.
           const toolUses = final.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use')
@@ -106,11 +115,18 @@ export async function POST(req: NextRequest) {
         }
         controller.enqueue(sse({ type: 'done' }))
       } catch (err) {
+        errored = true
         const message = err instanceof Anthropic.APIError
           ? `Anthropic error: ${err.message}`
           : (err instanceof Error ? err.message : 'Unknown error')
         controller.enqueue(sse({ type: 'error', message }))
       } finally {
+        // Record usage on both the success and error paths so partial spend from a
+        // mid-loop failure is still billed. Awaited so the insert lands before the
+        // serverless function freezes. recordClaudeUsage swallows its own errors.
+        await recordClaudeUsage(supabase, {
+          userId: user.id, model: MODEL, keySource, usage: agg, turns: turnsUsed, boardId, errored,
+        })
         controller.close()
       }
     },

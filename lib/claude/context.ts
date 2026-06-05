@@ -33,6 +33,7 @@ export type ClaudeContext = {
 export async function buildClaudeContext(
   supabase: SupabaseClient,
   rootBoardId: string,
+  accessToken?: string,
 ): Promise<ClaudeContext> {
   // Load all of the user's boards once (RLS scopes to the owner) and all
   // portal/folder-link elements so we can resolve cross-references in memory.
@@ -74,7 +75,7 @@ export async function buildClaudeContext(
     for (const tid of linkTargetsByBoard.get(id) ?? []) queue.push(tid)
   }
 
-  const systemContext = await renderContext(supabase, rootBoardId, allowedIds, boardById, childrenByParent, linkTargetsByBoard)
+  const systemContext = await renderContext(supabase, rootBoardId, allowedIds, boardById, childrenByParent, linkTargetsByBoard, accessToken)
   return { allowedIds, rootId: rootBoardId, systemContext }
 }
 
@@ -85,6 +86,7 @@ async function renderContext(
   boardById: Map<string, BoardRow>,
   childrenByParent: Map<string, BoardRow[]>,
   linkTargetsByBoard: Map<string, string[]>,
+  accessToken?: string,
 ): Promise<string> {
   const ids = [...allowedIds]
   // Pull the lightweight contents for every in-scope board.
@@ -107,6 +109,25 @@ async function renderContext(
   for (const c of cardRows) { const a = cardsByList.get(c.list_id) ?? []; a.push(c); cardsByList.set(c.list_id, a) }
   const elsByBoard = new Map<string, ElementRow[]>()
   for (const e of elRows) { const a = elsByBoard.get(e.board_id) ?? []; a.push(e); elsByBoard.set(e.board_id, a) }
+
+  // Pre-fetch slides context for all slides portals (async, before the sync tree walk).
+  const slidesCtxMap = new Map<string, string>()
+  if (accessToken) {
+    const slidesPortals = elRows.filter(
+      e => e.type === 'portal' && (e.data?.viewerKind as string | undefined) === 'slides'
+    )
+    await Promise.all(slidesPortals.map(async e => {
+      const presId = (e.data?.viewerConfig as { presentationId?: string } | undefined)?.presentationId
+      if (!presId) return
+      try {
+        const resp = await fetch(
+          `https://slides.syncedsys.com/api/slides/context/${presId}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } },
+        )
+        if (resp.ok) slidesCtxMap.set(e.id, await resp.text())
+      } catch {}
+    }))
+  }
 
   const lines: string[] = []
   const seen = new Set<string>()
@@ -144,8 +165,17 @@ async function renderContext(
           (excerpt.trim() ? `:\n${indent}      text: ${JSON.stringify(excerpt)}` : ' (no extractable text)')
       }
       else if (e.type === 'portal') {
-        if (d.viewerKind && d.viewer_context) {
-          // Viewer portal: include the full live data block so Claude has zero info loss
+        if (d.viewerKind === 'slides') {
+          const slidesCtx = slidesCtxMap.get(e.id) ?? (d.viewer_context ? String(d.viewer_context) : null)
+          if (slidesCtx) {
+            lines.push(`${indent}    element[${e.id}]: slides-viewer`)
+            lines.push(`${indent}    ---BEGIN SLIDES DATA---`)
+            for (const vline of slidesCtx.split('\n')) lines.push(`${indent}    ${vline}`)
+            lines.push(`${indent}    ---END SLIDES DATA---`)
+            continue
+          }
+          label = `slides-viewer (no presentation selected)`
+        } else if (d.viewerKind && d.viewer_context) {
           lines.push(`${indent}    element[${e.id}]: viewer-portal (${d.viewerKind ?? 'unknown'})`)
           lines.push(`${indent}    ---BEGIN VIEWER DATA---`)
           for (const vline of String(d.viewer_context).split('\n')) {
@@ -153,8 +183,9 @@ async function renderContext(
           }
           lines.push(`${indent}    ---END VIEWER DATA---`)
           continue
+        } else {
+          label = `portal → ${d.targetBoardId ?? '(unset)'}`
         }
-        label = `portal → ${d.targetBoardId ?? '(unset)'}`
       }
       else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
       lines.push(`${indent}    element[${e.id}]: ${label}`)

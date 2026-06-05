@@ -5,10 +5,11 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, FileType, BarChart2 } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, FileType, BarChart2, Presentation } from 'lucide-react'
 import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab, getPdfUrl, getPresignedReadUrl } from '@/app/actions'
 import { useRouter } from 'next/navigation'
 import StockPortal from './StockPortal'
+import SlidesPortal from './SlidesPortal'
 import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
@@ -1288,6 +1289,13 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             onUpdateContext={ctx => persist({ viewer_context: ctx })}
           />
         )}
+        {viewerKind === 'slides' && (
+          <SlidesPortal
+            config={viewerConfig as { presentationId?: string }}
+            onPersistConfig={cfg => persist({ viewerKind: 'slides', viewerConfig: cfg })}
+            onUpdateContext={ctx => persist({ viewer_context: ctx })}
+          />
+        )}
 
         {/* Empty state — shown when nothing is chosen yet */}
         {(!targetBoardId && !viewerKind) && (
@@ -1316,6 +1324,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             <span className="truncate">
               {viewerKind === 'stocks'
                 ? (viewerConfig.ticker ? `📈 ${viewerConfig.ticker}` : '📈 Stock Viewer')
+                : viewerKind === 'slides'
+                ? '🎨 Slides'
                 : openFile
                   ? openFile.name
                   : (canGoBack ? (viewName || 'Folder') : (target ? `↪ ${target.name}` : 'Portal'))}
@@ -1393,6 +1403,18 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 <BarChart2 size={12} className="text-green-500 shrink-0" />
                 <span>Stock Viewer</span>
                 {viewerKind === 'stocks' && <span className="ml-auto text-[9px] text-green-500">active</span>}
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); pickViewer('slides') }}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md text-left transition-colors ${
+                  viewerKind === 'slides'
+                    ? 'bg-indigo-50 text-indigo-700'
+                    : 'text-gray-700 hover:bg-indigo-50 hover:text-indigo-700'
+                }`}
+              >
+                <Presentation size={12} className="text-indigo-500 shrink-0" />
+                <span>Slides Viewer</span>
+                {viewerKind === 'slides' && <span className="ml-auto text-[9px] text-indigo-500">active</span>}
               </button>
             </div>
 

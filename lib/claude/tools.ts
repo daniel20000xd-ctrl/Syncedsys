@@ -123,15 +123,181 @@ export const WRITE_TOOLS: Anthropic.Tool[] = [
       required: ['boardId', 'name'],
     },
   },
+  // ── Slides satellite tools ────────────────────────────────────────────────
+  {
+    name: 'create_presentation',
+    description: 'Create a new slides presentation in the Slides satellite.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string', description: 'Presentation title.' },
+        theme: { type: 'string', description: 'Theme name: minimal, dark, bold, warm, corporate.' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'add_slide',
+    description: 'Add a new slide to a presentation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        presentation_id: { type: 'string' },
+        position: { type: 'number', description: 'Position in the slide order (0-based).' },
+        background_color: { type: 'string', description: 'Background hex color.' },
+      },
+      required: ['presentation_id'],
+    },
+  },
+  {
+    name: 'add_text_element',
+    description: 'Add a text element to a slide.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slide_id: { type: 'string' },
+        text: { type: 'string' },
+        x: { type: 'number' }, y: { type: 'number' },
+        width: { type: 'number' }, height: { type: 'number' },
+        font_size: { type: 'number' },
+        font_family: { type: 'string' },
+        color: { type: 'string' },
+        bold: { type: 'boolean' },
+        italic: { type: 'boolean' },
+        align: { type: 'string', enum: ['left', 'center', 'right'] },
+      },
+      required: ['slide_id', 'text'],
+    },
+  },
+  {
+    name: 'add_shape_element',
+    description: 'Add a shape (rect, ellipse, triangle) to a slide.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slide_id: { type: 'string' },
+        shape_type: { type: 'string', enum: ['rect', 'rounded-rect', 'ellipse', 'triangle', 'diamond'] },
+        x: { type: 'number' }, y: { type: 'number' },
+        width: { type: 'number' }, height: { type: 'number' },
+        fill: { type: 'string' },
+        stroke: { type: 'string' },
+        stroke_width: { type: 'number' },
+      },
+      required: ['slide_id', 'shape_type'],
+    },
+  },
+  {
+    name: 'update_slide_element',
+    description: 'Update properties of an existing slide element.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        element_id: { type: 'string' },
+        text: { type: 'string' },
+        color: { type: 'string' },
+        font_size: { type: 'number' },
+        font_family: { type: 'string' },
+        bold: { type: 'boolean' },
+        x: { type: 'number' }, y: { type: 'number' },
+        width: { type: 'number' }, height: { type: 'number' },
+      },
+      required: ['element_id'],
+    },
+  },
+  {
+    name: 'delete_element',
+    description: 'Delete a slide element.',
+    input_schema: {
+      type: 'object' as const,
+      properties: { element_id: { type: 'string' } },
+      required: ['element_id'],
+    },
+  },
+  {
+    name: 'set_speaker_notes',
+    description: 'Set speaker notes for a slide.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        slide_id: { type: 'string' },
+        notes: { type: 'string' },
+      },
+      required: ['slide_id', 'notes'],
+    },
+  },
+  {
+    name: 'update_presentation_theme',
+    description: 'Apply a built-in theme to a presentation (reskins all slides).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        presentation_id: { type: 'string' },
+        theme: { type: 'string', enum: ['minimal', 'dark', 'bold', 'warm', 'corporate'] },
+      },
+      required: ['presentation_id', 'theme'],
+    },
+  },
+  {
+    name: 'reorder_slides',
+    description: 'Reorder slides in a presentation.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        presentation_id: { type: 'string' },
+        slide_ids: { type: 'array', items: { type: 'string' }, description: 'Slide IDs in the new order.' },
+      },
+      required: ['presentation_id', 'slide_ids'],
+    },
+  },
 ]
+
+export const SLIDES_READ_TOOLS: Anthropic.Tool[] = [
+  {
+    name: 'get_presentation',
+    description: 'Fetch a presentation and all its slides and elements from the Slides satellite.',
+    input_schema: {
+      type: 'object' as const,
+      properties: { presentation_id: { type: 'string' } },
+      required: ['presentation_id'],
+    },
+  },
+  {
+    name: 'list_presentations',
+    description: 'List all presentations the user owns in the Slides satellite.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+]
+
+export const SLIDES_WRITE_TOOLS: Anthropic.Tool[] = WRITE_TOOLS.filter(t =>
+  ['create_presentation', 'add_slide', 'add_text_element', 'add_shape_element',
+   'update_slide_element', 'delete_element', 'set_speaker_notes',
+   'update_presentation_theme', 'reorder_slides'].includes(t.name)
+)
 
 export type ToolCtx = {
   supabase: SupabaseClient
   userId: string
   allowedIds: Set<string>
+  accessToken?: string
 }
 
 class ScopeError extends Error {}
+
+const SLIDES_API = 'https://slides.syncedsys.com/api/slides'
+function slidesCall(path: string, method: string, body: unknown, ctx: ToolCtx) {
+  return fetch(`${SLIDES_API}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(ctx.accessToken ? { Authorization: `Bearer ${ctx.accessToken}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  }).then(r => r.json())
+}
 
 function ensureBoard(ctx: ToolCtx, boardId: string) {
   if (!boardId || !ctx.allowedIds.has(boardId)) {
@@ -245,6 +411,92 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const { error } = await s.from('boards').update({ name: String(input.name) }).eq('id', boardId)
       if (error) throw new Error(error.message)
       return `Renamed board ${boardId} to "${input.name}".`
+    }
+
+    // ── Slides satellite tools ───────────────────────────────────────────────
+    case 'get_presentation': {
+      const data = await slidesCall(`/presentations/${String(input.presentation_id)}`, 'GET', null, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'list_presentations': {
+      const data = await slidesCall('/presentations', 'GET', null, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'create_presentation': {
+      const data = await slidesCall('/presentations', 'POST', { title: input.title, theme: input.theme }, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'add_slide': {
+      const data = await slidesCall(`/presentations/${String(input.presentation_id)}/slides`, 'POST', {
+        position: input.position,
+        background_color: input.background_color,
+      }, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'add_text_element': {
+      const data = await slidesCall(`/slides/${String(input.slide_id)}/elements`, 'POST', {
+        type: 'text',
+        text: input.text,
+        x: input.x, y: input.y,
+        width: input.width, height: input.height,
+        font_size: input.font_size,
+        font_family: input.font_family,
+        color: input.color,
+        bold: input.bold,
+        italic: input.italic,
+        align: input.align,
+      }, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'add_shape_element': {
+      const data = await slidesCall(`/slides/${String(input.slide_id)}/elements`, 'POST', {
+        type: 'shape',
+        shape_type: input.shape_type,
+        x: input.x, y: input.y,
+        width: input.width, height: input.height,
+        fill: input.fill,
+        stroke: input.stroke,
+        stroke_width: input.stroke_width,
+      }, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'update_slide_element': {
+      const data = await slidesCall(`/elements/${String(input.element_id)}`, 'PATCH', {
+        text: input.text,
+        color: input.color,
+        font_size: input.font_size,
+        font_family: input.font_family,
+        bold: input.bold,
+        x: input.x, y: input.y,
+        width: input.width, height: input.height,
+      }, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'delete_element': {
+      const data = await slidesCall(`/elements/${String(input.element_id)}`, 'DELETE', null, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'set_speaker_notes': {
+      const data = await slidesCall(`/slides/${String(input.slide_id)}`, 'PATCH', { notes: input.notes }, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'update_presentation_theme': {
+      const data = await slidesCall(`/presentations/${String(input.presentation_id)}`, 'PATCH', { theme: input.theme }, ctx)
+      return JSON.stringify(data)
+    }
+
+    case 'reorder_slides': {
+      const data = await slidesCall(`/presentations/${String(input.presentation_id)}/reorder`, 'PUT', { slide_ids: input.slide_ids }, ctx)
+      return JSON.stringify(data)
     }
 
     default:
