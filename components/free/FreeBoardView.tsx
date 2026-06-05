@@ -273,6 +273,65 @@ function computeGuides(
   return { snapX, snapY, vLine, hLine }
 }
 
+// Snap the moving edge(s) of a node being resized to other nodes' left/right/centre
+// (X) and top/bottom/centre (Y) lines. `cur` is the node's rect from the previous
+// frame, `next` is what NodeResizer proposes this frame; whichever edge differs from
+// `cur` is the one the user is dragging, so that edge is what we try to align. Returns
+// the adjusted rect plus the active guide lines to draw.
+function computeResizeSnap(
+  id: string,
+  next: { x: number; y: number; w: number; h: number },
+  cur: { x: number; y: number; w: number; h: number },
+  all: Node[],
+  exclude?: Set<string>,
+): { x: number; y: number; w: number; h: number; vLine: number | null; hLine: number | null } {
+  let { x, y, w, h } = next
+  const EPS = 0.01
+  const MIN = 20
+  const movingLeft = Math.abs(x - cur.x) > EPS
+  const movingTop = Math.abs(y - cur.y) > EPS
+  const movingRight = !movingLeft && Math.abs((x + w) - (cur.x + cur.w)) > EPS
+  const movingBottom = !movingTop && Math.abs((y + h) - (cur.y + cur.h)) > EPS
+
+  let vLine: number | null = null, hLine: number | null = null
+
+  if (movingLeft || movingRight) {
+    const edge = movingLeft ? x : x + w
+    let best = GUIDE_SNAP, target: number | null = null
+    for (const o of all) {
+      if (o.id === id || o.hidden || exclude?.has(o.id)) continue
+      const [ow] = getNodeWH(o)
+      for (const t of [o.position.x, o.position.x + ow, o.position.x + ow / 2]) {
+        const d = Math.abs(edge - t)
+        if (d < best) { best = d; target = t }
+      }
+    }
+    if (target != null) {
+      if (movingLeft) { const nw = (x + w) - target; if (nw >= MIN) { x = target; w = nw; vLine = target } }
+      else { const nw = target - x; if (nw >= MIN) { w = nw; vLine = target } }
+    }
+  }
+
+  if (movingTop || movingBottom) {
+    const edge = movingTop ? y : y + h
+    let best = GUIDE_SNAP, target: number | null = null
+    for (const o of all) {
+      if (o.id === id || o.hidden || exclude?.has(o.id)) continue
+      const [, oh] = getNodeWH(o)
+      for (const t of [o.position.y, o.position.y + oh, o.position.y + oh / 2]) {
+        const d = Math.abs(edge - t)
+        if (d < best) { best = d; target = t }
+      }
+    }
+    if (target != null) {
+      if (movingTop) { const nh = (y + h) - target; if (nh >= MIN) { y = target; h = nh; hLine = target } }
+      else { const nh = target - y; if (nh >= MIN) { h = nh; hLine = target } }
+    }
+  }
+
+  return { x, y, w, h, vLine, hLine }
+}
+
 // All nodes contained (directly or transitively) by `rootId` via data.parentId.
 function descendantsOf(rootId: string, all: Node[]): Set<string> {
   const childrenByParent = new Map<string, string[]>()
@@ -334,6 +393,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     id: string; ox: number; oy: number; ow: number; oh: number
     kids: Array<{ id: string; x: number; y: number; isBox: boolean; w: number; h: number; scale: number }>
   } | null>(null)
+  // Id of the node currently being resized via NodeResizer, so the closing
+  // (resizing:false) frame can be told apart from a stray measurement change.
+  const resizingNodeRef = useRef<string | null>(null)
 
   // Drawing state
   const drawingRef = useRef<{ points: { x: number; y: number }[] } | null>(null)
@@ -616,6 +678,63 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         if (g.snapY != null) { ch.position.y = g.snapY; h = g.hLine }
       }
     }
+
+    // ── Resize (NodeResizer) edge snapping ─────────────────────────────────────
+    // Align the edge being dragged to other units, mirroring the drag-snap above,
+    // by mutating the dimensions/position changes in place before they're applied.
+    // `resizing === true` is a live frame; `=== false` is the closing frame (where
+    // we also persist the snapped size, since NodeResizer's onResizeEnd reports its
+    // own un-snapped figure); `undefined` is a measurement change we must ignore.
+    const dimSnap = changes.find(c => c.type === 'dimensions' && (c as { dimensions?: unknown }).dimensions) as
+      { id?: string; dimensions?: { width: number; height: number }; resizing?: boolean } | undefined
+    if (dimSnap?.dimensions && dimSnap.id) {
+      const id = dimSnap.id
+      const isLive = dimSnap.resizing === true
+      // Mark the resize as live before the node lookup so a transient absence from
+      // nodesRef on any single live frame can't stop the closing frame from being
+      // recognised (and the snapped size from being persisted).
+      if (isLive) resizingNodeRef.current = id
+      const isEnd = dimSnap.resizing === false && resizingNodeRef.current === id
+      const node = nodesRef.current.find(n => n.id === id)
+      const resizable = node && (node.type === 'shapeNode' || node.type === 'textNode' || node.type === 'portalNode' || node.type === 'claudeNode')
+      if (isLive && node && resizable) {
+        const [cw, chh] = getNodeWH(node)
+        const posC = changes.find(c => c.type === 'position' && (c as { id?: string }).id === id) as { position?: { x: number; y: number } } | undefined
+        const nx = posC?.position?.x ?? node.position.x
+        const ny = posC?.position?.y ?? node.position.y
+        const s = computeResizeSnap(
+          id,
+          { x: nx, y: ny, w: dimSnap.dimensions.width, h: dimSnap.dimensions.height },
+          { x: node.position.x, y: node.position.y, w: cw, h: chh },
+          nodesRef.current,
+          descendantsOf(id, nodesRef.current),
+        )
+        dimSnap.dimensions.width = s.w
+        dimSnap.dimensions.height = s.h
+        if (posC?.position) { posC.position.x = s.x; posC.position.y = s.y }
+        if (s.vLine != null) v = s.vLine
+        if (s.hLine != null) h = s.hLine
+      } else if (isEnd) {
+        resizingNodeRef.current = null
+        // Closing frame: NodeResizer's onEnd carries no position change and reports
+        // its own un-snapped width/height, so re-snapping here can't classify a
+        // left/top moving edge and would revert the live snap (jumping the anchored
+        // edge). Instead lock in the values the live frames already snapped — they
+        // live in `measured`, read by getNodeWH — and persist them after the
+        // component's own onResizeEnd (which fires synchronously with the un-snapped
+        // figure) so the snapped value is what survives a reload.
+        if (node && resizable) {
+          const [fw, fh] = getNodeWH(node)
+          dimSnap.dimensions.width = fw
+          dimSnap.dimensions.height = fh
+          queueMicrotask(() => {
+            const live = nodesRef.current.find(n => n.id === id)
+            if (live) saveElement(id, { ...live.data, width: fw, height: fh }, fw, fh)
+          })
+        }
+      }
+    }
+
     if (helperRef.current.v !== v || helperRef.current.h !== h) {
       helperRef.current = { v, h }
       setHelperLines({ v, h })
@@ -679,7 +798,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       }
       scheduleRefresh()
     }
-  }, [onNodesChangeRaw, setNodes, persistNodeFull, scheduleRefresh])
+  }, [onNodesChangeRaw, setNodes, persistNodeFull, scheduleRefresh, saveElement])
 
   // Capture descendants of the node about to be dragged so we can move them with it.
   const onNodeDragStart = useCallback((_e: unknown, node: Node) => {
