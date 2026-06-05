@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
 import { getAdminClaudeBilling, getClaudeApiEnabled } from '@/app/actions'
+import { isAdminEmail } from '@/lib/admin'
 import ClaudeApiSwitch from '@/components/ClaudeApiSwitch'
 
 function fmtUsd(n: number): string {
@@ -13,7 +14,7 @@ export default async function AdminConsolePage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  if (user?.email !== process.env.ADMIN_EMAIL) {
+  if (!isAdminEmail(user?.email)) {
     redirect('/')
   }
 

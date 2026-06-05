@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { isAdminEmail } from '@/lib/admin'
 import Sidebar from '@/components/Sidebar'
 import TabBar from '@/components/TabBar'
 import SubTabBar from '@/components/SubTabBar'
@@ -29,7 +30,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       .order('created_at', { ascending: true }),
   ])
 
-  const isAdmin = claims.email === process.env.ADMIN_EMAIL
+  // claims.email is normally present in the Supabase JWT; fall back to getUser only
+  // if it isn't, so the admin gate never silently fails on a missing claim.
+  let email = claims.email
+  if (!email) {
+    const { data: { user } } = await supabase.auth.getUser()
+    email = user?.email
+  }
+  const isAdmin = isAdminEmail(email)
 
   return (
     <div className="flex h-full min-h-screen">

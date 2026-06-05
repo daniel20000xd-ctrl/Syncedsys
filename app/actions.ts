@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
 import { encryptSecret, sha256Hex, randomToken } from '@/lib/crypto'
 import { billableUsd, freeAllowanceUsd, currentPeriodStartIso } from '@/lib/claude/pricing'
+import { isAdminEmail } from '@/lib/admin'
 import { GetObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { getR2Client, R2_BUCKET } from '@/lib/r2'
@@ -152,7 +153,7 @@ export type ClaudeBillingRow = {
 export async function getAdminClaudeBilling(): Promise<ClaudeBillingRow[]> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || user.email !== process.env.ADMIN_EMAIL) return []
+  if (!isAdminEmail(user?.email)) return []
 
   const admin = createAdminClient()
   const [allUsers, { data: rows }, { data: secrets }] = await Promise.all([
@@ -207,7 +208,7 @@ export async function getClaudeApiEnabled(): Promise<boolean> {
 export async function setClaudeApiEnabled(enabled: boolean): Promise<{ ok: boolean }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || user.email !== process.env.ADMIN_EMAIL) return { ok: false }
+  if (!isAdminEmail(user?.email)) return { ok: false }
   const admin = createAdminClient()
   const { error } = await admin.from('app_config')
     .upsert({ key: 'claude_api', enabled, updated_at: new Date().toISOString() }, { onConflict: 'key' })
