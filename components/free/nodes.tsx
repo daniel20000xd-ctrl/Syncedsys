@@ -10,6 +10,7 @@ import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab, g
 import { useRouter } from 'next/navigation'
 import StockPortal from './StockPortal'
 import SlidesPortal from './SlidesPortal'
+import GoogleCalendarPortal from './GoogleCalendarPortal'
 import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
@@ -1296,6 +1297,13 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             onUpdateContext={ctx => persist({ viewer_context: ctx })}
           />
         )}
+        {viewerKind === 'google-calendar' && (
+          <GoogleCalendarPortal
+            config={viewerConfig as { view?: 'month' | 'week' | 'day' }}
+            onPersistConfig={cfg => persist({ viewerKind: 'google-calendar', viewerConfig: cfg })}
+            onUpdateContext={ctx => persist({ viewer_context: ctx })}
+          />
+        )}
 
         {/* Empty state — shown when nothing is chosen yet */}
         {(!targetBoardId && !viewerKind) && (
@@ -1326,6 +1334,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 ? (viewerConfig.ticker ? `📈 ${viewerConfig.ticker}` : '📈 Stock Viewer')
                 : viewerKind === 'slides'
                 ? '🎨 Slides'
+                : viewerKind === 'google-calendar'
+                ? '📅 Google Calendar'
                 : openFile
                   ? openFile.name
                   : (canGoBack ? (viewName || 'Folder') : (target ? `↪ ${target.name}` : 'Portal'))}
@@ -1415,6 +1425,20 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 <Presentation size={12} className="text-indigo-500 shrink-0" />
                 <span>Slides Viewer</span>
                 {viewerKind === 'slides' && <span className="ml-auto text-[9px] text-indigo-500">active</span>}
+              </button>
+
+              <p className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1 mt-2">Google Workspace</p>
+              <button
+                onClick={e => { e.stopPropagation(); pickViewer('google-calendar') }}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md text-left transition-colors ${
+                  viewerKind === 'google-calendar'
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'text-gray-700 hover:bg-blue-50 hover:text-blue-700'
+                }`}
+              >
+                <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] bg-gradient-to-br from-blue-500 via-red-500 to-yellow-500 text-white text-[7px] font-bold shrink-0">G</span>
+                <span>Google Calendar</span>
+                {viewerKind === 'google-calendar' && <span className="ml-auto text-[9px] text-blue-500">active</span>}
               </button>
             </div>
 

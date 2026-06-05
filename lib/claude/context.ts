@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { formatCalendarContext } from '@/lib/google/calendar'
 
 // Builds the permission boundary and the system context for a board-scoped Claude.
 //
@@ -129,6 +130,16 @@ async function renderContext(
     }))
   }
 
+  // Pre-fetch the user's Google Calendar summary once if any google-calendar
+  // portal is in scope (the summary is per-user, not per-portal).
+  let googleCalendarCtx: string | null = null
+  if (elRows.some(e => e.type === 'portal' && (e.data?.viewerKind as string | undefined) === 'google-calendar')) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) googleCalendarCtx = await formatCalendarContext(user.id)
+    } catch {}
+  }
+
   const lines: string[] = []
   const seen = new Set<string>()
 
@@ -169,7 +180,17 @@ async function renderContext(
           (excerpt.trim() ? `:\n${indent}      text: ${JSON.stringify(excerpt)}` : ' (no extractable text)')
       }
       else if (e.type === 'portal') {
-        if (d.viewerKind === 'slides') {
+        if (d.viewerKind === 'google-calendar') {
+          const calCtx = googleCalendarCtx ?? (d.viewer_context ? String(d.viewer_context) : null)
+          if (calCtx) {
+            lines.push(`${indent}    element[${e.id}]: google-calendar-viewer`)
+            lines.push(`${indent}    ---BEGIN GOOGLE CALENDAR DATA---`)
+            for (const vline of calCtx.split('\n')) lines.push(`${indent}    ${vline}`)
+            lines.push(`${indent}    ---END GOOGLE CALENDAR DATA---`)
+            continue
+          }
+          label = `google-calendar-viewer (not connected)`
+        } else if (d.viewerKind === 'slides') {
           const slidesCtx = slidesCtxMap.get(e.id) ?? (d.viewer_context ? String(d.viewer_context) : null)
           if (slidesCtx) {
             lines.push(`${indent}    element[${e.id}]: slides-viewer`)

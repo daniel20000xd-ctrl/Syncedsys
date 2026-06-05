@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type Anthropic from '@anthropic-ai/sdk'
+import { listEvents, createEvent, updateEvent, deleteEvent } from '@/lib/google/calendar'
 
 // Tools exposed to the board-scoped Claude. READ tools are always available;
 // WRITE tools are only included when the user has enabled "Let Claude make
@@ -15,6 +16,19 @@ export const READ_TOOLS: Anthropic.Tool[] = [
       type: 'object',
       properties: { boardId: { type: 'string', description: 'The id of the board to read.' } },
       required: ['boardId'],
+    },
+  },
+  {
+    name: 'google_list_events',
+    description: 'List the user\'s Google Calendar events in a date range. start/end are ISO strings (YYYY-MM-DD or full ISO datetime). calendarId defaults to "primary".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        calendarId: { type: 'string', description: 'Calendar id, or "primary". Optional.' },
+        start: { type: 'string', description: 'Range start (ISO date or datetime).' },
+        end: { type: 'string', description: 'Range end (ISO date or datetime).' },
+      },
+      required: ['start', 'end'],
     },
   },
 ]
@@ -247,6 +261,52 @@ export const WRITE_TOOLS: Anthropic.Tool[] = [
         slide_ids: { type: 'array', items: { type: 'string' }, description: 'Slide IDs in the new order.' },
       },
       required: ['presentation_id', 'slide_ids'],
+    },
+  },
+  // ── Google Calendar tools ─────────────────────────────────────────────────
+  {
+    name: 'google_create_event',
+    description: 'Create a Google Calendar event. start_at/end_at are ISO datetimes (or YYYY-MM-DD when all_day). calendarId defaults to "primary".',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        calendarId: { type: 'string', description: 'Calendar id, or "primary". Optional.' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        start_at: { type: 'string', description: 'Event start (ISO datetime, or YYYY-MM-DD if all_day).' },
+        end_at: { type: 'string', description: 'Event end (ISO datetime, or YYYY-MM-DD if all_day).' },
+        all_day: { type: 'boolean' },
+      },
+      required: ['title', 'start_at', 'end_at'],
+    },
+  },
+  {
+    name: 'google_update_event',
+    description: 'Update an existing Google Calendar event. Pass only the fields to change.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        calendarId: { type: 'string', description: 'Calendar id, or "primary". Optional.' },
+        eventId: { type: 'string' },
+        title: { type: 'string' },
+        description: { type: 'string' },
+        start_at: { type: 'string' },
+        end_at: { type: 'string' },
+        all_day: { type: 'boolean' },
+      },
+      required: ['eventId'],
+    },
+  },
+  {
+    name: 'google_delete_event',
+    description: 'Delete a Google Calendar event.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        calendarId: { type: 'string', description: 'Calendar id, or "primary". Optional.' },
+        eventId: { type: 'string' },
+      },
+      required: ['eventId'],
     },
   },
 ]
@@ -497,6 +557,46 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
     case 'reorder_slides': {
       const data = await slidesCall(`/presentations/${String(input.presentation_id)}/reorder`, 'PUT', { slide_ids: input.slide_ids }, ctx)
       return JSON.stringify(data)
+    }
+
+    // ── Google Calendar tools ────────────────────────────────────────────────
+    // These act on the user's connected Google account (ctx.userId) via the
+    // shared lib/google/calendar helpers — the same operations the
+    // /api/google/calendar routes wrap — using googleFetch under the hood.
+    case 'google_list_events': {
+      const calendarId = (input.calendarId as string) || 'primary'
+      const items = await listEvents(ctx.userId, calendarId, String(input.start), String(input.end))
+      return JSON.stringify(items)
+    }
+
+    case 'google_create_event': {
+      const calendarId = (input.calendarId as string) || 'primary'
+      const created = await createEvent(ctx.userId, calendarId, {
+        title: input.title as string | undefined,
+        description: input.description as string | undefined,
+        start: input.start_at as string | undefined,
+        end: input.end_at as string | undefined,
+        allDay: input.all_day as boolean | undefined,
+      })
+      return JSON.stringify(created)
+    }
+
+    case 'google_update_event': {
+      const calendarId = (input.calendarId as string) || 'primary'
+      const updated = await updateEvent(ctx.userId, calendarId, String(input.eventId), {
+        title: input.title as string | undefined,
+        description: input.description as string | undefined,
+        start: input.start_at as string | undefined,
+        end: input.end_at as string | undefined,
+        allDay: input.all_day as boolean | undefined,
+      })
+      return JSON.stringify(updated)
+    }
+
+    case 'google_delete_event': {
+      const calendarId = (input.calendarId as string) || 'primary'
+      await deleteEvent(ctx.userId, calendarId, String(input.eventId))
+      return `Deleted event ${String(input.eventId)}.`
     }
 
     default:
