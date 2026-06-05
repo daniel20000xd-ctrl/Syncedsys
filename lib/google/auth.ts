@@ -1,5 +1,4 @@
 import crypto from 'crypto'
-import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encryptSecret, decryptSecret } from '@/lib/crypto'
 
@@ -108,11 +107,10 @@ export function getGoogleAuthUrl(userId: string, scopes: string[], redirectUri: 
 // Exchange the auth code for access + refresh tokens and store them encrypted.
 // Runs inside the OAuth callback, which carries the initiating user's session
 // cookies — so the current Supabase user is the account that started the flow.
-export async function exchangeCodeForTokens(code: string): Promise<void> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('Not authenticated')
-
+// userId is passed in by the callback route (which already called getUser for the
+// CSRF state check) so we don't call getUser a second time and race on the same
+// Supabase refresh token (would cause refresh_token_already_used).
+export async function exchangeCodeForTokens(code: string, userId: string): Promise<void> {
   const res = await fetch(GOOGLE_TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -141,7 +139,7 @@ export async function exchangeCodeForTokens(code: string): Promise<void> {
   // fall back to the stored one if this response somehow omits it.
   let refreshToken = tok.refresh_token
   if (!refreshToken) {
-    const existing = await readTokenRow(user.id)
+    const existing = await readTokenRow(userId)
     if (existing) refreshToken = decryptSecret(existing.refresh_token)
   }
   if (!refreshToken) throw new Error('Google did not return a refresh token')
@@ -152,7 +150,7 @@ export async function exchangeCodeForTokens(code: string): Promise<void> {
   const admin = createAdminClient()
   const { error } = await admin.from('user_google_tokens').upsert(
     {
-      user_id: user.id,
+      user_id: userId,
       access_token: encryptSecret(tok.access_token),
       refresh_token: encryptSecret(refreshToken),
       scopes,
