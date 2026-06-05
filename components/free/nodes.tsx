@@ -370,7 +370,7 @@ export function TextNode({ id, data, selected }: NodeProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const color = (data.color as string) || '#1f2937'
-  const fontSize = (data.fontSize as number) || 14
+  const fontSize = (data.fontSize as number) || 12
   const bgColor = (data.bgColor as string) || 'rgba(254,240,64,0.95)'
   const onSave = data.onSave as SaveFn | undefined
 

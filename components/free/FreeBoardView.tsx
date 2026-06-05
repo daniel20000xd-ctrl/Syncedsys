@@ -1514,7 +1514,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (tool !== 'text') return
     const op = getOverlayPoint(e.clientX, e.clientY)
     const flowPos = overlayToFlow(op.x, op.y)
-    addElement('text', flowPos.x, flowPos.y, { text: '', color: '#1f2937', fontSize: 14 }, 180, 140, { autoEdit: true })
+    addElement('text', flowPos.x, flowPos.y, { text: '', color: '#1f2937', fontSize: 12 }, 180, 140, { autoEdit: true })
     setTool('select') // drop the overlay so you can immediately type
   }
 
