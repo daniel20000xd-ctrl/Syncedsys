@@ -1,4 +1,6 @@
 import { headers } from 'next/headers'
+import Link from 'next/link'
+import { ArrowUpRight } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { getClaudeStatus, getClaudeUsage, getStorageUsage, syncStorageCounter, listMcpTokens } from '@/app/actions'
 import ClaudeKeySettings from '@/components/ClaudeKeySettings'
@@ -32,9 +34,12 @@ export default async function SettingsPage() {
           <h2 className="font-semibold text-gray-800 mb-3">Account</h2>
           <p className="text-sm text-gray-600">{user?.email}</p>
           {isAdmin && (
-            <span className="inline-block mt-2 text-xs bg-blue-100 text-blue-700 font-medium px-2.5 py-1 rounded-full">
-              Admin account
-            </span>
+            <Link
+              href="/admin"
+              className="inline-flex items-center gap-1 mt-2 text-xs bg-blue-100 text-blue-700 hover:bg-blue-200 font-medium px-2.5 py-1 rounded-full transition-colors"
+            >
+              Admin Console <ArrowUpRight size={12} />
+            </Link>
           )}
         </section>
 

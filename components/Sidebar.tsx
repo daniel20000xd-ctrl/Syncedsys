@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutGrid } from 'lucide-react'
+import { ChevronLeft, ChevronRight, LogOut, List, Settings, LayoutDashboard } from 'lucide-react'
 import type { Board, List as ListType } from '@/lib/types'
 import { useUnits } from '@/lib/unitsStore'
 import { useDocTabs } from '@/lib/docTabsStore'
@@ -110,12 +110,12 @@ export default function Sidebar({ boards, isAdmin }: { boards: Board[]; userId: 
       <div className="border-t border-white/10 p-2 space-y-0.5">
         {isAdmin && (
           <button
-            onClick={() => router.push('/overview')}
-            className={`w-full flex items-center gap-2 px-2 py-2 rounded text-sm transition-colors ${pathname === '/overview' ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'} ${collapsed ? 'justify-center' : ''}`}
-            title={collapsed ? 'Overview' : undefined}
+            onClick={() => router.push('/admin')}
+            className={`w-full flex items-center gap-2 px-2 py-2 rounded text-sm transition-colors ${pathname === '/admin' ? 'bg-white/20 text-white' : 'text-white/60 hover:bg-white/10 hover:text-white'} ${collapsed ? 'justify-center' : ''}`}
+            title={collapsed ? 'Admin Console' : undefined}
           >
-            <LayoutGrid size={15} />
-            {!collapsed && <span>Overview</span>}
+            <LayoutDashboard size={15} />
+            {!collapsed && <span>Admin Console</span>}
           </button>
         )}
         <button
