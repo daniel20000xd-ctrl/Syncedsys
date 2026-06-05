@@ -1472,7 +1472,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         )}
         {viewerKind === 'text' && (
           <TextPortal
-            config={viewerConfig as Record<string, unknown>}
+            config={viewerConfig as { boardId?: string }}
             onPersistConfig={cfg => persist({ viewerKind: 'text', viewerConfig: cfg })}
             onUpdateContext={ctx => persist({ viewer_context: ctx })}
           />
