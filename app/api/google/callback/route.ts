@@ -15,31 +15,25 @@ export async function GET(request: Request) {
   const failure = `${origin}/settings/connected-apps?error=google_auth_failed`
 
   if (oauthError || !code) {
-    console.error('[google/callback] aborted before exchange:', { oauthError, hasCode: !!code })
-    return NextResponse.redirect(failure)
+    return NextResponse.redirect(`${failure}&reason=no_code`)
   }
 
   try {
-    // The redirect carries the initiating user's session cookies; verify the
-    // state's userId matches the signed-in user before storing anything (CSRF).
     const decoded = state ? decodeState(state) : null
     const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user || !decoded || decoded.userId !== user.id) {
-      console.error('[google/callback] session/state mismatch:', {
-        hasUser: !!user,
-        hasState: !!decoded,
-        match: !!user && !!decoded && decoded.userId === user.id,
-      })
-      return NextResponse.redirect(failure)
+    if (!user) {
+      return NextResponse.redirect(`${failure}&reason=no_session`)
+    }
+    if (!decoded || decoded.userId !== user.id) {
+      return NextResponse.redirect(`${failure}&reason=state_mismatch`)
     }
 
     await exchangeCodeForTokens(code, user.id)
     return NextResponse.redirect(success)
   } catch (e) {
-    // Surface the real reason server-side — token-exchange failures and a missing
-    // user_google_tokens table both land here and are otherwise invisible.
-    console.error('[google/callback] token exchange failed:', e instanceof Error ? e.message : e)
-    return NextResponse.redirect(failure)
+    const msg = e instanceof Error ? e.message : String(e)
+    const reason = encodeURIComponent(msg.slice(0, 120))
+    return NextResponse.redirect(`${failure}&reason=${reason}`)
   }
 }
