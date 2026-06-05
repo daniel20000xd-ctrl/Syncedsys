@@ -29,7 +29,11 @@ export async function updateSession(request: NextRequest) {
     !user &&
     !request.nextUrl.pathname.startsWith('/login') &&
     !request.nextUrl.pathname.startsWith('/signup') &&
-    !request.nextUrl.pathname.startsWith('/auth/')
+    !request.nextUrl.pathname.startsWith('/auth/') &&
+    // API routes authenticate themselves (bearer tokens for MCP/iOS sync/device
+    // pairing, or their own cookie check) and must return JSON status codes — never
+    // an HTML login redirect, which a cookieless API client cannot follow.
+    !request.nextUrl.pathname.startsWith('/api/')
   ) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'

@@ -1,5 +1,5 @@
 -- ── "Bring your own Claude" — MCP per-user access tokens ──────────────────────
--- Run once in the Supabase SQL editor. Idempotent.
+-- Run once in the Supabase SQL editor. Idempotent — safe to re-run.
 --
 -- Lets a user mint opaque tokens (stored only as a SHA-256 hash) so external
 -- Claude clients can authenticate to /api/mcp as them, without an Anthropic key.
@@ -25,10 +25,35 @@ create policy "users manage their mcp tokens" on mcp_tokens for all
 -- The MCP route resolves tokens via the service role (bypasses RLS), so this
 -- policy only governs the user-facing list/create/revoke in Settings.
 
--- ── Close the audit-table leak ────────────────────────────────────────────────
--- snapshots & claude_actions previously had no user_id and no RLS — meaning any
--- authenticated user could read every user's snapshotted board content. Scope them.
+-- ── Audit tables: snapshots & claude_actions ──────────────────────────────────
+-- The MCP write path calls snapshotBefore()/logAction() on every mutation. These
+-- create-if-not-exists blocks use the canonical schema (see supabase/schema.sql)
+-- with user_id + RLS already present, so this works whether the tables pre-exist
+-- (e.g. from an earlier session) or not. The follow-up ALTERs backfill user_id on
+-- any legacy copy that predates the column; they are no-ops on a fresh create.
 
+create table if not exists snapshots (
+  id           uuid        primary key default gen_random_uuid(),
+  user_id      uuid        references auth.users(id) on delete cascade,
+  entity_type  text        not null,                 -- 'board' | 'list' | 'card' | 'element' | 'edge'
+  entity_id    uuid        not null,
+  data         jsonb       not null,
+  changed_at   timestamptz not null default now(),
+  triggered_by text
+);
+create index if not exists snapshots_entity_idx on snapshots(entity_type, entity_id);
+
+create table if not exists claude_actions (
+  id           uuid        primary key default gen_random_uuid(),
+  user_id      uuid        references auth.users(id) on delete cascade,
+  tool         text        not null,
+  params       jsonb       not null default '{}',
+  affected_ids uuid[]      not null default '{}',
+  executed_at  timestamptz not null default now()
+);
+create index if not exists claude_actions_tool_idx on claude_actions(tool);
+
+-- Backfill user_id on any legacy table that predates the column (no-op on fresh create).
 alter table snapshots      add column if not exists user_id uuid references auth.users(id) on delete cascade;
 alter table claude_actions add column if not exists user_id uuid references auth.users(id) on delete cascade;
 
