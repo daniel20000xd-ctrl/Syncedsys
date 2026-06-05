@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { formatCalendarContext } from '@/lib/google/calendar'
 import { formatSheetsContext } from '@/lib/google/sheets'
+import { formatDocsContext } from '@/lib/google/docs'
 
 // Builds the permission boundary and the system context for a board-scoped Claude.
 //
@@ -158,6 +159,22 @@ async function renderContext(
     } catch {}
   }
 
+  // Pre-fetch each google-docs portal's summary (per-portal — depends on its documentId).
+  const docsCtxMap = new Map<string, string>()
+  const docsPortals = elRows.filter(e => e.type === 'portal' && (e.data?.viewerKind as string | undefined) === 'google-docs')
+  if (docsPortals.length) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        await Promise.all(docsPortals.map(async e => {
+          const cfg = e.data?.viewerConfig as { documentId?: string } | undefined
+          if (!cfg?.documentId) return
+          try { docsCtxMap.set(e.id, await formatDocsContext(user.id, cfg.documentId)) } catch {}
+        }))
+      }
+    } catch {}
+  }
+
   const lines: string[] = []
   const seen = new Set<string>()
 
@@ -198,7 +215,17 @@ async function renderContext(
           (excerpt.trim() ? `:\n${indent}      text: ${JSON.stringify(excerpt)}` : ' (no extractable text)')
       }
       else if (e.type === 'portal') {
-        if (d.viewerKind === 'google-sheets') {
+        if (d.viewerKind === 'google-docs') {
+          const docsCtx = docsCtxMap.get(e.id) ?? (d.viewer_context ? String(d.viewer_context) : null)
+          if (docsCtx) {
+            lines.push(`${indent}    element[${e.id}]: google-docs-viewer`)
+            lines.push(`${indent}    ---BEGIN GOOGLE DOCS DATA---`)
+            for (const vline of docsCtx.split('\n')) lines.push(`${indent}    ${vline}`)
+            lines.push(`${indent}    ---END GOOGLE DOCS DATA---`)
+            continue
+          }
+          label = `google-docs-viewer (no document)`
+        } else if (d.viewerKind === 'google-sheets') {
           const sheetsCtx = sheetsCtxMap.get(e.id) ?? (d.viewer_context ? String(d.viewer_context) : null)
           if (sheetsCtx) {
             lines.push(`${indent}    element[${e.id}]: google-sheets-viewer`)

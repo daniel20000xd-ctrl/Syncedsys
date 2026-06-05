@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type Anthropic from '@anthropic-ai/sdk'
 import { listEvents, createEvent, updateEvent, deleteEvent } from '@/lib/google/calendar'
 import { readRange, writeRange, appendRow, clearRange, batchUpdate } from '@/lib/google/sheets'
+import { getDocument, documentPlainText } from '@/lib/google/docs'
 
 // Tools exposed to the board-scoped Claude. READ tools are always available;
 // WRITE tools are only included when the user has enabled "Let Claude make
@@ -42,6 +43,27 @@ export const READ_TOOLS: Anthropic.Tool[] = [
         range: { type: 'string', description: 'A1 range, e.g. Sheet1!A1:C10.' },
       },
       required: ['spreadsheetId', 'range'],
+    },
+  },
+  {
+    name: 'docs_get_content',
+    description: 'Get the full plain text of a Google Doc (read-only).',
+    input_schema: {
+      type: 'object',
+      properties: { documentId: { type: 'string' } },
+      required: ['documentId'],
+    },
+  },
+  {
+    name: 'docs_search',
+    description: 'Search a Google Doc for a query and return the matching paragraphs with surrounding context (read-only).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        documentId: { type: 'string' },
+        query: { type: 'string' },
+      },
+      required: ['documentId', 'query'],
     },
   },
 ]
@@ -689,6 +711,28 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
     case 'sheets_create_sheet': {
       await batchUpdate(ctx.userId, String(input.spreadsheetId), [{ addSheet: { properties: { title: String(input.title) } } }])
       return `Created sheet "${String(input.title)}".`
+    }
+
+    // ── Google Docs tools (read-only) ────────────────────────────────────────
+    case 'docs_get_content': {
+      const doc = await getDocument(ctx.userId, String(input.documentId))
+      return documentPlainText(doc)
+    }
+
+    case 'docs_search': {
+      const doc = await getDocument(ctx.userId, String(input.documentId))
+      const q = String(input.query).toLowerCase()
+      const paras = documentPlainText(doc).split('\n')
+      const results = paras
+        .map((text, i) => ({ text, i }))
+        .filter(p => p.text.toLowerCase().includes(q))
+        .slice(0, 25)
+        .map(p => ({
+          paragraph: p.i + 1,
+          text: p.text,
+          context: [paras[p.i - 1], p.text, paras[p.i + 1]].filter(Boolean).join(' '),
+        }))
+      return JSON.stringify({ matches: results.length, results })
     }
 
     default:

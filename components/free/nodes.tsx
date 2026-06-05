@@ -12,6 +12,7 @@ import StockPortal from './StockPortal'
 import SlidesPortal from './SlidesPortal'
 import GoogleCalendarPortal from './GoogleCalendarPortal'
 import GoogleSheetsPortal from './GoogleSheetsPortal'
+import GoogleDocsPortal from './GoogleDocsPortal'
 import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
@@ -1312,6 +1313,13 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             onUpdateContext={ctx => persist({ viewer_context: ctx })}
           />
         )}
+        {viewerKind === 'google-docs' && (
+          <GoogleDocsPortal
+            config={viewerConfig as { documentId?: string }}
+            onPersistConfig={cfg => persist({ viewerKind: 'google-docs', viewerConfig: cfg })}
+            onUpdateContext={ctx => persist({ viewer_context: ctx })}
+          />
+        )}
 
         {/* Empty state — shown when nothing is chosen yet */}
         {(!targetBoardId && !viewerKind) && (
@@ -1346,6 +1354,8 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 ? '📅 Google Calendar'
                 : viewerKind === 'google-sheets'
                 ? '📊 Google Sheets'
+                : viewerKind === 'google-docs'
+                ? '📄 Google Docs'
                 : openFile
                   ? openFile.name
                   : (canGoBack ? (viewName || 'Folder') : (target ? `↪ ${target.name}` : 'Portal'))}
@@ -1461,6 +1471,18 @@ export function PortalNode({ id, data, selected }: NodeProps) {
                 <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] bg-gradient-to-br from-green-500 to-emerald-600 text-white text-[7px] font-bold shrink-0">S</span>
                 <span>Google Sheets</span>
                 {viewerKind === 'google-sheets' && <span className="ml-auto text-[9px] text-green-500">active</span>}
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); pickViewer('google-docs') }}
+                className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md text-left transition-colors ${
+                  viewerKind === 'google-docs'
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'text-gray-700 hover:bg-blue-50 hover:text-blue-700'
+                }`}
+              >
+                <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] bg-gradient-to-br from-blue-500 to-blue-700 text-white text-[7px] font-bold shrink-0">D</span>
+                <span>Google Docs</span>
+                {viewerKind === 'google-docs' && <span className="ml-auto text-[9px] text-blue-500">active</span>}
               </button>
             </div>
 
