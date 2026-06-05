@@ -57,7 +57,7 @@ const TOOL_ICONS: Record<Tool, LucideIcon> = {
   portal: Frame,
   claude: Sparkles,
 }
-type ShapeType = 'rect' | 'circle' | 'diamond'
+type ShapeType = 'rect' | 'circle' | 'arrow'
 
 const SHAPE_COLORS = ['#93c5fd','#6ee7b7','#fca5a5','#fcd34d','#c4b5fd','#f9a8d4']
 
@@ -1465,7 +1465,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     shapeAnchorRef.current = null
     setShapePreview(null)
     const flowPos = overlayToFlow(x, y)
-    addElement('shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h }, w, h)
+    addElement('shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h, rotation: 0 }, w, h)
     // Stay in shape mode for further shapes; click Select to stop
   }
 
@@ -2132,9 +2132,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
                 rx={shapePreview.w / 2} ry={shapePreview.h / 2}
                 fill={shapeColorPicker} fillOpacity={0.5} stroke={shapeColorPicker} strokeWidth={2} strokeDasharray="4 3"
               />
-            ) : selectedShape === 'diamond' ? (
-              <polygon
-                points={`${shapePreview.x + shapePreview.w / 2},${shapePreview.y} ${shapePreview.x + shapePreview.w},${shapePreview.y + shapePreview.h / 2} ${shapePreview.x + shapePreview.w / 2},${shapePreview.y + shapePreview.h} ${shapePreview.x},${shapePreview.y + shapePreview.h / 2}`}
+            ) : selectedShape === 'arrow' ? (
+              <path
+                d={`M ${shapePreview.x} ${shapePreview.y + shapePreview.h * 0.32} L ${shapePreview.x + shapePreview.w * 0.62} ${shapePreview.y + shapePreview.h * 0.32} L ${shapePreview.x + shapePreview.w * 0.62} ${shapePreview.y + shapePreview.h * 0.08} L ${shapePreview.x + shapePreview.w} ${shapePreview.y + shapePreview.h * 0.5} L ${shapePreview.x + shapePreview.w * 0.62} ${shapePreview.y + shapePreview.h * 0.92} L ${shapePreview.x + shapePreview.w * 0.62} ${shapePreview.y + shapePreview.h * 0.68} L ${shapePreview.x} ${shapePreview.y + shapePreview.h * 0.68} Z`}
                 fill={shapeColorPicker} fillOpacity={0.5} stroke={shapeColorPicker} strokeWidth={2} strokeDasharray="4 3"
               />
             ) : (
@@ -2196,7 +2196,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         )}
         {tool === 'shape' && (
           <div className="flex flex-col gap-1 mt-0.5 pt-1 border-t border-gray-100 w-full items-center">
-            {(['rect', 'circle', 'diamond'] as ShapeType[]).map(s => (
+            {(['rect', 'circle', 'arrow'] as ShapeType[]).map(s => (
               <button key={s} onClick={() => setSelectedShape(s)} className={`text-[8px] px-1 py-0.5 rounded border w-full text-center ${selectedShape === s ? 'bg-blue-100 border-blue-400' : 'border-gray-200 text-gray-600'}`}>{s}</button>
             ))}
             <div className="flex flex-col items-center gap-1 mt-0.5">

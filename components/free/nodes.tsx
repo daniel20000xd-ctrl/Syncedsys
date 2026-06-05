@@ -277,11 +277,12 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
   const fill = (data.fill as string) || '#93c5fd'
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState((data.label as string) || '')
+  const [rotation, setRotation] = useState((data.rotation as number) || 0)
   const { updateNodeData } = useReactFlow()
   const onSave = data.onSave as SaveFn | undefined
   const onHold = data.onHold as ((id: string) => void) | undefined
 
-  // Font size tracks the shape's actual rendered size (scroll-resize or drag-resize)
+  // Font size tracks the shape's actual rendered size
   const innerRef = useRef<HTMLDivElement>(null)
   const [fontSize, setFontSize] = useState(14)
   useEffect(() => {
@@ -295,47 +296,112 @@ export function ShapeNode({ id, data, selected }: NodeProps) {
     return () => ro.disconnect()
   }, [])
 
-  const shapeClass = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : 'rounded-lg'
+  // Keep rotation in sync if data changes externally
+  useEffect(() => { setRotation((data.rotation as number) || 0) }, [data.rotation])
+
+  const shapeClass = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : ''
 
   function commit() {
     updateNodeData(id, { ...data, label: text })
     setEditing(false)
-    onSave?.(id, { shape, fill, label: text })
+    onSave?.(id, { shape, fill, label: text, rotation })
+  }
+
+  // ── Rotation handle (arrow only) ──
+  const rotateCenterRef = useRef<{ x: number; y: number } | null>(null)
+  const rotatingRef = useRef(false)
+
+  function onRotatePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    e.stopPropagation()
+    e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    rotatingRef.current = true
+    const node = (e.currentTarget as HTMLElement).closest('.react-flow__node') as HTMLElement | null
+    if (node) {
+      const r = node.getBoundingClientRect()
+      rotateCenterRef.current = { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    }
+  }
+
+  function onRotatePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!rotatingRef.current || !rotateCenterRef.current) return
+    const dx = e.clientX - rotateCenterRef.current.x
+    const dy = e.clientY - rotateCenterRef.current.y
+    const deg = Math.round(Math.atan2(dy, dx) * 180 / Math.PI) + 90
+    setRotation(deg)
+  }
+
+  function onRotatePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!rotatingRef.current) return
+    rotatingRef.current = false
+    rotateCenterRef.current = null
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+    const deg = rotation
+    updateNodeData(id, { ...data, rotation: deg })
+    onSave?.(id, { shape, fill, label: text, rotation: deg })
   }
 
   return (
     <div className="relative group select-none w-full h-full" onMouseDown={() => onHold?.(id)}>
-      {/* Drag the edges/corners to transform freely (shown when selected) */}
       <NodeResizer
         minWidth={40}
         minHeight={30}
         isVisible={!!selected}
         lineClassName="!border-blue-400"
-        handleClassName="!bg-white !border-2 !border-blue-400 !w-2.5 !h-2.5 !rounded-sm"
-        onResizeEnd={(_, p) => onSave?.(id, { shape, fill, label: text }, p.width, p.height)}
+        handleClassName="!bg-white !border-2 !border-blue-400 !w-4 !h-4 !rounded-sm"
+        onResizeEnd={(_, p) => onSave?.(id, { shape, fill, label: text, rotation }, p.width, p.height)}
       />
       <SideHandles color="!bg-gray-500" />
-      <div
-        ref={innerRef}
-        className={`w-full h-full flex items-center justify-center shadow ${shapeClass}`}
-        style={{ backgroundColor: fill }}
-        onClick={() => setEditing(true)}
-        title="Click to edit text"
-      >
-        {editing ? (
-          <textarea
-            autoFocus
-            value={text}
-            onChange={e => setText(e.target.value)}
-            onBlur={commit}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
-            style={{ fontSize }}
-            className={`nodrag w-4/5 h-3/5 resize-none text-center bg-white/20 rounded focus:outline-none text-white font-medium leading-tight ${shape === 'diamond' ? '-rotate-45' : ''}`}
-          />
-        ) : (
-          <span style={{ fontSize }} className={`font-medium text-white text-center px-1 break-words leading-tight ${shape === 'diamond' ? '-rotate-45' : ''}`}>{text || '…'}</span>
-        )}
-      </div>
+
+      {/* Rotation handle — only for arrow, shown when selected */}
+      {shape === 'arrow' && selected && (
+        <div
+          className="nodrag absolute z-20 cursor-grab active:cursor-grabbing flex items-center justify-center"
+          style={{ top: -28, left: '50%', transform: 'translateX(-50%)', width: 20, height: 20 }}
+          title="Drag to rotate"
+          onPointerDown={onRotatePointerDown}
+          onPointerMove={onRotatePointerMove}
+          onPointerUp={onRotatePointerUp}
+        >
+          <div className="w-5 h-5 bg-white border-2 border-blue-400 rounded-full shadow flex items-center justify-center select-none">
+            <svg viewBox="0 0 12 12" width={10} height={10} fill="none">
+              <path d="M10 6A4 4 0 1 1 6 2" stroke="#3b82f6" strokeWidth={1.5} strokeLinecap="round"/>
+              <path d="M6 0l2 2-2 2" stroke="#3b82f6" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+        </div>
+      )}
+
+      {shape === 'arrow' ? (
+        <div ref={innerRef} className="w-full h-full flex items-center justify-center" style={{ transform: `rotate(${rotation}deg)` }}>
+          <svg viewBox="0 0 100 50" className="w-full h-full" style={{ filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.25))' }} preserveAspectRatio="none">
+            <path d="M 0 16 L 62 16 L 62 4 L 100 25 L 62 46 L 62 34 L 0 34 Z" fill={fill} />
+          </svg>
+        </div>
+      ) : (
+        <div
+          ref={innerRef}
+          className={`w-full h-full flex items-center justify-center shadow ${shapeClass}`}
+          style={{ backgroundColor: fill }}
+          onClick={() => setEditing(true)}
+          title="Click to edit text"
+        >
+          {editing ? (
+            <textarea
+              autoFocus
+              value={text}
+              onChange={e => setText(e.target.value)}
+              onBlur={commit}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit() } }}
+              style={{ fontSize }}
+              className={`nodrag w-4/5 h-3/5 resize-none text-center bg-white/20 rounded focus:outline-none text-white font-medium leading-tight ${shape === 'diamond' ? '-rotate-45' : ''}`}
+            />
+          ) : (
+            <span style={{ fontSize }} className={`font-medium text-white text-center px-1 break-words leading-tight ${shape === 'diamond' ? '-rotate-45' : ''}`}>{text || '…'}</span>
+          )}
+        </div>
+      )}
+
       <button
         className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500 z-10"
         onClick={() => (data.onDelete as (id: string) => void)(id)}
@@ -404,7 +470,7 @@ export function TextNode({ id, data, selected }: NodeProps) {
       className="relative group w-full h-full flex flex-col"
       style={{
         backgroundColor: bgColor,
-        borderRadius: 4,
+        borderRadius: 0,
         boxShadow: '2px 3px 10px rgba(0,0,0,0.20)',
       }}
     >
@@ -413,7 +479,7 @@ export function TextNode({ id, data, selected }: NodeProps) {
         minHeight={80}
         isVisible={!!selected}
         lineClassName="!border-blue-400"
-        handleClassName="!bg-white !border-2 !border-blue-400 !w-2.5 !h-2.5 !rounded-sm"
+        handleClassName="!bg-white !border-2 !border-blue-400 !w-4 !h-4 !rounded-sm"
         onResizeEnd={(_, p) => onSave?.(id, { text, color, fontSize, bgColor }, p.width, p.height)}
       />
       <SideHandles color="!bg-yellow-400" />
@@ -859,7 +925,7 @@ export function ClaudeNode({ id, data, selected }: NodeProps) {
         minHeight={260}
         isVisible={!!selected}
         lineClassName="!border-[#D97757]"
-        handleClassName="!bg-white !border-2 !border-[#D97757] !w-2.5 !h-2.5 !rounded-sm"
+        handleClassName="!bg-white !border-2 !border-[#D97757] !w-4 !h-4 !rounded-sm"
       />
       <SideHandles color="!bg-[#D97757]" />
       <div className="claude-node-glow w-full h-full rounded-xl overflow-hidden ring-1 ring-[#D97757]/40 bg-[#30302E] flex flex-col">
@@ -1175,6 +1241,24 @@ export function PortalNode({ id, data, selected }: NodeProps) {
     persist({ locked: !locked, vx: pan.x, vy: pan.y, zoom, fitted: true })
   }
 
+  async function pickBoard(boardId: string) {
+    setChoosing(false)
+    fittedRef.current = null
+    const bName = boards.find(b => b.id === boardId)?.name ?? null
+    persist({ targetBoardId: boardId, targetBoardName: bName, viewerKind: null, viewerConfig: null, viewer_context: null })
+    if (home) {
+      const { createClient } = await import('@/lib/supabase/client')
+      const { data: bd } = await createClient().from('boards').select('mode').eq('id', boardId).single()
+      if (((bd?.mode as string) ?? 'classic') === 'classic') ensureMirrorPortal(boardId, home).catch(() => {})
+    }
+  }
+
+  function pickViewer(kind: string) {
+    setChoosing(false)
+    // Clear any board target when switching to a viewer
+    persist({ viewerKind: kind, viewerConfig: {}, targetBoardId: null })
+  }
+
   return (
     <div className="relative group w-full h-full" onMouseDown={() => onHold?.(id)}>
       <NodeResizer
@@ -1182,7 +1266,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
         minHeight={90}
         isVisible={!!selected}
         lineClassName="!border-fuchsia-400"
-        handleClassName="!bg-white !border-2 !border-fuchsia-400 !w-2.5 !h-2.5 !rounded-sm"
+        handleClassName="!bg-white !border-2 !border-fuchsia-400 !w-4 !h-4 !rounded-sm"
         onResizeEnd={(_, p) => persist({ width: p.width, height: p.height })}
       />
       <SideHandles color="!bg-fuchsia-500" />
@@ -1321,15 +1405,79 @@ export function PortalNode({ id, data, selected }: NodeProps) {
           />
         )}
 
-        {/* Empty state — shown when nothing is chosen yet */}
+        {/* Empty state — two-pane selector shown directly inside the portal */}
         {(!targetBoardId && !viewerKind) && (
-          <div className="absolute inset-0 flex items-center justify-center border-2 border-dashed border-fuchsia-400/60">
-            <button
-              onClick={e => { e.stopPropagation(); setChoosing(v => !v) }}
-              className="nodrag bg-fuchsia-500 hover:bg-fuchsia-600 text-white text-xs px-3 py-1.5 rounded-lg shadow"
-            >
-              Choose…
-            </button>
+          <div className="absolute inset-0 flex border-2 border-dashed border-fuchsia-400/60 overflow-hidden bg-[#1d2125]">
+            {/* Left: Tools / viewers */}
+            <div className="flex-1 flex flex-col border-r border-white/10 overflow-y-auto p-2">
+              <p className="text-[9px] font-semibold text-fuchsia-300/70 uppercase tracking-wider mb-1.5 px-1">Tools</p>
+              {[
+                { kind: 'stocks',           icon: '📈', label: 'Stock Viewer',      accent: 'text-green-400' },
+                { kind: 'slides',           icon: '🎨', label: 'Slides',            accent: 'text-indigo-400' },
+                { kind: 'google-calendar',  icon: '📅', label: 'Google Calendar',   accent: 'text-blue-400' },
+                { kind: 'google-sheets',    icon: '📊', label: 'Google Sheets',     accent: 'text-emerald-400' },
+                { kind: 'google-docs',      icon: '📄', label: 'Google Docs',       accent: 'text-sky-400' },
+              ].map(v => (
+                <button
+                  key={v.kind}
+                  onClick={e => { e.stopPropagation(); pickViewer(v.kind) }}
+                  className={`nodrag flex items-center gap-1.5 px-2 py-1.5 rounded-md text-left text-xs transition-colors text-white/70 hover:bg-white/10 hover:text-white`}
+                >
+                  <span>{v.icon}</span>
+                  <span>{v.label}</span>
+                </button>
+              ))}
+            </div>
+            {/* Right: Tabs / boards */}
+            <div className="flex-1 flex flex-col overflow-y-auto p-2">
+              <p className="text-[9px] font-semibold text-fuchsia-300/70 uppercase tracking-wider mb-1.5 px-1">Tabs</p>
+              {boards.length === 0 && <p className="text-[10px] text-white/30 px-1">Loading…</p>}
+              {boards.filter(b => !b.parent_id).map(b => {
+                const children = boards.filter(c => c.parent_id === b.id)
+                const isHome = b.id === home
+                return (
+                  <div key={b.id}>
+                    <button
+                      onClick={isHome ? undefined : e => { e.stopPropagation(); pickBoard(b.id) }}
+                      className={`nodrag w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-left text-xs transition-colors ${
+                        isHome ? 'text-white/30 cursor-default' : 'text-white/70 hover:bg-white/10 hover:text-white'
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: b.color }} />
+                      <span className="truncate">{b.name}</span>
+                      {isHome && <span className="ml-auto text-[9px] shrink-0">here</span>}
+                    </button>
+                    {children.map(c => (
+                      <button
+                        key={c.id}
+                        onClick={c.id === home ? undefined : e => { e.stopPropagation(); pickBoard(c.id) }}
+                        className={`nodrag w-full flex items-center gap-1.5 pl-4 pr-2 py-1 rounded-md text-left text-[11px] transition-colors ${
+                          c.id === home ? 'text-white/30 cursor-default' : 'text-white/60 hover:bg-white/10 hover:text-white'
+                        }`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full shrink-0 opacity-70" style={{ backgroundColor: c.color }} />
+                        <span className="truncate">{c.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )
+              })}
+              {home && (
+                <button
+                  onClick={async e => {
+                    e.stopPropagation()
+                    setChoosing(false)
+                    const homeBoard = boards.find(b => b.id === home)
+                    const sub = await createSubTab(home, 'New tab', homeBoard?.color ?? '#0079bf', 'classic')
+                    fittedRef.current = null
+                    persist({ targetBoardId: sub.id, viewerKind: null, viewerConfig: null, viewer_context: null })
+                  }}
+                  className="nodrag flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-fuchsia-300/70 hover:text-fuchsia-300 text-left mt-1 border-t border-white/10 pt-2 w-full"
+                >
+                  <span>＋</span> New sub-tab
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -1392,24 +1540,6 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       {/* Tab chooser — rendered OUTSIDE overflow-hidden so it is never clipped.
           onWheel stops scroll from zooming the main canvas while the list is open. */}
       {choosing && (() => {
-        async function pickBoard(boardId: string) {
-          setChoosing(false)
-          fittedRef.current = null
-          const bName = boards.find(b => b.id === boardId)?.name ?? null
-          persist({ targetBoardId: boardId, targetBoardName: bName, viewerKind: null, viewerConfig: null, viewer_context: null })
-          if (home) {
-            const { createClient } = await import('@/lib/supabase/client')
-            const { data: bd } = await createClient().from('boards').select('mode').eq('id', boardId).single()
-            if (((bd?.mode as string) ?? 'classic') === 'classic') ensureMirrorPortal(boardId, home).catch(() => {})
-          }
-        }
-
-        function pickViewer(kind: string) {
-          setChoosing(false)
-          // Clear any board target when switching to a viewer
-          persist({ viewerKind: kind, viewerConfig: {}, targetBoardId: null })
-        }
-
         const topBoards = boards.filter(b => !b.parent_id)
         const childrenOf = (pid: string) => boards.filter(b => b.parent_id === pid)
 
