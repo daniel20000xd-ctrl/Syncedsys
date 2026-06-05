@@ -340,10 +340,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   const svgOverlayRef = useRef<SVGSVGElement>(null)
   const [currentPath, setCurrentPath] = useState<string>('')
 
-  // Shape click-move-click state (overlay-relative coords)
-  // shapeAnchor is a ref so reads in pointer handlers are always synchronous —
-  // on dense boards a state update wouldn't commit before the next handler fires.
+  // Shape/portal/claude press-drag-release state.
+  // shapeAnchorRef holds the overlay-relative press point (drives the live preview);
+  // shapeFlowAnchorRef holds the same point in flow coords, captured at press time so
+  // the committed box is sized in flow units (correct at any zoom) and lands exactly
+  // where it was drawn regardless of viewport changes mid-gesture. Both are refs so
+  // reads in pointer handlers are synchronous.
   const shapeAnchorRef = useRef<{ x: number; y: number } | null>(null)
+  const shapeFlowAnchorRef = useRef<{ x: number; y: number } | null>(null)
+  // The tool the box gesture STARTED with, so a mid-drag tool switch still commits
+  // the type you began drawing rather than whatever is active at release.
+  const boxToolRef = useRef<Tool | null>(null)
   const [shapePreview, setShapePreview] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
 
   // Scale on hold+scroll
@@ -1358,8 +1365,11 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         try {
           const res = await fetch(`${STORAGE_URL}/api/storage/upload`, { method: 'POST', body: form })
           if (!res.ok) { console.error('Image upload failed:', res.status); return }
-          const { key, presignedUrl } = await res.json() as { key: string; presignedUrl: string }
-          addElement('image', x, y, { url: presignedUrl, storagePath: key, sizeBytes: file.size, alt: file.name })
+          const { key, presignedUrl } = await res.json() as { key: string; presignedUrl?: string }
+          if (!key) { console.error('Image upload returned no storage key'); return }
+          // storagePath is the source of truth — ImageNode re-mints a fresh read URL from
+          // it on load. Only persist url when we actually got one (it's a short-lived hint).
+          addElement('image', x, y, { ...(presignedUrl ? { url: presignedUrl } : {}), storagePath: key, sizeBytes: file.size, alt: file.name })
         } catch (err) {
           console.error('Image upload error:', err)
         }
@@ -1448,65 +1458,60 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     // Stay in draw mode for further strokes; click Select to stop
   }
 
-  // ── Shape: click to anchor, move to size (live preview), click again to commit ──
-  function onShapePointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (tool !== 'shape') return
+  // ── Shape / Portal / Claude: press, drag to size (live preview), release to commit ──
+  // One press-drag-release gesture, like the draw tool. The press point is captured in
+  // flow coords so the committed box is sized in flow units (matches the on-screen drag
+  // at any zoom) and lands exactly where it was drawn.
+  function beginBoxDraw(e: React.PointerEvent<SVGSVGElement>) {
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch {}
     const pt = getOverlayPoint(e.clientX, e.clientY)
-    if (!shapeAnchorRef.current) {
-      shapeAnchorRef.current = pt
-      setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
-      return
-    }
-    // Second click — commit
-    const x = Math.min(shapeAnchorRef.current.x, pt.x)
-    const y = Math.min(shapeAnchorRef.current.y, pt.y)
-    const w = Math.abs(pt.x - shapeAnchorRef.current.x) || 120
-    const h = Math.abs(pt.y - shapeAnchorRef.current.y) || 80
-    shapeAnchorRef.current = null
-    setShapePreview(null)
-    const flowPos = overlayToFlow(x, y)
-    addElement('shape', flowPos.x, flowPos.y, { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h, rotation: 0 }, w, h)
-    // Stay in shape mode for further shapes; click Select to stop
+    shapeAnchorRef.current = pt
+    shapeFlowAnchorRef.current = overlayToFlow(pt.x, pt.y)
+    boxToolRef.current = tool
+    setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
   }
 
-  // ── Portal: draw a rectangle (click, move, click) that views another tab ──
-  function onPortalPointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (tool !== 'portal') return
-    const pt = getOverlayPoint(e.clientX, e.clientY)
-    if (!shapeAnchorRef.current) {
-      shapeAnchorRef.current = pt
-      setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
-      return
-    }
-    const x = Math.min(shapeAnchorRef.current.x, pt.x)
-    const y = Math.min(shapeAnchorRef.current.y, pt.y)
-    const w = Math.abs(pt.x - shapeAnchorRef.current.x) || 320
-    const h = Math.abs(pt.y - shapeAnchorRef.current.y) || 220
+  // Drop the in-progress box gesture without committing (tool switch, pointercancel).
+  function cancelBoxDraw() {
     shapeAnchorRef.current = null
+    shapeFlowAnchorRef.current = null
+    boxToolRef.current = null
     setShapePreview(null)
-    const flowPos = overlayToFlow(x, y)
-    addElement('portal', flowPos.x, flowPos.y, { targetBoardId: null, home: board.id, vx: 20, vy: 20, zoom: 0.4, width: w, height: h }, w, h, { onOpenFully: navigate })
-    setTool('select')
   }
 
-  // ── Claude: draw a box (click, move, click) that becomes a live Claude chat ──
-  function onClaudePointerDown(e: React.PointerEvent<SVGSVGElement>) {
-    if (tool !== 'claude') return
+  function commitBoxDraw(e: React.PointerEvent<SVGSVGElement>) {
+    const flowAnchor = shapeFlowAnchorRef.current
+    const boxTool = boxToolRef.current
+    if (!flowAnchor || !boxTool) return
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
     const pt = getOverlayPoint(e.clientX, e.clientY)
-    if (!shapeAnchorRef.current) {
-      shapeAnchorRef.current = pt
-      setShapePreview({ x: pt.x, y: pt.y, w: 0, h: 0 })
-      return
-    }
-    const x = Math.min(shapeAnchorRef.current.x, pt.x)
-    const y = Math.min(shapeAnchorRef.current.y, pt.y)
-    const w = Math.abs(pt.x - shapeAnchorRef.current.x) || 340
-    const h = Math.abs(pt.y - shapeAnchorRef.current.y) || 420
+    const endFlow = overlayToFlow(pt.x, pt.y)
     shapeAnchorRef.current = null
+    shapeFlowAnchorRef.current = null
+    boxToolRef.current = null
     setShapePreview(null)
-    const flowPos = overlayToFlow(x, y)
-    addElement('claude', flowPos.x, flowPos.y, { boardId: board.id, width: w, height: h }, w, h)
-    setTool('select')
+    const x = Math.min(flowAnchor.x, endFlow.x)
+    const y = Math.min(flowAnchor.y, endFlow.y)
+    let w = Math.abs(endFlow.x - flowAnchor.x)
+    let h = Math.abs(endFlow.y - flowAnchor.y)
+    // A near-zero drag is a click → drop a default-sized box at the press point.
+    const TINY = 6 // flow units
+    if (boxTool === 'shape') {
+      if (w < TINY) w = 120
+      if (h < TINY) h = 80
+      addElement('shape', x, y, { shape: selectedShape, fill: shapeColorPicker, label: '', width: w, height: h, rotation: 0 }, w, h)
+      // Stay in shape mode for further shapes; click Select to stop
+    } else if (boxTool === 'portal') {
+      if (w < TINY) w = 320
+      if (h < TINY) h = 220
+      addElement('portal', x, y, { targetBoardId: null, home: board.id, vx: 20, vy: 20, zoom: 0.4, width: w, height: h }, w, h, { onOpenFully: navigate })
+      setTool('select')
+    } else if (boxTool === 'claude') {
+      if (w < TINY) w = 340
+      if (h < TINY) h = 420
+      addElement('claude', x, y, { boardId: board.id, width: w, height: h }, w, h)
+      setTool('select')
+    }
   }
 
   // ── Text: click to drop a text box where you want, then type ──
@@ -1531,7 +1536,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // Reset any in-progress shape/stroke when leaving the relevant tool
   useEffect(() => {
-    if (tool !== 'shape' && tool !== 'portal' && tool !== 'claude') { shapeAnchorRef.current = null; setShapePreview(null) }
+    if (tool !== 'shape' && tool !== 'portal' && tool !== 'claude') { shapeAnchorRef.current = null; shapeFlowAnchorRef.current = null; boxToolRef.current = null; setShapePreview(null) }
     if (tool !== 'draw') { drawingRef.current = null; setCurrentPath('') }
   }, [tool])
 
@@ -1883,6 +1888,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // ── Navigation that works regardless of the active tool ──
   function onOverlayWheel(e: React.WheelEvent<SVGSVGElement>) {
     if (heldNodeRef.current) return
+    // Don't let a stray wheel/trackpad gesture zoom the canvas mid-stroke — it
+    // would warp where the in-progress shape or drawing lands.
+    if (drawingRef.current || shapeAnchorRef.current) { e.preventDefault(); return }
     e.preventDefault()
     const canvasFactor = e.deltaY > 0 ? 0.9 : 1.1
     const vp = getViewport()
@@ -1902,9 +1910,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     }
     if (e.button !== 0) return
     if (tool === 'draw') onDrawPointerDown(e)
-    else if (tool === 'shape') onShapePointerDown(e)
-    else if (tool === 'portal') onPortalPointerDown(e)
-    else if (tool === 'claude') onClaudePointerDown(e)
+    else if (tool === 'shape' || tool === 'portal' || tool === 'claude') beginBoxDraw(e)
     else if (tool === 'text') onTextPointerDown(e)
   }
 
@@ -1925,6 +1931,17 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       return
     }
     if (tool === 'draw') onDrawPointerUp(e)
+    else if (tool === 'shape' || tool === 'portal' || tool === 'claude') commitBoxDraw(e)
+  }
+
+  // Touch/pen interruptions and OS gestures fire pointercancel instead of pointerup —
+  // without this, the captured anchor and dashed preview would freeze on screen.
+  function onOverlayPointerCancel(e: React.PointerEvent<SVGSVGElement>) {
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch {}
+    panRef.current = null
+    cancelBoxDraw()
+    drawingRef.current = null
+    setCurrentPath('')
   }
 
   return (
@@ -2115,6 +2132,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           onPointerDown={onOverlayPointerDown}
           onPointerMove={onOverlayPointerMove}
           onPointerUp={onOverlayPointerUp}
+          onPointerCancel={onOverlayPointerCancel}
+          onLostPointerCapture={onOverlayPointerCancel}
           onWheel={onOverlayWheel}
           onContextMenu={e => e.preventDefault()}
         >
@@ -2122,7 +2141,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           {shapePreview && (
             (tool === 'portal' || tool === 'claude') ? (
               <rect
-                x={shapePreview.x} y={shapePreview.y} width={shapePreview.w} height={shapePreview.h} rx={8}
+                x={shapePreview.x} y={shapePreview.y} width={shapePreview.w} height={shapePreview.h} rx={tool === 'claude' ? 8 : 0}
                 fill={tool === 'claude' ? '#D97757' : '#d946ef'} fillOpacity={0.15}
                 stroke={tool === 'claude' ? '#D97757' : '#d946ef'} strokeWidth={2} strokeDasharray="6 4"
               />

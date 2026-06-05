@@ -433,10 +433,37 @@ const NOTE_COLORS = [
 ]
 
 export function TextNode({ id, data, selected }: NodeProps) {
-  const { updateNodeData } = useReactFlow()
+  const { updateNodeData, getViewport, setViewport, screenToFlowPosition } = useReactFlow()
   const [text, setText] = useState((data.text as string) || '')
   const [showColorPicker, setShowColorPicker] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Wheel over a note: if the text can scroll in that direction, scroll the note
+  // (and keep the event off the canvas); otherwise fall through to a canvas zoom.
+  // A native non-passive listener is required so preventDefault actually works.
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    function onWheel(e: WheelEvent) {
+      // A horizontal-dominant gesture isn't a zoom or a vertical scroll — swallow it
+      // so it neither zooms the canvas nor leaks through.
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) { e.stopPropagation(); return }
+      const down = e.deltaY > 0
+      const canScroll = down
+        ? ta!.scrollTop + ta!.clientHeight < ta!.scrollHeight - 1
+        : ta!.scrollTop > 0
+      if (canScroll) { e.stopPropagation(); return } // let the textarea scroll natively
+      // Nothing to scroll here → zoom the canvas toward the cursor.
+      e.preventDefault(); e.stopPropagation()
+      const vp = getViewport()
+      const factor = down ? 0.9 : 1.1
+      const newZoom = Math.max(0.05, Math.min(4, vp.zoom * factor))
+      const f = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+      setViewport({ zoom: newZoom, x: vp.x + f.x * (vp.zoom - newZoom), y: vp.y + f.y * (vp.zoom - newZoom) })
+    }
+    ta.addEventListener('wheel', onWheel, { passive: false })
+    return () => ta.removeEventListener('wheel', onWheel)
+  }, [getViewport, setViewport, screenToFlowPosition])
 
   const color = (data.color as string) || '#1f2937'
   const fontSize = (data.fontSize as number) || 12
@@ -518,7 +545,7 @@ export function TextNode({ id, data, selected }: NodeProps) {
         onChange={e => setText(e.target.value)}
         onBlur={() => save(text)}
         placeholder="Type…"
-        className="nodrag flex-1 bg-transparent resize-none focus:outline-none px-2 pb-2 leading-snug"
+        className="nodrag nowheel flex-1 bg-transparent resize-none focus:outline-none px-2 pb-2 leading-snug overflow-y-auto"
         style={{ color, fontSize }}
       />
 
@@ -791,13 +818,51 @@ export function FolderLinkNode({ id, data }: NodeProps) {
 export function ImageNode({ id, data }: NodeProps) {
   const scale = (data.scale as number) ?? 1
   const onHold = data.onHold as ((id: string) => void) | undefined
+  const storagePath = data.storagePath as string | undefined
+  const [src, setSrc] = useState<string>((data.url as string) || '')
+  // Terminal state when we have neither a usable url nor a key to re-mint one.
+  const [status, setStatus] = useState<'loading' | 'ok' | 'error'>(
+    (data.url as string) ? 'ok' : storagePath ? 'loading' : 'error'
+  )
+
+  // Presigned read URLs expire (~1h), so the URL persisted at upload time is dead
+  // on any later page load — re-mint a fresh one from the stable storage key.
+  // Only mutates state from async callbacks, never synchronously inside the effect.
+  const fetchUrl = useCallback(() => {
+    if (!storagePath) return undefined
+    let cancelled = false
+    getPresignedReadUrl(storagePath)
+      .then(r => {
+        if (cancelled) return
+        if (r.ok && r.url) { setSrc(r.url); setStatus('ok') }
+        else setStatus(s => (s === 'ok' ? s : 'error'))
+      })
+      .catch(() => setStatus(s => (s === 'ok' ? s : 'error')))
+    return () => { cancelled = true }
+  }, [storagePath])
+
+  useEffect(() => fetchUrl(), [fetchUrl])
+
+  function retry() { setStatus('loading'); fetchUrl() }
 
   return (
     <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left' }} onMouseDown={() => onHold?.(id)}>
       <div className="relative group select-none rounded-lg overflow-hidden shadow-lg border border-gray-200" style={{ width: 200 }}>
         <SideHandles color="!bg-gray-500" />
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={data.url as string} alt={data.alt as string || 'image'} className="w-full object-cover max-h-48" draggable={false} />
+        {src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={src} alt={data.alt as string || 'image'} className="w-full object-cover max-h-48" draggable={false} />
+        ) : status === 'error' ? (
+          <button
+            onClick={e => { e.stopPropagation(); retry() }}
+            className="nodrag w-full h-32 flex flex-col items-center justify-center gap-1 bg-gray-50 text-gray-400 hover:text-gray-600 text-xs select-none"
+          >
+            <span>Image unavailable</span>
+            <span className="underline">Retry</span>
+          </button>
+        ) : (
+          <div className="w-full h-32 flex items-center justify-center bg-gray-50 text-gray-400 text-xs select-none">Loading image…</div>
+        )}
         <button
           className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500"
           onClick={() => (data.onDelete as (id: string) => void)(id)}
@@ -962,7 +1027,7 @@ function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
   const d = el.data || {}
   if (el.type === 'shape') {
     const shape = d.shape as string
-    const cls = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : 'rounded-lg'
+    const cls = shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45' : ''
     const w = el.width ?? 120, h = el.height ?? 80
     const label = (d.label as string) || ''
     const fontSize = Math.max(9, Math.min(64, Math.round(Math.min(w, h) * 0.22)))
@@ -1271,7 +1336,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       />
       <SideHandles color="!bg-fuchsia-500" />
 
-      <div className="w-full h-full rounded-lg overflow-hidden shadow-lg ring-1 ring-fuchsia-400/40 bg-[#1d2125] relative">
+      <div className="w-full h-full overflow-hidden shadow-lg ring-1 ring-fuchsia-400/40 bg-[#1d2125] relative">
         {/* Open file viewer (inside a folder) */}
         {targetBoardId && openFile && (
           <textarea

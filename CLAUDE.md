@@ -31,7 +31,7 @@ A Next.js 16 Trello-style + freeform-canvas board app with an on-canvas Claude a
 ## Free-mode canvas — `components/free/FreeBoardView.tsx` + `nodes.tsx`
 Toolbar (top-right, icon-only, vertical): **Select / Hand / Draw / Shape / Text / Portal / Claude** (shortcuts V/H/P/R/—/F/C).
 - **Select**: left-drag = marquee multi-select; Delete removes selection. Middle/right-drag pans. Recolor swatches appear when shapes/drawings/text are selected.
-- **Draw / Shape / Text / Portal / Claude**: pointer overlay (`overlayActive`) intercepts input. Shape = click-move-click with live dashed preview (rect/circle/diamond). Text = click to drop. Portal/Claude = drag a box.
+- **Draw / Shape / Text / Portal / Claude**: pointer overlay (`overlayActive`) intercepts input. Shape / Portal / Claude = press-drag-release (drag a box, live dashed preview), sized in flow units via `beginBoxDraw`/`commitBoxDraw`. Shapes: rect/circle/arrow. Text = click to drop.
 - **Right-click empty canvas** → context menu (list/card/sub-tab/image/draw/shape). **Add sub-tab** opens a **mode picker modal** (`SubtabModePicker`) before creating.
 - **Hold a unit + scroll = resize it** (NOT zoom) — capture-phase wheel listener on the wrapper; shapes/portals resize w/h, others scale `data.scale`. Persists on mouseup.
 - **Undo `Ctrl+Z` / Redo `Ctrl+X`**: debounced snapshot history; reconciles DB via `upsertElement` (client-generated UUIDs). `elTypeOf` maps node types incl. `pdfNode→'pdf'`, `claudeNode→'claude'`.
