@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Loader2, RefreshCw, ExternalLink, Search, X, FileText } from 'lucide-react'
+import { Loader2, RefreshCw, ExternalLink, Search, X, FileText, Pencil } from 'lucide-react'
 import { getGoogleConnectionStatus } from '@/app/actions'
 
 // Mirrors lib/google/drive.DriveFile — declared locally so this client component
@@ -140,6 +140,15 @@ export default function GoogleDocsPortal({ config, onPersistConfig, onUpdateCont
   const [pickerSearch, setPickerSearch] = useState('')
   const [showUrlInput, setShowUrlInput] = useState(false)
 
+  // In-portal edit panel
+  const [showEdit, setShowEdit] = useState(false)
+  const [editMode, setEditMode] = useState<'append' | 'replace'>('append')
+  const [appendVal, setAppendVal] = useState('')
+  const [findVal, setFindVal] = useState('')
+  const [replaceVal, setReplaceVal] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [editMsg, setEditMsg] = useState<string | null>(null)
+
   const onContextRef = useRef(onUpdateContext)
   useEffect(() => { onContextRef.current = onUpdateContext }, [onUpdateContext])
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -236,6 +245,34 @@ export default function GoogleDocsPortal({ config, onPersistConfig, onUpdateCont
     onPersistConfig({ documentId: id })
   }
 
+  async function doEdit() {
+    if (!documentId) return
+    const payload =
+      editMode === 'append'
+        ? { documentId, action: 'append', text: appendVal }
+        : { documentId, action: 'replace', find: findVal, replace: replaceVal }
+    if (editMode === 'append' && !appendVal.trim()) return
+    if (editMode === 'replace' && !findVal) return
+    setSaving(true)
+    setEditMsg(null)
+    try {
+      const res = await fetch('/api/google/docs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error ?? `Edit failed (${res.status})`)
+      if (editMode === 'append') { setAppendVal(''); setEditMsg('Appended.') }
+      else { setFindVal(''); setReplaceVal(''); setEditMsg(`Replaced ${data?.occurrencesChanged ?? 0} occurrence(s).`) }
+      await load(documentId)
+    } catch (e) {
+      setEditMsg(e instanceof Error ? e.message : 'Edit failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // ── Gates ──────────────────────────────────────────────────────────────────
   if (connected === null) {
     return <Shell><div className="flex items-center justify-center flex-1"><Loader2 size={16} className="animate-spin text-white/30" /></div></Shell>
@@ -326,6 +363,7 @@ export default function GoogleDocsPortal({ config, onPersistConfig, onUpdateCont
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-white/10 shrink-0" onKeyDown={onKeyDown}>
         <span className="text-xs text-white/80 font-medium truncate flex-1 min-w-0">{title || 'Document'}</span>
         {loading && <Loader2 size={12} className="animate-spin text-white/30 shrink-0" />}
+        <button onClick={() => { setShowEdit(s => !s); setEditMsg(null) }} title="Edit" className={`p-1 rounded shrink-0 ${showEdit ? 'bg-blue-600/30 text-blue-300' : 'text-white/60 hover:bg-white/10 hover:text-white'}`}><Pencil size={13} /></button>
         <button onClick={() => setShowSearch(s => !s)} title="Find (Ctrl+F)" className="p-1 rounded text-white/60 hover:bg-white/10 hover:text-white shrink-0"><Search size={13} /></button>
         <button onClick={() => documentId && load(documentId)} title="Refresh" className="p-1 rounded text-white/60 hover:bg-white/10 hover:text-white shrink-0"><RefreshCw size={13} /></button>
         <button
@@ -351,6 +389,47 @@ export default function GoogleDocsPortal({ config, onPersistConfig, onUpdateCont
           />
           <span className="text-[10px] text-white/40 shrink-0">{query ? `${matches} match${matches === 1 ? '' : 'es'}` : ''}</span>
           <button onClick={() => { setShowSearch(false); setQuery('') }} className="p-0.5 rounded text-white/40 hover:text-white shrink-0"><X size={12} /></button>
+        </div>
+      )}
+
+      {/* Edit panel */}
+      {showEdit && (
+        <div className="border-b border-white/10 shrink-0 bg-[#161922] px-2 py-1.5 space-y-1.5">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => { setEditMode('append'); setEditMsg(null) }}
+              className={`px-2 py-0.5 rounded text-[10px] ${editMode === 'append' ? 'bg-blue-600 text-white' : 'text-white/50 hover:bg-white/10'}`}
+            >Append</button>
+            <button
+              onClick={() => { setEditMode('replace'); setEditMsg(null) }}
+              className={`px-2 py-0.5 rounded text-[10px] ${editMode === 'replace' ? 'bg-blue-600 text-white' : 'text-white/50 hover:bg-white/10'}`}
+            >Find &amp; replace</button>
+            <span className="ml-auto text-[10px] text-white/40 truncate max-w-[45%]">{editMsg}</span>
+          </div>
+
+          {editMode === 'append' ? (
+            <div className="flex items-start gap-1.5">
+              <textarea
+                value={appendVal}
+                onChange={e => setAppendVal(e.target.value)}
+                placeholder="Text to add to the end of the document"
+                rows={2}
+                className="flex-1 min-w-0 bg-white/5 rounded px-2 py-1 text-[11px] text-white placeholder-white/25 focus:outline-none focus:ring-1 focus:ring-white/30 resize-none"
+              />
+              <button onClick={doEdit} disabled={saving || !appendVal.trim()} className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-[11px] font-medium shrink-0">
+                {saving ? '…' : 'Append'}
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <input value={findVal} onChange={e => setFindVal(e.target.value)} placeholder="Find" className="flex-1 min-w-0 bg-white/5 rounded px-2 py-1 text-[11px] text-white placeholder-white/25 focus:outline-none focus:ring-1 focus:ring-white/30" />
+              <input value={replaceVal} onChange={e => setReplaceVal(e.target.value)} placeholder="Replace with" className="flex-1 min-w-0 bg-white/5 rounded px-2 py-1 text-[11px] text-white placeholder-white/25 focus:outline-none focus:ring-1 focus:ring-white/30" />
+              <button onClick={doEdit} disabled={saving || !findVal} className="px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-[11px] font-medium shrink-0">
+                {saving ? '…' : 'Replace'}
+              </button>
+            </div>
+          )}
+          <p className="text-[9px] text-white/25">Edits the real doc via the Docs API. For full formatting, use “Edit in Google Docs”.</p>
         </div>
       )}
 
