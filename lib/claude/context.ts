@@ -138,7 +138,11 @@ async function renderContext(
     const b = boardById.get(id)
     if (!b) return
     const indent = '  '.repeat(depth)
-    const tag = via === 'portal' ? ' (reached via portal)' : ''
+    const tag = via === 'portal'
+      ? ' (reached via portal)'
+      : via === 'root'
+        ? ' ← CURRENT BOARD (the user is viewing this one)'
+        : ''
     lines.push(`${indent}- "${b.name}" [mode=${b.mode}, id=${b.id}]${tag}`)
 
     // Contents summary by mode.
