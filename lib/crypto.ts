@@ -32,3 +32,34 @@ export function decryptSecret(payload: string): string {
   decipher.setAuthTag(authTag)
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
 }
+
+// ── MCP personal access tokens ────────────────────────────────────────────────
+
+// SHA-256 hex digest. Used to store only a hash of MCP tokens at rest, never the
+// plaintext — the same one-way property as a password hash.
+export function sha256Hex(input: string): string {
+  return crypto.createHash('sha256').update(input).digest('hex')
+}
+
+// Opaque, URL-safe access token for connecting an external Claude client to the
+// MCP. The `sk_ssys_` prefix makes it identifiable in logs and secret scanners.
+export function randomToken(prefix = 'sk_ssys_'): string {
+  return prefix + crypto.randomBytes(24).toString('base64url')
+}
+
+// Mint a short-lived Supabase-compatible user JWT (HS256, signed with the project
+// JWT secret). Handed to a token-scoped Supabase client so RLS still resolves
+// auth.uid() to this user — letting the unchanged server-actions layer run safely
+// on behalf of a request authenticated by an MCP token instead of a cookie.
+export function mintSupabaseUserJwt(userId: string, ttlSeconds = 600): string {
+  const secret = process.env.SUPABASE_JWT_SECRET
+  if (!secret) throw new Error('SUPABASE_JWT_SECRET is not set')
+  const b64url = (v: string) => Buffer.from(v).toString('base64url')
+  const now = Math.floor(Date.now() / 1000)
+  const header = b64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }))
+  const payload = b64url(JSON.stringify({
+    sub: userId, role: 'authenticated', aud: 'authenticated', iat: now, exp: now + ttlSeconds,
+  }))
+  const sig = crypto.createHmac('sha256', secret).update(`${header}.${payload}`).digest('base64url')
+  return `${header}.${payload}.${sig}`
+}

@@ -27,6 +27,7 @@ export async function snapshotBefore(
   supabase: SupabaseClient,
   entityType: string,
   entityId: string,
+  userId: string,
   triggeredBy?: string,
 ): Promise<void> {
   const table = ENTITY_TABLE[entityType]
@@ -40,6 +41,7 @@ export async function snapshotBefore(
       entity_id: entityId,
       data,
       triggered_by: triggeredBy,
+      user_id: userId,
     })
   } catch {
     // Logging failures are non-fatal.
@@ -55,12 +57,14 @@ export async function logAction(
   tool: string,
   params: Record<string, unknown>,
   affectedIds: string[],
+  userId: string,
 ): Promise<void> {
   try {
     await supabase.from('claude_actions').insert({
       tool,
       params,
       affected_ids: affectedIds,
+      user_id: userId,
     })
   } catch {
     // Logging failures are non-fatal.

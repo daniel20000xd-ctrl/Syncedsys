@@ -1,14 +1,13 @@
 // PDF support: client-side text extraction (so Claude can read it) + upload of
-// the raw binary to Supabase Storage (so a unit can open it in a new tab).
+// the raw binary to R2 (so a unit can open it in a new tab).
 //
 // pdfjs is imported dynamically so its ~1 MB bundle only loads when a PDF is
 // actually handled. The worker is loaded from a CDN matching the installed
 // version — this sidesteps all bundler worker-resolution quirks.
 
-import { createClient } from '@/lib/supabase/client'
+import { STORAGE_URL } from '@/lib/storageUrl'
 
 export const MAX_PDF_BYTES = 25_000_000 // 25 MB — generous for lecture slides
-export const PDF_BUCKET = 'pdfs'
 // Cap stored extracted text so a huge PDF can't bloat a DB row / Claude context.
 const MAX_TEXT_CHARS = 120_000
 
@@ -56,17 +55,15 @@ export async function renderPdfThumbnail(file: File, maxWidth = 120): Promise<st
   return canvas.toDataURL('image/jpeg', 0.75)
 }
 
-// Upload the raw PDF to the user's folder in the storage bucket. Returns the
-// storage path (e.g. "<userId>/<uuid>.pdf") to persist on the element.
-export async function uploadPdf(file: File): Promise<string> {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('Not authenticated')
-  const path = `${user.id}/${crypto.randomUUID()}.pdf`
-  const { error } = await supabase.storage.from(PDF_BUCKET).upload(path, file, {
-    contentType: 'application/pdf',
-    upsert: false,
-  })
-  if (error) throw error
-  return path
+// Upload the raw PDF to R2. Returns the R2 key and file size so callers can
+// store both on the element (size is needed for accurate counter decrements on delete).
+export async function uploadPdf(file: File, boardId: string): Promise<{ key: string; sizeBytes: number }> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('app', 'hub')
+  form.append('subpath', `pdfs/${boardId}/${crypto.randomUUID()}-${file.name}`)
+  const res = await fetch(`${STORAGE_URL}/api/storage/upload`, { method: 'POST', body: form })
+  if (!res.ok) throw new Error(`R2 upload failed: ${res.status}`)
+  const { key } = await res.json() as { key: string }
+  return { key, sizeBytes: file.size }
 }

@@ -1,6 +1,10 @@
+import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
-import { getClaudeStatus } from '@/app/actions'
+import { getClaudeStatus, getClaudeUsage, getStorageUsage, syncStorageCounter, listMcpTokens } from '@/app/actions'
 import ClaudeKeySettings from '@/components/ClaudeKeySettings'
+import ClaudeUsageCard from '@/components/ClaudeUsageCard'
+import McpConnectSettings from '@/components/McpConnectSettings'
+import StorageMeter from '@/components/StorageMeter'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
@@ -10,6 +14,15 @@ export default async function SettingsPage() {
   try { claude = await getClaudeStatus() } catch {
     // Crypto or DB error — degrade gracefully; the key section will still render
   }
+  const storage = await getStorageUsage()
+  if (storage !== null) await syncStorageCounter(storage.totalBytes)
+  const claudeUsage = await getClaudeUsage()
+
+  const h = await headers()
+  const host = h.get('host') ?? 'syncedsys.com'
+  const proto = host.startsWith('localhost') || host.startsWith('127.') ? 'http' : 'https'
+  const mcpUrl = `${proto}://${host}/api/mcp`
+  const mcpTokens = await listMcpTokens()
 
   return (
     <div className="p-8 bg-gray-100 min-h-screen">
@@ -25,7 +38,17 @@ export default async function SettingsPage() {
           )}
         </section>
 
+        <StorageMeter usage={storage} />
+
+        <ClaudeUsageCard
+          hasOwnKey={claudeUsage.hasOwnKey}
+          usingPlatform={claudeUsage.usingPlatform}
+          lifetimeUsd={claudeUsage.lifetimeUsd}
+        />
+
         <ClaudeKeySettings initialHasKey={claude.hasKey} initialAutoApply={claude.autoApply} />
+
+        <McpConnectSettings mcpUrl={mcpUrl} initialTokens={mcpTokens} />
       </div>
     </div>
   )

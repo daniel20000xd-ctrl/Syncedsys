@@ -8,7 +8,7 @@ import type { Board, BoardElement } from '@/lib/types'
 import {
   createSubTab, deleteBoard, createTextFile, updateTextFile, deleteElement,
   moveElementToBoard, importFolderTree, moveBoardToParent, reorderFolderItems,
-  createElement, getPdfUrl,
+  createElement, getPdfUrl, getPresignedReadUrl,
 } from '@/app/actions'
 import { collectEntries, readDroppedEntries, downloadTextFile } from '@/lib/files'
 import { uploadPdf, extractPdfText } from '@/lib/pdf'
@@ -335,8 +335,8 @@ export default function FolderBoardView({
     for (const f of dropped) { const el = await createTextFile(board.id, f.name, f.content); setFiles(prev => [...prev, el as BoardElement]) }
     for (const pdf of pdfs) {
       try {
-        const [storagePath, { text, pageCount }] = await Promise.all([uploadPdf(pdf), extractPdfText(pdf)])
-        const el = await createElement(board.id, 'pdf', 0, 0, { name: pdf.name, storagePath, text, pageCount })
+        const [{ key: storagePath, sizeBytes }, { text, pageCount }] = await Promise.all([uploadPdf(pdf, board.id), extractPdfText(pdf)])
+        const el = await createElement(board.id, 'pdf', 0, 0, { name: pdf.name, storagePath, sizeBytes, text, pageCount })
         setFiles(prev => [...prev, el as BoardElement])
       } catch (err) { console.error('Failed to add PDF:', err) }
     }
@@ -504,7 +504,19 @@ export default function FolderBoardView({
                 onDragLeave={() => { if (insertAt?.id === file.id) setInsertAt(null) }}
                 onDrop={e => handleTileDrop(e, file.id)}
                 onClick={e => { e.stopPropagation(); toggleSelect(file.id, e.ctrlKey || e.metaKey || e.shiftKey) }}
-                onDoubleClick={() => file.type === 'pdf' ? openPdf(file.data.storagePath as string) : setEditing(file)}
+                onDoubleClick={async () => {
+                  if (file.type === 'pdf') { openPdf(file.data.storagePath as string); return }
+                  if (file.data.storagePath && !file.data.content) {
+                    try {
+                      const r = await getPresignedReadUrl(file.data.storagePath as string)
+                      const res = r.ok && r.url ? await fetch(r.url) : null
+                      const text = res?.ok ? await res.text() : ''
+                      setEditing({ ...file, data: { ...file.data, content: text } })
+                    } catch { setEditing(file) }
+                  } else {
+                    setEditing(file)
+                  }
+                }}
                 className={fileTileClass(file)}
                 title={file.type === 'pdf' ? 'Double-click to open the PDF in a new tab' : 'Double-click to open · drag to reorder · click ⌄ for settings'}
               >

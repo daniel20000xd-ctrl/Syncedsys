@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
         // Record usage on both the success and error paths so partial spend from a
         // mid-loop failure is still billed. Awaited so the insert lands before the
         // serverless function freezes. recordClaudeUsage swallows its own errors.
-        await recordClaudeUsage(supabase, {
+        await recordClaudeUsage({
           userId: user.id, model: MODEL, keySource, usage: agg, turns: turnsUsed, boardId, errored,
         })
         controller.close()

@@ -2,7 +2,11 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { encryptSecret } from '@/lib/crypto'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { encryptSecret, sha256Hex, randomToken } from '@/lib/crypto'
+import { GetObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { getR2Client, R2_BUCKET } from '@/lib/r2'
 
 // ── Claude / AI settings ──────────────────────────────────────────────────────
 
@@ -66,6 +70,133 @@ export async function getClaudeStatus(): Promise<{ hasKey: boolean; autoApply: b
     .eq('user_id', user.id)
     .maybeSingle()
   return { hasKey: !!data?.anthropic_key_encrypted, autoApply: !!data?.claude_auto_apply }
+}
+
+// Per-user Claude spend for the settings card. Sums the user's own (append-only)
+// ledger rows — the same source the admin invoice reads, so the two never diverge.
+// The user only spends platform credits when they have no key of their own AND a
+// platform key is configured to fall back to. Never returns the key.
+export async function getClaudeUsage(): Promise<{
+  keySource: 'user' | 'platform'
+  hasOwnKey: boolean
+  usingPlatform: boolean
+  lifetimeUsd: number
+}> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { keySource: 'platform', hasOwnKey: false, usingPlatform: false, lifetimeUsd: 0 }
+
+  // Read the key flag on its own column (always present) so a missing usage table
+  // pre-migration can never flip the key-source indicator to the wrong value.
+  const { data: secret } = await supabase
+    .from('user_secrets')
+    .select('anthropic_key_encrypted')
+    .eq('user_id', user.id)
+    .maybeSingle()
+
+  const hasOwnKey = !!secret?.anthropic_key_encrypted
+  const usingPlatform = !hasOwnKey && !!process.env.ANTHROPIC_API_KEY
+
+  const { data: rows } = await supabase
+    .from('claude_usage').select('cost_usd').eq('user_id', user.id).eq('billable', true)
+  const list = (rows ?? []) as { cost_usd: number | string | null }[]
+  const lifetimeUsd = list.reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
+
+  return { keySource: hasOwnKey ? 'user' : 'platform', hasOwnKey, usingPlatform, lifetimeUsd }
+}
+
+export type ClaudeBillingRow = {
+  userId: string
+  email: string
+  billableUsd: number
+  requests: number
+  inputTokens: number
+  outputTokens: number
+  lastUsed: string | null
+}
+
+// Admin-only: per-user platform-credit spend, for invoicing. Uses the service-role
+// client to read across all users (RLS would otherwise scope to the caller).
+export async function getAdminClaudeBilling(): Promise<ClaudeBillingRow[]> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || user.email !== process.env.ADMIN_EMAIL) return []
+
+  const admin = createAdminClient()
+  const [{ data: usersData }, { data: rows }] = await Promise.all([
+    admin.auth.admin.listUsers(),
+    admin.from('claude_usage')
+      .select('user_id, cost_usd, input_tokens, output_tokens, created_at')
+      .eq('billable', true),
+  ])
+
+  const emailById = new Map((usersData?.users ?? []).map(u => [u.id, u.email ?? '(unknown)']))
+  const agg = new Map<string, ClaudeBillingRow>()
+  const list = (rows ?? []) as Array<{
+    user_id: string; cost_usd: number | string | null
+    input_tokens: number | null; output_tokens: number | null; created_at: string
+  }>
+  for (const r of list) {
+    const cur = agg.get(r.user_id) ?? {
+      userId: r.user_id,
+      email: emailById.get(r.user_id) ?? '(unknown)',
+      billableUsd: 0, requests: 0, inputTokens: 0, outputTokens: 0, lastUsed: null as string | null,
+    }
+    cur.billableUsd += Number(r.cost_usd ?? 0)
+    cur.requests += 1
+    cur.inputTokens += r.input_tokens ?? 0
+    cur.outputTokens += r.output_tokens ?? 0
+    if (!cur.lastUsed || r.created_at > cur.lastUsed) cur.lastUsed = r.created_at
+    agg.set(r.user_id, cur)
+  }
+  return [...agg.values()].sort((a, b) => b.billableUsd - a.billableUsd)
+}
+
+// ── MCP access tokens (bring your own Claude) ─────────────────────────────────
+// Let the user connect their own Claude (Claude Code, the Claude apps) to the MCP
+// without an Anthropic API key. Tokens are stored only as a SHA-256 hash; the
+// plaintext is shown once at creation and is never recoverable.
+
+type McpTokenRow = { id: string; name: string; created_at: string; last_used_at: string | null }
+
+export async function createMcpToken(
+  name?: string,
+): Promise<{ ok: boolean; token?: string; row?: McpTokenRow; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated' }
+  const token = randomToken()
+  const { data, error } = await supabase
+    .from('mcp_tokens')
+    .insert({ user_id: user.id, token_hash: sha256Hex(token), name: name?.trim() || 'Claude' })
+    .select('id, name, created_at, last_used_at')
+    .single()
+  if (error || !data) return { ok: false, error: `Database error: ${error?.message ?? 'insert failed'}` }
+  revalidatePath('/settings')
+  return { ok: true, token, row: data as McpTokenRow }
+}
+
+export async function listMcpTokens(): Promise<McpTokenRow[]> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+  const { data } = await supabase
+    .from('mcp_tokens')
+    .select('id, name, created_at, last_used_at')
+    .eq('user_id', user.id)
+    .is('revoked_at', null)
+    .order('created_at', { ascending: false })
+  return (data ?? []) as McpTokenRow[]
+}
+
+export async function revokeMcpToken(id: string): Promise<void> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  await supabase.from('mcp_tokens')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('id', id).eq('user_id', user.id)
+  revalidatePath('/settings')
 }
 
 // ── iOS sync / device links ──────────────────────────────────────────────────
@@ -226,6 +357,54 @@ export async function deleteBoard(boardId: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
+
+  // BFS to collect every board ID in the subtree before the cascade delete
+  const allBoardIds: string[] = []
+  const queue = [boardId]
+  while (queue.length > 0) {
+    const batch = queue.splice(0)
+    allBoardIds.push(...batch)
+    const { data: kids } = await supabase
+      .from('boards').select('id').in('parent_id', batch)
+    if (kids?.length) queue.push(...kids.map(k => k.id))
+  }
+
+  // Find every element across the subtree that has an R2 object.
+  // Checking for storagePath rather than type so this works for any future
+  // file type that follows the same storagePath/sizeBytes convention.
+  const { data: els } = await supabase
+    .from('board_elements').select('data').in('board_id', allBoardIds)
+
+  const storageItems = (els ?? [])
+    .map(el => el.data as { storagePath?: string; sizeBytes?: number })
+    .filter(d => !!d.storagePath)
+
+  if (storageItems.length > 0) {
+    const keys = storageItems.map(d => d.storagePath!)
+    const totalBytes = storageItems.reduce((sum, d) => sum + (d.sizeBytes ?? 0), 0)
+
+    // Batch delete — DeleteObjectsCommand handles up to 1000 keys per call
+    try {
+      const chunks: string[][] = []
+      for (let i = 0; i < keys.length; i += 1000) chunks.push(keys.slice(i, i + 1000))
+      await Promise.all(chunks.map(chunk =>
+        getR2Client().send(new DeleteObjectsCommand({
+          Bucket: R2_BUCKET,
+          Delete: { Objects: chunk.map(Key => ({ Key })), Quiet: true },
+        }))
+      ))
+    } catch {}
+
+    if (totalBytes > 0) {
+      const { data: secrets } = await supabase
+        .from('user_secrets').select('storage_bytes').eq('user_id', user.id).maybeSingle()
+      const current = (secrets?.storage_bytes as number | null) ?? 0
+      await supabase.from('user_secrets').upsert(
+        { user_id: user.id, storage_bytes: Math.max(0, current - totalBytes) },
+        { onConflict: 'user_id' }
+      )
+    }
+  }
 
   await supabase.from('boards').delete().eq('id', boardId).eq('user_id', user.id)
   revalidatePath('/', 'layout')
@@ -467,15 +646,42 @@ export async function upsertEdge(id: string, boardId: string, source: string, ta
 
 // ── PDFs ─────────────────────────────────────────────────────────────────────
 
-// Mint a short-lived signed URL for a stored PDF so it can be opened in a new
-// tab. RLS on storage.objects ensures a user can only sign their own files.
-export async function getPdfUrl(path: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+// Mint a short-lived presigned R2 URL for a stored PDF so it can be opened in
+// a new tab. Enforces that the key belongs to the requesting user.
+export async function getPdfUrl(key: string): Promise<{ ok: boolean; url?: string; error?: string }> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { ok: false, error: 'Not authenticated' }
-  const { data, error } = await supabase.storage.from('pdfs').createSignedUrl(path, 3600)
-  if (error || !data) return { ok: false, error: error?.message ?? 'Could not open PDF.' }
-  return { ok: true, url: data.signedUrl }
+  if (!key.startsWith(`${user.id}/`)) return { ok: false, error: 'Access denied.' }
+  try {
+    const url = await getSignedUrl(
+      getR2Client(),
+      new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }),
+      { expiresIn: 3600 }
+    )
+    return { ok: true, url }
+  } catch {
+    return { ok: false, error: 'Could not open PDF.' }
+  }
+}
+
+// Mint a short-lived presigned R2 URL for any stored object so the client can
+// read its content. Enforces that the key belongs to the requesting user.
+export async function getPresignedReadUrl(key: string): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated' }
+  if (!key.startsWith(`${user.id}/`)) return { ok: false, error: 'Access denied.' }
+  try {
+    const url = await getSignedUrl(
+      getR2Client(),
+      new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }),
+      { expiresIn: 3600 }
+    )
+    return { ok: true, url }
+  } catch {
+    return { ok: false, error: 'Could not read file.' }
+  }
 }
 
 // ── Free mode: elements (shapes, images, drawings) ───────────────────────────
@@ -506,17 +712,73 @@ export async function updateElement(
 
 export async function deleteElement(elementId: string) {
   const supabase = await createClient()
+
+  // Read before deleting so we can clean up any R2 object (pdf, image, textfile —
+  // any element type that stores a storagePath).
+  const { data: el } = await supabase
+    .from('board_elements')
+    .select('data')
+    .eq('id', elementId)
+    .maybeSingle()
+
+  const d = el?.data as { storagePath?: string; sizeBytes?: number } | undefined
+  if (d?.storagePath) {
+    try {
+      await getR2Client().send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: d.storagePath }))
+    } catch {}
+    if (d.sizeBytes) {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: secrets } = await supabase
+          .from('user_secrets')
+          .select('storage_bytes')
+          .eq('user_id', user.id)
+          .maybeSingle()
+        const current = (secrets?.storage_bytes as number | null) ?? 0
+        await supabase
+          .from('user_secrets')
+          .upsert(
+            { user_id: user.id, storage_bytes: Math.max(0, current - d.sizeBytes) },
+            { onConflict: 'user_id' }
+          )
+      }
+    }
+  }
+
   await supabase.from('board_elements').delete().eq('id', elementId)
 }
 
-// A text file is a board_element of type 'textfile' holding { name, content }.
-// On a canvas it renders as a movable block; in a folder-mode board it renders
-// as a file in the explorer grid. Same row, two views.
+// A text file is a board_element of type 'textfile'. Content lives in R2;
+// the DB row holds { name, storagePath, sizeBytes }. Content is fetched via a
+// presigned URL on demand. For empty new files there is no R2 object — just { name }.
 export async function createTextFile(boardId: string, name: string, content: string, x = 0, y = 0) {
   const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  let elData: Record<string, unknown> = { name }
+
+  if (content) {
+    const key = `${user.id}/hub/textfiles/${crypto.randomUUID()}-${name}`
+    const buf = Buffer.from(content, 'utf8')
+    try {
+      await getR2Client().send(new PutObjectCommand({
+        Bucket: R2_BUCKET, Key: key, Body: buf,
+        ContentType: 'text/plain; charset=utf-8',
+      }))
+      const sizeBytes = buf.byteLength
+      elData = { name, storagePath: key, sizeBytes }
+      const { data: secrets } = await supabase.from('user_secrets').select('storage_bytes').eq('user_id', user.id).maybeSingle()
+      const current = (secrets?.storage_bytes as number | null) ?? 0
+      supabase.from('user_secrets').upsert({ user_id: user.id, storage_bytes: current + sizeBytes }, { onConflict: 'user_id' }).then(() => {})
+    } catch {
+      elData = { name, content } // R2 unavailable — fall back to DB
+    }
+  }
+
   const { data, error } = await supabase
     .from('board_elements')
-    .insert({ board_id: boardId, type: 'textfile', x, y, data: { name, content } })
+    .insert({ board_id: boardId, type: 'textfile', x, y, data: elData })
     .select().single()
   if (error) throw error
   return data
@@ -694,12 +956,65 @@ export async function moveElementToBoard(elementId: string, targetBoardId: strin
   revalidatePath(`/board/${targetBoardId}`)
 }
 
-export async function updateTextFile(elementId: string, name: string, content: string, boardId: string) {
+export async function updateTextFile(elementId: string, name: string, content: string, _boardId: string) {
   const supabase = await createClient()
-  // Preserve any other data keys (e.g. hidden/opacity from the canvas view).
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
   const { data: existing } = await supabase.from('board_elements').select('data').eq('id', elementId).single()
-  const merged = { ...(existing?.data ?? {}), name, content }
-  await supabase.from('board_elements').update({ data: merged }).eq('id', elementId)}
+  const existingData = (existing?.data ?? {}) as Record<string, unknown>
+  const storagePath = existingData.storagePath as string | undefined
+
+  let merged: Record<string, unknown>
+
+  if (storagePath) {
+    if (!content) {
+      // Empty content on an R2 file = name-only rename; don't touch the object.
+      merged = { ...existingData, name }
+    } else {
+      const buf = Buffer.from(content, 'utf8')
+      try {
+        await getR2Client().send(new PutObjectCommand({
+          Bucket: R2_BUCKET, Key: storagePath, Body: buf,
+          ContentType: 'text/plain; charset=utf-8',
+        }))
+        const oldSize = (existingData.sizeBytes as number | null) ?? 0
+        const newSize = buf.byteLength
+        merged = { ...existingData, name, sizeBytes: newSize }
+        const delta = newSize - oldSize
+        if (delta !== 0) {
+          const { data: secrets } = await supabase.from('user_secrets').select('storage_bytes').eq('user_id', user.id).maybeSingle()
+          const current = (secrets?.storage_bytes as number | null) ?? 0
+          supabase.from('user_secrets').upsert({ user_id: user.id, storage_bytes: Math.max(0, current + delta) }, { onConflict: 'user_id' }).then(() => {})
+        }
+      } catch {
+        merged = { ...existingData, name }
+      }
+    }
+  } else if (content) {
+    // Legacy DB-backed file: migrate to R2 on first meaningful save.
+    const key = `${user.id}/hub/textfiles/${crypto.randomUUID()}-${name}`
+    const buf = Buffer.from(content, 'utf8')
+    try {
+      await getR2Client().send(new PutObjectCommand({
+        Bucket: R2_BUCKET, Key: key, Body: buf,
+        ContentType: 'text/plain; charset=utf-8',
+      }))
+      const sizeBytes = buf.byteLength
+      merged = { ...existingData, name, storagePath: key, sizeBytes }
+      delete merged.content
+      const { data: secrets } = await supabase.from('user_secrets').select('storage_bytes').eq('user_id', user.id).maybeSingle()
+      const current = (secrets?.storage_bytes as number | null) ?? 0
+      supabase.from('user_secrets').upsert({ user_id: user.id, storage_bytes: current + sizeBytes }, { onConflict: 'user_id' }).then(() => {})
+    } catch {
+      merged = { ...existingData, name, content }
+    }
+  } else {
+    merged = { ...existingData, name }
+  }
+
+  await supabase.from('board_elements').update({ data: merged }).eq('id', elementId)
+}
 
 // Reorder items inside a folder view. folderIds / fileIds are the full ordered
 // lists of board ids / element ids currently in this folder. Bulk-updates
@@ -859,4 +1174,59 @@ export async function loadBoardForFloat(boardId: string) {
   const edges = board.board_edges ?? []
   const subBoards = subRes.data ?? []
   return { board, lists, cards, elements, edges, subBoards }
+}
+
+// ── R2 storage usage ──────────────────────────────────────────────────────────
+
+export type StorageUsage = {
+  totalBytes: number
+  apps: Record<string, { bytes: number; count: number }>
+}
+
+// Writes the authoritative R2-scanned byte total back into the DB counter so
+// the upload route's fast-path read stays accurate even if past increments drifted.
+export async function syncStorageCounter(totalBytes: number) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return
+  await supabase
+    .from('user_secrets')
+    .upsert({ user_id: user.id, storage_bytes: totalBytes }, { onConflict: 'user_id' })
+}
+
+// Lists every object under {userId}/ in R2, sums sizes, and groups by app.
+// Paginates automatically — handles any number of objects.
+export async function getStorageUsage(): Promise<StorageUsage | null> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const prefix = `${user.id}/`
+  let token: string | undefined
+  let totalBytes = 0
+  const apps: Record<string, { bytes: number; count: number }> = {}
+
+  try {
+    do {
+      const res = await getR2Client().send(new ListObjectsV2Command({
+        Bucket: R2_BUCKET,
+        Prefix: prefix,
+        ContinuationToken: token,
+      }))
+      for (const obj of res.Contents ?? []) {
+        const size = obj.Size ?? 0
+        totalBytes += size
+        // Key: {userId}/{app}/... — extract the app segment
+        const app = (obj.Key ?? '').slice(prefix.length).split('/')[0] || 'other'
+        if (!apps[app]) apps[app] = { bytes: 0, count: 0 }
+        apps[app].bytes += size
+        apps[app].count += 1
+      }
+      token = res.NextContinuationToken
+    } while (token)
+  } catch {
+    return null
+  }
+
+  return { totalBytes, apps }
 }

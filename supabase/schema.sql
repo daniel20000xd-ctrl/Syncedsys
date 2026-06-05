@@ -230,6 +230,7 @@ create index on cards(list_id);
 -- alter table boards add column if not exists synced boolean not null default false;
 -- alter table boards add column if not exists meta text;
 -- (snapshots + claude_actions tables: run the create table + policy blocks from the MCP audit section above)
+-- (claude_usage ledger: run supabase/claude_usage.sql — append-only, service-role writes)
 -- (device_links table: run the create table + policy block above on existing DBs)
 -- alter table cards add column if not exists done boolean not null default false;
 -- alter table lists add column if not exists is_widget boolean not null default false;
@@ -278,6 +279,7 @@ create index on cards(list_id);
 -- enabling undo and diff display in future tooling.
 create table if not exists snapshots (
   id           uuid        primary key default gen_random_uuid(),
+  user_id      uuid        references auth.users(id) on delete cascade,
   entity_type  text        not null,  -- 'board' | 'list' | 'card' | 'element' | 'edge'
   entity_id    uuid        not null,
   data         jsonb       not null,
@@ -285,16 +287,73 @@ create table if not exists snapshots (
   triggered_by text
 );
 create index if not exists snapshots_entity_idx   on snapshots(entity_type, entity_id);
+alter table snapshots enable row level security;
+create policy "users own their snapshots" on snapshots for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- Append-only log of every MCP write tool invocation.
 create table if not exists claude_actions (
   id           uuid        primary key default gen_random_uuid(),
+  user_id      uuid        references auth.users(id) on delete cascade,
   tool         text        not null,
   params       jsonb       not null default '{}',
   affected_ids uuid[]      not null default '{}',
   executed_at  timestamptz not null default now()
 );
 create index if not exists claude_actions_tool_idx on claude_actions(tool);
+alter table claude_actions enable row level security;
+create policy "users own their claude actions" on claude_actions for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- ── Claude usage ledger (platform-credit billing) ─────────────────────────────
+-- One row per server-side Claude request. key_source 'platform' = ran on the
+-- owner's ANTHROPIC_API_KEY and is billable to the user at markup; 'user' = ran on
+-- the user's own key (cost 0, billable false), kept only for their own visibility.
+-- Append-only for end users: they may READ their own rows but cannot insert, edit,
+-- or delete them. All writes happen server-side via the service-role client
+-- (recordClaudeUsage), which bypasses RLS and stamps the trusted user_id.
+create table if not exists claude_usage (
+  id                    uuid          primary key default gen_random_uuid(),
+  user_id               uuid          references auth.users(id) on delete cascade not null,
+  created_at            timestamptz   not null default now(),
+  model                 text          not null,
+  key_source            text          not null check (key_source in ('user','platform')),
+  billable              boolean       not null default false,
+  input_tokens          integer       not null default 0,
+  output_tokens         integer       not null default 0,
+  cache_read_tokens     integer       not null default 0,
+  cache_creation_tokens integer       not null default 0,
+  cost_usd              numeric(12,6) not null default 0,  -- decimal money, never float
+  turns                 integer       not null default 1,
+  board_id              uuid,                              -- request meta; no FK (board may be deleted)
+  errored               boolean       not null default false
+);
+create index if not exists claude_usage_user_idx on claude_usage(user_id, created_at desc);
+create index if not exists claude_usage_billable_idx on claude_usage(user_id) where billable;
+alter table claude_usage enable row level security;
+-- Read-only for the owner; no insert/update/delete policy (default-deny under RLS).
+create policy "claude usage select own" on claude_usage
+  for select using (user_id = auth.uid());
+
+-- ── MCP access tokens (bring your own Claude) ─────────────────────────────────
+-- Per-user opaque tokens (stored as a SHA-256 hash) that let external Claude
+-- clients authenticate to /api/mcp as the user, with no Anthropic API key.
+create table if not exists mcp_tokens (
+  id            uuid        primary key default gen_random_uuid(),
+  user_id       uuid        references auth.users(id) on delete cascade not null,
+  token_hash    text        not null unique,
+  name          text        not null default 'Claude',
+  created_at    timestamptz not null default now(),
+  last_used_at  timestamptz,
+  revoked_at    timestamptz,
+  window_start  timestamptz,
+  request_count integer     not null default 0
+);
+create index if not exists mcp_tokens_hash_idx on mcp_tokens(token_hash);
+create index if not exists mcp_tokens_user_idx on mcp_tokens(user_id);
+alter table mcp_tokens enable row level security;
+create policy "users manage their mcp tokens" on mcp_tokens for all
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- ── Stock Viewer ──────────────────────────────────────────────────────────────
 -- 1. Add stocks_enabled flag to user_secrets (run once):

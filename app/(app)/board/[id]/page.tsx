@@ -70,6 +70,11 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   const edges = (board.board_edges ?? []) as BoardEdge[]
   const subBoards = (subRes.data ?? []) as Board[]
 
+  // The Claude chat mounts when the user has their own key OR the workspace has a
+  // platform key to fall back on (billed to the user). Keep this in sync with the
+  // resolver in lib/claude/key.ts.
+  const showClaude = claudeEnabled || !!process.env.ANTHROPIC_API_KEY
+
   // Recurring cards: reset any whose interval has elapsed since completion.
   await resetDueRecurringCards(supabase, cards)
 
@@ -97,7 +102,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   return (
     <>
       {view}
-      {claudeEnabled && <ClaudeAgent boardId={board.id} />}
+      {showClaude && <ClaudeAgent boardId={board.id} />}
     </>
   )
 }

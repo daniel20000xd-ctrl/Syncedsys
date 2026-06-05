@@ -4,9 +4,12 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import Anthropic from '@anthropic-ai/sdk'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
-import { decryptSecret } from '@/lib/crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { snapshotBefore, logAction, isClaudeEnabled } from '@/lib/mcp'
+import { snapshotBefore, logAction } from '@/lib/mcp'
+import { supabaseAuthContext } from '@/lib/supabase/authContext'
+import { resolveMcpAuth } from '@/lib/mcpAuth'
+import { tryResolveAnthropicKey } from '@/lib/claude/key'
+import { recordClaudeUsage } from '@/lib/claude/usage'
 import {
   createBoard, createGroup, moveTab, updateBoardFreePosition, updateBoardContent,
   createSubTab, deleteBoard, renameBoard, updateBoard, layoutBoardGrid, setBoardSynced,
@@ -52,23 +55,24 @@ function formatBoards(boards: BoardMeta[]): string {
     .join('\n')
 }
 
-async function fetchBoards(origin: string, cookie: string): Promise<BoardMeta[] | null> {
-  const res = await fetch(`${origin}/api/boards/meta`, { headers: { cookie } })
-  if (!res.ok) return null
-  return res.json()
+async function fetchBoards(supabase: SupabaseClient, userId: string): Promise<BoardMeta[] | null> {
+  const { data, error } = await supabase
+    .from('boards').select('id,name,mode,meta').eq('user_id', userId)
+    .order('tab_position', { ascending: true })
+  if (error) return null
+  return data as BoardMeta[]
 }
 
-export async function loadApiKey(supabase: SupabaseClient, userId: string): Promise<string | null> {
-  const { data } = await supabase
-    .from('user_secrets').select('anthropic_key_encrypted').eq('user_id', userId).maybeSingle()
-  if (!data?.anthropic_key_encrypted) return null
-  try { return decryptSecret(data.anthropic_key_encrypted) } catch { return null }
-}
+const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 
-export async function suggestBoardMeta(name: string, mode: string, apiKey: string): Promise<string> {
+export async function suggestBoardMeta(
+  name: string,
+  mode: string,
+  apiKey: string,
+): Promise<{ suggestion: string; usage: Anthropic.Usage }> {
   const anthropic = new Anthropic({ apiKey })
   const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: HAIKU_MODEL,
     max_tokens: 80,
     messages: [{
       role: 'user',
@@ -76,12 +80,12 @@ export async function suggestBoardMeta(name: string, mode: string, apiKey: strin
     }],
   })
   const text = response.content[0]?.type === 'text' ? response.content[0].text.trim() : ''
-  return text.slice(0, 150)
+  return { suggestion: text.slice(0, 150), usage: response.usage }
 }
 
 // ── MCP server builder ────────────────────────────────────────────────────────
 
-function buildServer(cookie: string, origin: string, supabase: SupabaseClient, userId: string) {
+function buildServer(supabase: SupabaseClient, userId: string) {
   const server = new McpServer({ name: 'syncedsys', version: '1.0.0' })
 
   // Every write tool runs snapshotBefore + logAction before executing.
@@ -98,9 +102,9 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
     const ids = affectedIds ?? (snapshot?.entityId ? [snapshot.entityId] : [])
     await Promise.all([
       snapshot?.entityId
-        ? snapshotBefore(supabase, snapshot.entityType, snapshot.entityId, tool)
+        ? snapshotBefore(supabase, snapshot.entityType, snapshot.entityId, userId, tool)
         : Promise.resolve(),
-      logAction(supabase, tool, params, ids),
+      logAction(supabase, tool, params, ids, userId),
     ])
     return wrap(fn)
   }
@@ -112,7 +116,7 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
     description: 'Returns all boards for the authenticated user with name, mode, and AI description.',
     inputSchema: undefined,
   }, async () => {
-    const boards = await fetchBoards(origin, cookie)
+    const boards = await fetchBoards(supabase, userId)
     if (!boards) return fail('Failed to fetch boards.')
     return ok(formatBoards(boards))
   })
@@ -122,15 +126,16 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
     description: 'Returns the 1–3 most relevant boards for a query, matched against name and description.',
     inputSchema: { query: z.string().describe('What the user is looking for') },
   }, async ({ query }) => {
-    const [boards, apiKey] = await Promise.all([fetchBoards(origin, cookie), loadApiKey(supabase, userId)])
+    const [boards, resolved] = await Promise.all([fetchBoards(supabase, userId), tryResolveAnthropicKey(supabase, userId)])
     if (!boards) return fail('Failed to fetch boards.')
-    if (!apiKey)  return fail('No Anthropic API key. Add one in Settings.')
+    if (!resolved)  return fail('No Anthropic API key. Add one in Settings.')
     if (!boards.length) return ok([])
     const list = boards.map(b => `${b.id}\t${b.name}\t${b.meta ?? ''}`).join('\n')
-    const response = await new Anthropic({ apiKey }).messages.create({
-      model: 'claude-haiku-4-5-20251001', max_tokens: 256,
+    const response = await new Anthropic({ apiKey: resolved.apiKey }).messages.create({
+      model: HAIKU_MODEL, max_tokens: 256,
       messages: [{ role: 'user', content: `Pick the 1-3 most relevant board IDs for: "${query}"\n\nBoards (id\\tname\\tdesc):\n${list}\n\nReply ONLY with a JSON array of IDs, e.g. ["id1"]. No explanation.` }],
     })
+    await recordClaudeUsage({ userId, model: HAIKU_MODEL, keySource: resolved.keySource, usage: response.usage })
     const raw = response.content[0]?.type === 'text' ? response.content[0].text.trim() : '[]'
     let ids: string[] = []
     try { ids = JSON.parse(raw) } catch { /* empty */ }
@@ -205,9 +210,11 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
       mode: z.string().describe('Board mode'),
     },
   }, async ({ name, mode }) => {
-    const apiKey = await loadApiKey(supabase, userId)
-    if (!apiKey) return fail('No Anthropic API key. Add one in Settings.')
-    return ok(await suggestBoardMeta(name, mode, apiKey))
+    const resolved = await tryResolveAnthropicKey(supabase, userId)
+    if (!resolved) return fail('No Anthropic API key. Add one in Settings.')
+    const { suggestion, usage } = await suggestBoardMeta(name, mode, resolved.apiKey)
+    await recordClaudeUsage({ userId, model: HAIKU_MODEL, keySource: resolved.keySource, usage })
+    return ok(suggestion)
   })
 
   // ── Boards ──────────────────────────────────────────────────────────────────
@@ -939,24 +946,23 @@ function buildServer(cookie: string, origin: string, supabase: SupabaseClient, u
 // ── Route handler ─────────────────────────────────────────────────────────────
 
 async function handle(req: NextRequest): Promise<Response> {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401 })
-
-  if (!await isClaudeEnabled(supabase, user.id)) {
-    return new Response(
-      JSON.stringify({ error: 'Claude not enabled. Add an Anthropic API key in Settings.' }),
-      { status: 403 },
-    )
+  const auth = await resolveMcpAuth(req)
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.error }), {
+      status: auth.status,
+      headers: { 'content-type': 'application/json' },
+    })
   }
 
-  const origin = new URL(req.url).origin
-  const cookie = req.headers.get('cookie') ?? ''
-
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-  const server = buildServer(cookie, origin, supabase, user.id)
-  await server.connect(transport)
-  return transport.handleRequest(req)
+  // Run the entire MCP exchange inside the auth context so every server action's
+  // createClient() is scoped to this user and RLS applies — no per-action change.
+  return supabaseAuthContext.run({ accessToken: auth.accessToken }, async () => {
+    const supabase = await createClient()
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined })
+    const server = buildServer(supabase, auth.userId)
+    await server.connect(transport)
+    return transport.handleRequest(req)
+  })
 }
 
 export const GET    = handle
