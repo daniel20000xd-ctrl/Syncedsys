@@ -9,6 +9,7 @@ import { isAdminEmail } from '@/lib/admin'
 import { GetObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { getR2Client, R2_BUCKET } from '@/lib/r2'
+import { getGoogleAuthUrl, revokeGoogleAccess, hasGoogleAuth, getGoogleScopes, DEFAULT_GOOGLE_SCOPES } from '@/lib/google/auth'
 
 // ── Claude / AI settings ──────────────────────────────────────────────────────
 
@@ -1165,6 +1166,52 @@ export async function setStocksEnabled(enabled: boolean): Promise<void> {
   if (error) throw error
   revalidatePath('/settings/connected-apps')
   revalidatePath('/stocks')
+}
+
+// ── Google account (shared OAuth for Calendar, Sheets, Docs) ──────────────────
+
+// Build the Google consent URL for the requested scopes (defaults to all of them
+// — one consent screen for every integration). The client redirects to the URL.
+export async function connectGoogleAccount(
+  scopes: string[] = DEFAULT_GOOGLE_SCOPES,
+): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated' }
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI
+  if (!redirectUri) return { ok: false, error: 'GOOGLE_REDIRECT_URI is not configured on the server.' }
+  try {
+    const url = getGoogleAuthUrl(user.id, scopes, redirectUri)
+    return { ok: true, url }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Could not start Google sign-in.' }
+  }
+}
+
+// Revoke the grant at Google and delete the stored tokens for the current user.
+export async function disconnectGoogleAccount(): Promise<{ ok: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated' }
+  try {
+    await revokeGoogleAccess(user.id)
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Could not disconnect Google.' }
+  }
+  revalidatePath('/settings/connected-apps')
+  return { ok: true }
+}
+
+// Connection status for the settings UI.
+export async function getGoogleConnectionStatus(): Promise<{ connected: boolean; scopes: string[] }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { connected: false, scopes: [] }
+  const [connected, scopes] = await Promise.all([
+    hasGoogleAuth(user.id),
+    getGoogleScopes(user.id),
+  ])
+  return { connected, scopes }
 }
 
 // ── Account links ─────────────────────────────────────────────────────────────
