@@ -368,8 +368,14 @@ export default function GoogleDocsPortal({ config, onPersistConfig, onUpdateCont
       </div>
 
       {/* Bottom bar */}
-      <div className="flex items-center px-2 py-0.5 border-t border-white/10 shrink-0 text-[10px] text-white/40">
-        {wordCount} word{wordCount === 1 ? '' : 's'} · read-only
+      <div className="flex items-center gap-2 px-2 py-0.5 border-t border-white/10 shrink-0 text-[10px] text-white/40">
+        <span>{wordCount} word{wordCount === 1 ? '' : 's'} · view only</span>
+        <button
+          onClick={() => window.open(`https://docs.google.com/document/d/${documentId}/edit`, '_blank')}
+          className="ml-auto text-white/40 hover:text-white/70 underline decoration-dotted"
+        >
+          Edit in Google Docs
+        </button>
       </div>
     </Shell>
   )
