@@ -1041,7 +1041,18 @@ function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
     )
   }
   if (el.type === 'text') {
-    return <div style={{ position: 'absolute', left: el.x, top: el.y, color: (d.color as string) || '#1f2937', fontSize: (d.fontSize as number) || 18, fontWeight: 500 }} className="whitespace-pre-wrap">{(d.text as string) || 'Text'}</div>
+    const bgColor = (d.bgColor as string) || 'rgba(254,240,64,0.95)'
+    const w = el.width ?? 180, h = el.height ?? 140
+    return (
+      <div style={{
+        position: 'absolute', left: el.x, top: el.y, width: w, height: h,
+        backgroundColor: bgColor, borderRadius: 4, padding: 8,
+        boxShadow: '2px 3px 10px rgba(0,0,0,0.20)',
+        color: (d.color as string) || '#1f2937',
+        fontSize: (d.fontSize as number) || 14,
+        overflow: 'hidden',
+      }} className="whitespace-pre-wrap">{(d.text as string) || ''}</div>
+    )
   }
   if (el.type === 'image') {
     /* eslint-disable-next-line @next/next/no-img-element */
