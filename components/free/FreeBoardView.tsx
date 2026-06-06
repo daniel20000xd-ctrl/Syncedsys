@@ -9,7 +9,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, Lock, Maximize, Eye, EyeOff, Trash2, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, Lock, Maximize, Eye, EyeOff, Trash2, Undo2, Redo2, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, deleteEdge, deleteBoard,
@@ -2365,6 +2365,15 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
       {/* Toolbar — rendered above the drawing overlay (z-20 > overlay z-10) so it stays clickable while drawing */}
       <div className="absolute top-3 right-3 z-20 bg-white rounded-lg shadow-md p-1 flex flex-col gap-0.5 items-center">
+        <div className="flex flex-col gap-0.5">
+          <button onClick={() => undo()} title="Undo (Ctrl+Z)" className="w-7 h-7 flex items-center justify-center rounded transition-colors text-gray-500 hover:bg-gray-100">
+            <Undo2 size={14} />
+          </button>
+          <button onClick={() => redo()} title="Redo (Ctrl+X)" className="w-7 h-7 flex items-center justify-center rounded transition-colors text-gray-500 hover:bg-gray-100">
+            <Redo2 size={14} />
+          </button>
+        </div>
+        <div className="w-full border-t border-gray-100 my-0.5" />
         <div className="flex flex-col gap-0.5">
           {(['select', 'hand', 'draw', 'shape', 'text', 'portal', 'claude'] as Tool[]).map(t => {
             const Icon = TOOL_ICONS[t]
