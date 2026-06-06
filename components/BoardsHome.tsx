@@ -72,13 +72,13 @@ export default function BoardsHome({ boards }: { boards: Board[] }) {
     <div className="p-8 bg-gray-100 min-h-screen">
       <h1 className="text-xl font-bold text-gray-800 mb-6">Your boards</h1>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-5 items-start">
+      <div className="grid gap-3 items-start" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
         {roots.map(board => (
           <BoardChip key={board.id} board={board} depth={0} />
         ))}
         <button
           onClick={() => setShowModal(true)}
-          className="h-20 rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-600 font-medium text-sm flex items-center justify-center gap-1.5 transition-colors"
+          className="h-20 w-full rounded-lg bg-gray-200 hover:bg-gray-300 text-gray-600 font-medium text-sm flex items-center justify-center gap-1.5 transition-colors"
         >
           <Plus size={16} />
           Create new board
