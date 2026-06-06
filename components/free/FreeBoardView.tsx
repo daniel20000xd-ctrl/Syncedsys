@@ -4,7 +4,7 @@ import { useCallback, useRef, useState, useEffect } from 'react'
 import {
   ReactFlow, Background, BackgroundVariant,
   useNodesState, useEdgesState, addEdge, ReactFlowProvider,
-  useReactFlow, ConnectionMode, type Connection, type Node, type Edge,
+  useReactFlow, useNodesInitialized, ConnectionMode, type Connection, type Node, type Edge,
   type NodeTypes, type EdgeTypes, type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
@@ -364,6 +364,23 @@ interface Props {
 function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [], onClose, initialInset }: Props) {
   const router = useRouter()
   const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes, zoomIn, zoomOut, fitView } = useReactFlow()
+  const nodesInitialized = useNodesInitialized()
+  const viewportSet = useRef(false)
+
+  // On first load: restore recent viewport from sessionStorage (within 2 min) or fitView
+  useEffect(() => {
+    if (!nodesInitialized || viewportSet.current) return
+    viewportSet.current = true
+    try {
+      const stored = sessionStorage.getItem(`vp-${board.id}`)
+      if (stored) {
+        const { x, y, zoom, ts } = JSON.parse(stored) as { x: number; y: number; zoom: number; ts: number }
+        if (Date.now() - ts < 2 * 60 * 1000) { setViewport({ x, y, zoom }); return }
+      }
+    } catch {}
+    fitView({ padding: 0.2, maxZoom: 0.85 })
+  }, [nodesInitialized]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const [lists, setLists] = useState(initialLists)
   const [cards, setCards] = useState(initialCards)
   const [elements, setElements] = useState(initialElements)
@@ -2169,8 +2186,9 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         edgeTypes={edgeTypes}
         connectionMode={ConnectionMode.Loose}
         elevateNodesOnSelect={false}
-        fitView
-        fitViewOptions={{ padding: 0.2, maxZoom: 0.85 }}
+        onMoveEnd={(_, vp) => {
+          try { sessionStorage.setItem(`vp-${board.id}`, JSON.stringify({ ...vp, ts: Date.now() })) } catch {}
+        }}
         minZoom={0.05}
         maxZoom={4}
         deleteKeyCode="Delete"
