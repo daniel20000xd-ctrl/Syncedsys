@@ -168,9 +168,9 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
             doMove(draggedId ?? null, board.group_id ?? null, board.id)
           }
         }}
-        className={`relative group/tab shrink-0 transition-colors
+        className={`relative group/tab shrink-0 transition-colors rounded
           ${dragOverId === board.id ? 'border-l-2 border-[#579dff]' : 'border-l-2 border-transparent'}
-          ${dragOverId === `${board.id}:sub` ? 'bg-[#579dff]/20 ring-1 ring-[#579dff] rounded' : ''}
+          ${dragOverId === `${board.id}:sub` ? 'bg-[#579dff]/20 ring-1 ring-[#579dff]' : isActive ? 'bg-white/10' : 'hover:bg-white/5'}
           ${draggingId === board.id ? 'opacity-40' : ''}`}
       >
         <Link
@@ -181,9 +181,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
             : 'text-white/50 border-transparent hover:text-white/80'
           }`}
         >
-          <span className={`flex items-center gap-2 ${inGroup ? 'px-2.5 py-1' : 'px-4 py-2'} rounded transition-colors ${
-            isActive ? 'bg-white/10' : 'hover:bg-white/5'
-          }`}>
+          <span className={`flex items-center gap-2 ${inGroup ? 'px-2.5 py-1' : 'px-4 py-2'}`}>
             <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: board.color }} />
             {board.name}
             {expired && <span className="text-[10px] text-red-400 ml-1">Expired</span>}
