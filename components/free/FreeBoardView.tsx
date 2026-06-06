@@ -860,6 +860,10 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     return nodeId
   }
 
+  // Keep a stable ref so the paste handler doesn't capture a stale closure
+  const addElementRef = useRef(addElement)
+  useEffect(() => { addElementRef.current = addElement })
+
   // ── Drag & drop OS text files onto the canvas ──
   const [fileDragOver, setFileDragOver] = useState(false)
   const dragCountRef = useRef(0)
@@ -1787,6 +1791,61 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     return () => window.removeEventListener('keydown', onKey)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Paste image from clipboard (Ctrl+V / Cmd+V) ──
+  useEffect(() => {
+    async function compressBlob(blob: Blob, maxPx = 2000, quality = 0.85): Promise<Blob> {
+      return new Promise(resolve => {
+        const url = URL.createObjectURL(blob)
+        const img = new Image()
+        img.onload = () => {
+          URL.revokeObjectURL(url)
+          let { width, height } = img
+          if (width <= maxPx && height <= maxPx && blob.size <= 2 * 1024 * 1024) { resolve(blob); return }
+          const scale = Math.min(maxPx / width, maxPx / height, 1)
+          width = Math.round(width * scale); height = Math.round(height * scale)
+          const canvas = document.createElement('canvas')
+          canvas.width = width; canvas.height = height
+          canvas.getContext('2d')!.drawImage(img, 0, 0, width, height)
+          canvas.toBlob(result => resolve(result ?? blob), 'image/jpeg', quality)
+        }
+        img.src = url
+      })
+    }
+
+    async function onPaste(e: ClipboardEvent) {
+      const el = e.target as HTMLElement | null
+      const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
+      if (typing) return
+      const imageItem = Array.from(e.clipboardData?.items ?? []).find(i => i.type.startsWith('image/'))
+      if (!imageItem) return
+      e.preventDefault()
+      const raw = imageItem.getAsFile()
+      if (!raw) return
+      const blob = raw.size > 2 * 1024 * 1024 ? await compressBlob(raw) : raw
+      const filename = `pasted-${crypto.randomUUID()}.jpg`
+      const form = new FormData()
+      form.append('file', blob, filename)
+      form.append('app', 'hub')
+      form.append('subpath', `images/${filename}`)
+      try {
+        const res = await fetch(`${STORAGE_URL}/api/storage/upload`, { method: 'POST', body: form })
+        if (!res.ok) { console.error('Paste image upload failed:', res.status); return }
+        const { key, presignedUrl } = await res.json() as { key: string; presignedUrl?: string }
+        if (!key) { console.error('Paste image upload returned no key'); return }
+        const flowPos = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+        addElementRef.current('image', flowPos.x - 100, flowPos.y - 75, {
+          ...(presignedUrl ? { url: presignedUrl } : {}),
+          storagePath: key, sizeBytes: blob.size, alt: filename,
+        })
+      } catch (err) {
+        console.error('Paste image error:', err)
+      }
+    }
+
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [screenToFlowPosition]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Units dashboard (left sidebar) integration ──
   const unitKind = (n: Node): Unit['kind'] => {
     if (n.id.startsWith('list-')) return 'list'
@@ -2111,6 +2170,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         connectionMode={ConnectionMode.Loose}
         elevateNodesOnSelect={false}
         fitView
+        fitViewOptions={{ padding: 0.4, maxZoom: 0.75 }}
         minZoom={0.05}
         maxZoom={4}
         deleteKeyCode="Delete"
@@ -2152,7 +2212,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         }}
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.2)" gap={24} size={1.5} />
+        <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.35)" gap={24} size={2.5} />
       </ReactFlow>
 
       {fileDragOver && (() => {
