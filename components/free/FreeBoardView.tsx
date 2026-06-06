@@ -224,7 +224,7 @@ function getNodeWH(n: Node): [number, number] {
   return [w, h]
 }
 
-const GUIDE_SNAP = 5 // flow-space px within which the dragged node snaps to an alignment
+const GUIDE_SNAP_PX = 10 // screen-space pixels of snap range (divided by zoom at call site)
 
 // Compute the closest alignment for a dragged node against every other node.
 // Returns the snapped X/Y (if within threshold) and the guide-line coords to draw.
@@ -233,6 +233,7 @@ function computeGuides(
   pos: { x: number; y: number },
   all: Node[],
   exclude?: Set<string>,
+  zoom = 1,
 ): { snapX?: number; snapY?: number; vLine: number | null; hLine: number | null } {
   const dn = all.find(n => n.id === draggedId)
   if (!dn) return { vLine: null, hLine: null }
@@ -241,7 +242,8 @@ function computeGuides(
   const aT = pos.y, aB = pos.y + dh, aCy = pos.y + dh / 2
   let snapX: number | undefined, snapY: number | undefined
   let vLine: number | null = null, hLine: number | null = null
-  let bestX = GUIDE_SNAP, bestY = GUIDE_SNAP
+  const threshold = GUIDE_SNAP_PX / zoom
+  let bestX = threshold, bestY = threshold
   for (const o of all) {
     if (o.id === draggedId || o.hidden) continue
     if (exclude?.has(o.id)) continue
@@ -284,10 +286,12 @@ function computeResizeSnap(
   cur: { x: number; y: number; w: number; h: number },
   all: Node[],
   exclude?: Set<string>,
+  zoom = 1,
 ): { x: number; y: number; w: number; h: number; vLine: number | null; hLine: number | null } {
   let { x, y, w, h } = next
   const EPS = 0.01
   const MIN = 20
+  const snapThreshold = GUIDE_SNAP_PX / zoom
   const movingLeft = Math.abs(x - cur.x) > EPS
   const movingTop = Math.abs(y - cur.y) > EPS
   const movingRight = !movingLeft && Math.abs((x + w) - (cur.x + cur.w)) > EPS
@@ -297,7 +301,7 @@ function computeResizeSnap(
 
   if (movingLeft || movingRight) {
     const edge = movingLeft ? x : x + w
-    let best = GUIDE_SNAP, target: number | null = null
+    let best = snapThreshold, target: number | null = null
     for (const o of all) {
       if (o.id === id || o.hidden || exclude?.has(o.id)) continue
       const [ow] = getNodeWH(o)
@@ -314,7 +318,7 @@ function computeResizeSnap(
 
   if (movingTop || movingBottom) {
     const edge = movingTop ? y : y + h
-    let best = GUIDE_SNAP, target: number | null = null
+    let best = snapThreshold, target: number | null = null
     for (const o of all) {
       if (o.id === id || o.hidden || exclude?.has(o.id)) continue
       const [, oh] = getNodeWH(o)
@@ -690,7 +694,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (changes.length === 1) {
       const ch = changes[0] as { id?: string; type?: string; dragging?: boolean; position?: { x: number; y: number } }
       if (ch.type === 'position' && ch.dragging && ch.position && ch.id) {
-        const g = computeGuides(ch.id, ch.position, nodesRef.current, groupDragRef.current?.descIds)
+        const g = computeGuides(ch.id, ch.position, nodesRef.current, groupDragRef.current?.descIds, getViewport().zoom)
         if (g.snapX != null) { ch.position.x = g.snapX; v = g.vLine }
         if (g.snapY != null) { ch.position.y = g.snapY; h = g.hLine }
       }
@@ -725,6 +729,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
           { x: node.position.x, y: node.position.y, w: cw, h: chh },
           nodesRef.current,
           descendantsOf(id, nodesRef.current),
+          getViewport().zoom,
         )
         dimSnap.dimensions.width = s.w
         dimSnap.dimensions.height = s.h
