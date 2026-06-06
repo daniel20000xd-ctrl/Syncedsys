@@ -33,7 +33,7 @@ export default async function RootPage() {
     await supabase.from('board_elements').insert([
       {
         id: id1, board_id: board.id, type: 'text', x: 160, y: 200, width: 200, height: 160,
-        data: { text: 'This is your first board!', bgColor: 'rgba(254,240,64,0.95)', fontSize: 14, color: '#1f2937' },
+        data: { text: 'This is your first board!\n\nFollow the arrow to get started.', bgColor: 'rgba(254,240,64,0.95)', fontSize: 14, color: '#1f2937' },
       },
       {
         id: id2, board_id: board.id, type: 'text', x: 420, y: 200, width: 200, height: 160,
