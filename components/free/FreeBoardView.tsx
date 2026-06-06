@@ -2230,7 +2230,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         }}
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.35)" gap={24} size={2.5} />
+        <Background variant={BackgroundVariant.Dots} color="rgba(255,255,255,0.28)" gap={24} size={2} />
       </ReactFlow>
 
       {fileDragOver && (() => {
