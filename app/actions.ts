@@ -475,7 +475,10 @@ export async function deleteBoard(boardId: string) {
     }
   }
 
-  await supabase.from('boards').delete().eq('id', boardId).eq('user_id', user.id)
+  // Delete all boards in the subtree. children reference parents via parent_id,
+  // but PostgreSQL checks FK constraints at statement end, so a single IN-delete
+  // of the whole set works without ordering tricks.
+  await supabase.from('boards').delete().in('id', allBoardIds).eq('user_id', user.id)
   revalidatePath('/', 'layout')
 }
 

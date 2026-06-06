@@ -4,7 +4,7 @@ import { useEffect, useCallback, useState, useRef } from 'react'
 import Link from 'next/link'
 import { createPortal } from 'react-dom'
 import { usePathname, useRouter } from 'next/navigation'
-import { Plus, LayoutGrid, ChevronDown, FolderPlus, Check, Trash2 } from 'lucide-react'
+import { Plus, LayoutGrid, ChevronDown, FolderPlus, Check, Trash2, X } from 'lucide-react'
 import type { Board } from '@/lib/types'
 import { createBoard, createGroup, moveTab, moveBoardToParent, updateBoard, deleteBoard } from '@/app/actions'
 import { BOARD_TAB_MIME, FLOAT_BOARD_MIME } from '@/lib/files'
@@ -31,6 +31,8 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
   const [groupMenu, setGroupMenu] = useState<GroupMenu>(null)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<Board | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const draggingRef = useRef<string | null>(null)
 
   useEffect(() => { setBoards(initialBoards) }, [initialBoards])
@@ -116,6 +118,19 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
       .catch(err => { alert(err instanceof Error ? err.message : 'Could not move that tab.'); router.refresh() })
   }
 
+  async function handleDeleteConfirmed() {
+    if (!pendingDelete) return
+    setDeleting(true)
+    const wasActive = pathname === `/board/${pendingDelete.id}`
+    setBoards(prev => prev.filter(b => b.id !== pendingDelete.id && b.parent_id !== pendingDelete.id))
+    setPendingDelete(null)
+    setDeleting(false)
+    try {
+      await deleteBoard(pendingDelete.id)
+    } catch {}
+    if (wasActive) router.push('/boards'); else router.refresh()
+  }
+
   const isAllBoards = pathname === '/boards'
 
   // ── A single tab (normal board) ──
@@ -174,13 +189,22 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
             {expired && <span className="text-[10px] text-red-400 ml-1">Expired</span>}
           </span>
         </Link>
-        <button
-          onClick={e => { e.preventDefault(); const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setGroupMenu(null); setOpenPanel(openPanel?.boardId === board.id ? null : { boardId: board.id, rect }) }}
-          className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/tab:opacity-100 p-1 rounded hover:bg-white/20 text-white/50 hover:text-white transition-opacity"
-          title="Edit board"
-        >
-          <ChevronDown size={12} />
-        </button>
+        <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover/tab:opacity-100 flex items-center gap-0.5 transition-opacity">
+          <button
+            onClick={e => { e.preventDefault(); const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setGroupMenu(null); setOpenPanel(openPanel?.boardId === board.id ? null : { boardId: board.id, rect }) }}
+            className="p-0.5 rounded hover:bg-white/20 text-white/50 hover:text-white"
+            title="Edit board"
+          >
+            <ChevronDown size={11} />
+          </button>
+          <button
+            onClick={e => { e.preventDefault(); e.stopPropagation(); setPendingDelete(board) }}
+            className="p-0.5 rounded hover:bg-red-500/70 text-white/40 hover:text-white"
+            title="Delete tab"
+          >
+            <X size={11} />
+          </button>
+        </div>
       </div>
     )
   }
@@ -273,12 +297,8 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
             onClose={() => setOpenPanel(null)}
             onUpdate={updated => { setBoards(prev => prev.map(b => b.id === updated.id ? updated : b)); setOpenPanel(null); router.refresh() }}
             onRemove={() => {
-              if (!confirm(`Remove "${board.name}" and everything in it?`)) return
-              const wasActive = pathname === `/board/${board.id}`
-              setBoards(prev => prev.filter(b => b.id !== board.id))
               setOpenPanel(null)
-              deleteBoard(board.id).catch(() => {})
-              if (wasActive) router.push('/boards'); else router.refresh()
+              setPendingDelete(board)
             }}
           />
         )
@@ -313,6 +333,42 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
             router.push(`/board/${board.id}`)
           }}
         />
+      )}
+
+      {pendingDelete && createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50" onClick={() => !deleting && setPendingDelete(null)}>
+          <div
+            className="bg-white rounded-xl shadow-2xl border border-gray-200 p-5 w-80 mx-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3 mb-4">
+              <div className="shrink-0 w-8 h-8 rounded-full bg-red-100 flex items-center justify-center">
+                <Trash2 size={15} className="text-red-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Delete &ldquo;{pendingDelete.name}&rdquo;?</p>
+                <p className="text-xs text-gray-500 mt-1">This will permanently delete this tab, all its sub-tabs, and every unit inside them. This cannot be undone.</p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPendingDelete(null)}
+                disabled={deleting}
+                className="flex-1 py-1.5 text-sm rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteConfirmed}
+                disabled={deleting}
+                className="flex-1 py-1.5 text-sm rounded-lg bg-red-600 hover:bg-red-700 text-white font-medium disabled:opacity-50"
+              >
+                {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </>
   )
