@@ -2170,7 +2170,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         connectionMode={ConnectionMode.Loose}
         elevateNodesOnSelect={false}
         fitView
-        fitViewOptions={{ padding: 0.4, maxZoom: 0.75 }}
+        fitViewOptions={{ padding: 0.2, maxZoom: 0.85 }}
         minZoom={0.05}
         maxZoom={4}
         deleteKeyCode="Delete"
