@@ -11,9 +11,11 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   const { id } = await params
   const supabase = await createClient()
 
+  // select('*') (not an explicit is_persona column) so this never errors on the
+  // pre-migration schema — is_persona simply reads undefined there.
   const { data: board } = await supabase
     .from('boards')
-    .select('id, name, parent_id, is_persona')
+    .select('*')
     .eq('id', id)
     .single()
 
@@ -25,7 +27,7 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   while (root.parent_id) {
     const { data: parent } = await supabase
       .from('boards')
-      .select('id, name, parent_id, is_persona')
+      .select('*')
       .eq('id', root.parent_id)
       .single()
     if (!parent || parent.is_persona) break

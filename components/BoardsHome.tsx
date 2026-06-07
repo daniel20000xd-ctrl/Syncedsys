@@ -150,6 +150,7 @@ export default function BoardsHome({ boards: initialBoards }: { boards: Board[] 
             router.refresh()
           }}
           onRemove={() => {
+            if (openPanel.board.is_persona) return
             setOpenPanel(null)
             setPendingDelete(openPanel.board)
           }}

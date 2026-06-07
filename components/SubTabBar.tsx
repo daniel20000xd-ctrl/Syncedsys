@@ -187,6 +187,7 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
             onClose={() => setOpenPanel(null)}
             onUpdate={() => { setOpenPanel(null); router.refresh() }}
             onRemove={() => {
+              if (board.is_persona) return
               if (!confirm(`Remove "${board.name}" and everything in it?`)) return
               const wasActive = pathname === `/board/${board.id}`
               setOpenPanel(null)

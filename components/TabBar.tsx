@@ -41,6 +41,15 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
   useEffect(() => { setBoards(initialBoards) }, [initialBoards])
   useEffect(() => { try { setRememberedPersona(localStorage.getItem('activePersonaId')) } catch {} }, [])
 
+  // Drop a remembered persona id once it no longer exists (e.g. deleted), so we
+  // never silently fall back to the wrong workspace.
+  useEffect(() => {
+    if (rememberedPersona && boards.length && !boards.some(b => b.is_persona && b.id === rememberedPersona)) {
+      setRememberedPersona(null)
+      try { localStorage.removeItem('activePersonaId') } catch {}
+    }
+  }, [boards, rememberedPersona])
+
   // ── Active persona ──
   // Structural source of truth: walk the current board up to its persona. On the
   // /boards screen (no board context) fall back to the remembered persona, then
@@ -82,8 +91,10 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     setShowPersonas(false)
     try { localStorage.setItem('activePersonaId', p.id) } catch {}
     setRememberedPersona(p.id)
+    // Never navigate to a persona id directly — land on its first tab, or the
+    // boards overview if the persona is empty.
     const firstChild = boards.filter(b => b.parent_id === p.id && !b.is_persona).sort(byPos)[0]
-    router.push(firstChild ? `/board/${firstChild.id}` : `/board/${p.id}`)
+    router.push(firstChild ? `/board/${firstChild.id}` : '/boards')
   }
 
   async function handleCreatePersona() {
@@ -390,6 +401,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
             onClose={() => setOpenPanel(null)}
             onUpdate={updated => { setBoards(prev => prev.map(b => b.id === updated.id ? updated : b)); setOpenPanel(null); router.refresh() }}
             onRemove={() => {
+              if (board.is_persona) return
               setOpenPanel(null)
               setPendingDelete(board)
             }}

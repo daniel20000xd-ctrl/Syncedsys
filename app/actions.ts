@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
 import { encryptSecret, sha256Hex, randomToken } from '@/lib/crypto'
@@ -1053,6 +1054,21 @@ export async function copyBoardInto(sourceBoardId: string, destParentBoardId: st
 // Re-parent a folder (board) under another board, or to the top level (null).
 // Guards against moving a folder into itself or into one of its own
 // descendants, which would create a cycle.
+// Walk a board's parent_id chain server-side to find its persona root.
+async function personaIdOf(supabase: SupabaseClient, boardId: string): Promise<string | null> {
+  let cur: string | null = boardId
+  const seen = new Set<string>()
+  while (cur && !seen.has(cur)) {
+    seen.add(cur)
+    const { data }: { data: { id: string; parent_id: string | null; is_persona?: boolean } | null } =
+      await supabase.from('boards').select('id, parent_id, is_persona').eq('id', cur).maybeSingle()
+    if (!data) return null
+    if (data.is_persona) return data.id
+    cur = data.parent_id
+  }
+  return null
+}
+
 export async function moveBoardToParent(boardId: string, newParentId: string | null, fromParentId?: string, activePersonaId: string | null = null) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -1075,8 +1091,10 @@ export async function moveBoardToParent(boardId: string, newParentId: string | n
     }
   }
 
-  // Moving to "top level" means top level of the active persona, not the true root.
-  const effectiveParent = newParentId ?? activePersonaId
+  // Moving to "top level" means top level of the active persona, not the true
+  // root. Prefer the caller's persona; otherwise derive it from the board's own
+  // current ancestry (covers callers like FolderBoardView that lack the context).
+  const effectiveParent = newParentId ?? activePersonaId ?? await personaIdOf(supabase, boardId)
 
   let posQuery = supabase.from('boards').select('tab_position').eq('user_id', user.id).order('tab_position', { ascending: false }).limit(1)
   posQuery = effectiveParent ? posQuery.eq('parent_id', effectiveParent) : posQuery.is('parent_id', null)

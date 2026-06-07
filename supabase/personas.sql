@@ -45,17 +45,33 @@ create trigger trg_prevent_nonempty_persona_delete
 --    both the cursor and the UPDATE makes a re-run a no-op.
 do $$
 declare
-  u   record;
-  pid uuid;
+  u       record;
+  pid     uuid;
+  nextpos int;
 begin
   for u in
     select distinct user_id
     from boards
     where parent_id is null and is_persona = false
   loop
-    insert into boards (user_id, name, color, mode, is_persona, parent_id, tab_position)
-    values (u.user_id, 'Personal', '#6366f1', 'classic', true, null, 0)
-    returning id into pid;
+    -- Reuse an existing persona if the user already has one (handles a
+    -- half-applied migration or personas created via the app), otherwise create
+    -- one at the next free top-level position. No duplicates, no collisions.
+    select id into pid
+    from boards
+    where user_id = u.user_id and is_persona = true
+    order by tab_position, created_at
+    limit 1;
+
+    if pid is null then
+      select coalesce(max(tab_position), -1) + 1 into nextpos
+      from boards
+      where user_id = u.user_id and parent_id is null and is_persona = true;
+
+      insert into boards (user_id, name, color, mode, is_persona, parent_id, tab_position)
+      values (u.user_id, 'Personal', '#6366f1', 'classic', true, null, coalesce(nextpos, 0))
+      returning id into pid;
+    end if;
 
     update boards
     set parent_id = pid

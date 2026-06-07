@@ -57,11 +57,13 @@ function formatBoards(boards: BoardMeta[]): string {
 }
 
 async function fetchBoards(supabase: SupabaseClient, userId: string): Promise<BoardMeta[] | null> {
+  // select('*') + JS filter (rather than .eq('is_persona', false)) so this never
+  // errors on the pre-migration schema; persona rows are excluded from context.
   const { data, error } = await supabase
-    .from('boards').select('id,name,mode,meta').eq('user_id', userId).eq('is_persona', false)
+    .from('boards').select('*').eq('user_id', userId)
     .order('tab_position', { ascending: true })
   if (error) return null
-  return data as BoardMeta[]
+  return (data ?? []).filter(b => !(b as { is_persona?: boolean }).is_persona) as BoardMeta[]
 }
 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
