@@ -3,9 +3,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone, Sparkles } from 'lucide-react'
+import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone, Sparkles, Download } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced } from '@/app/actions'
+import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced, exportBoardData } from '@/app/actions'
+import { exportBoardAsMarkdown, boardExportFilename } from '@/lib/exportBoard'
+import { downloadTextFile } from '@/lib/files'
 
 const COLORS = [
   '#0079bf', '#d29034', '#519839', '#b04632',
@@ -50,6 +52,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   }
   const [suggesting, setSuggesting] = useState(false)
   const [subTabCreating, setSubTabCreating] = useState(false)
+  const [downloading, setDownloading] = useState(false)
   const panelRef = useRef<HTMLDivElement>(null)
 
   const top = anchorRect.bottom + 6
@@ -124,6 +127,19 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
       router.refresh()
     } finally {
       setSubTabCreating(false)
+    }
+  }
+
+  async function handleDownload() {
+    if (downloading) return
+    setDownloading(true)
+    try {
+      const data = await exportBoardData(board.id)
+      if (!data) return
+      const md = exportBoardAsMarkdown(data)
+      downloadTextFile(boardExportFilename(board.name) + '.md', md)
+    } finally {
+      setDownloading(false)
     }
   }
 
@@ -259,6 +275,17 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
           </button>
         </div>
       )}
+
+      <div className="border-t border-gray-200 mt-3 pt-3">
+        <button
+          onClick={handleDownload}
+          disabled={downloading}
+          className="text-xs text-gray-600 hover:text-gray-900 flex items-center gap-1 disabled:opacity-50"
+        >
+          <Download size={12} />
+          {downloading ? 'Exporting…' : 'Download tab'}
+        </button>
+      </div>
 
       {onRemove && (
         <div className="border-t border-gray-200 mt-3 pt-3">
