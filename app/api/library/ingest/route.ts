@@ -17,9 +17,29 @@ type IngestItem = {
 }
 
 export async function POST(req: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const admin = createAdminClient()
+
+  // Accept either a browser session (cookie) or a static bearer token for scripts.
+  const bearer = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+  const ingestKey = process.env.LIBRARY_INGEST_KEY
+
+  let userId: string
+
+  if (ingestKey && bearer === ingestKey) {
+    // Script path: look up the admin user by email so inserts are scoped correctly.
+    const adminEmail = process.env.ADMIN_EMAIL
+    if (!adminEmail) return NextResponse.json({ error: 'ADMIN_EMAIL not configured' }, { status: 500 })
+    const { data: { users } } = await admin.auth.admin.listUsers()
+    const adminUser = users.find(u => u.email === adminEmail)
+    if (!adminUser) return NextResponse.json({ error: 'Admin user not found' }, { status: 500 })
+    userId = adminUser.id
+  } else {
+    // Browser path: validate the session cookie as before.
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    userId = user.id
+  }
 
   let body: { items?: unknown }
   try {
@@ -33,7 +53,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '`items` must be an array' }, { status: 400 })
   }
 
-  const admin = createAdminClient()
   let inserted = 0, updated = 0, skipped = 0
   const errors: string[] = []
 
@@ -56,7 +75,7 @@ export async function POST(req: NextRequest) {
         const { data: rows } = await admin
           .from('library_items')
           .select('id, content_hash, version')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .eq('type', 'legal_case')
           .eq('deleted', false)
           .filter('metadata->>beteckning', 'eq', beteckning)
@@ -66,7 +85,7 @@ export async function POST(req: NextRequest) {
         const { data: rows } = await admin
           .from('library_items')
           .select('id, content_hash, version')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .eq('type', 'paper')
           .eq('deleted', false)
           .filter('metadata->>doi', 'eq', doi)
@@ -94,7 +113,7 @@ export async function POST(req: NextRequest) {
         updated++
       } else {
         await admin.from('library_items').insert({
-          user_id: user.id,
+          user_id: userId,
           type: item.type,
           title: item.title,
           summary: item.summary ?? null,
