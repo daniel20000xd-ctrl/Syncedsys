@@ -5,7 +5,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
 import { encryptSecret, sha256Hex, randomToken } from '@/lib/crypto'
-import { billableUsd, freeAllowanceUsd, currentPeriodStartIso } from '@/lib/claude/pricing'
+import { billableUsd, currentPeriodStartIso } from '@/lib/claude/pricing'
+import { getAccountLimits } from '@/lib/limits'
 import { isAdminEmail } from '@/lib/admin'
 import { GetObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
@@ -100,15 +101,15 @@ export async function getClaudeUsage(): Promise<{
   hasOwnKey: boolean
   usingPlatform: boolean
   payPerUse: boolean
-  freeUsd: number
+  freeUsd: number | null
   spentUsd: number
   owedUsd: number
 }> {
-  const free = freeAllowanceUsd()
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+  const { apiCreditUsd } = getAccountLimits(user ?? null)
   if (!user) {
-    return { keySource: 'platform', hasOwnKey: false, usingPlatform: false, payPerUse: false, freeUsd: free, spentUsd: 0, owedUsd: 0 }
+    return { keySource: 'platform', hasOwnKey: false, usingPlatform: false, payPerUse: false, freeUsd: apiCreditUsd, spentUsd: 0, owedUsd: 0 }
   }
 
   // Read the key flag on its own always-present column so a missing pay_per_use
@@ -132,7 +133,7 @@ export async function getClaudeUsage(): Promise<{
 
   return {
     keySource: hasOwnKey ? 'user' : 'platform',
-    hasOwnKey, usingPlatform, payPerUse, freeUsd: free, spentUsd,
+    hasOwnKey, usingPlatform, payPerUse, freeUsd: apiCreditUsd, spentUsd,
     owedUsd: billableUsd(spentUsd, payPerUse),
   }
 }
