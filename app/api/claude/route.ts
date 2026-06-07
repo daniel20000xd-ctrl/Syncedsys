@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
 
   const anthropic = new Anthropic({ apiKey })
   const tools = writesEnabled ? [...READ_TOOLS, ...WRITE_TOOLS] : READ_TOOLS
-  const toolCtx: ToolCtx = { supabase, userId: user.id, allowedIds, accessToken }
+  const toolCtx: ToolCtx = { supabase, userId: user.id, allowedIds, accessToken, rootBoardId: boardId }
 
   // Mode is binary: when the user hasn't enabled "Let Claude make changes",
   // the write tools aren't in `tools` at all (above), so there is nothing to
@@ -96,6 +96,7 @@ export async function POST(req: NextRequest) {
     'TOOLS:',
     '- get_board(boardId): pull a board\'s full, current contents. Use it before acting when the context excerpt looks truncated or stale.',
     '- Write tools (create_board, create_list, create_card, create_text, create_shape, create_file, set_board_content, rename_board) act on Syncedsys boards. Every write is re-validated against your scope server-side, so only ever pass an id that appears in the context. Coordinates (x/y) are optional — on a canvas, place new elements so they don\'t overlap.',
+    '- create_url_preview(url, x?, y?): place a rich link-preview card on the user\'s current board. Use it whenever the user shares or asks you to put a URL, product page, listing, or website on the board — it surfaces the link visually (image, title, domain) instead of as plain text. It always targets the current board; do not pass a board id.',
     '- Slides tools (create_presentation, add_slide, add_text_element, …) act on the separate Slides app; use them only when the user is working with a presentation.',
     '',
     ...modeGuidance,

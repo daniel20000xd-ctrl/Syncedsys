@@ -73,7 +73,7 @@ export type BoardEdge = {
 export type BoardElement = {
   id: string
   board_id: string
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf'
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview'
   x: number
   y: number
   width: number | null

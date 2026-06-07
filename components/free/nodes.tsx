@@ -5,8 +5,10 @@ import {
   BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps,
 } from '@xyflow/react'
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, FileType, BarChart2, Presentation } from 'lucide-react'
+import { Plus, X, ExternalLink, ChevronDown, Maximize2, Lock, LockOpen, Check, Clock, EyeOff, Repeat, FileText, Download, Folder, ArrowLeft, Link2, Unlink, FileType, BarChart2, Presentation, Globe } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import { updateBoardContent, ensureMirrorPortal, updateTextFile, createSubTab, getPdfUrl, getPresignedReadUrl } from '@/app/actions'
+import { isSingleUrl, normalizeUrl, type UrlPreviewData, type UrlPreviewStatus } from '@/lib/urlPreviewShared'
 import { useRouter } from 'next/navigation'
 import StockPortal from './StockPortal'
 import SlidesPortal from './SlidesPortal'
@@ -438,6 +440,7 @@ export function TextNode({ id, data, selected }: NodeProps) {
   const { updateNodeData, getViewport, setViewport, screenToFlowPosition } = useReactFlow()
   const [text, setText] = useState((data.text as string) || '')
   const [showColorPicker, setShowColorPicker] = useState(false)
+  const [urlPopup, setUrlPopup] = useState<{ url: string; raw: string; x: number; y: number } | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Wheel over a note: if the text can scroll in that direction, scroll the note
@@ -490,6 +493,35 @@ export function TextNode({ id, data, selected }: NodeProps) {
     setShowColorPicker(false)
     updateNodeData(id, { ...data, bgColor: value })
     onSave?.(id, { text, color, fontSize, bgColor: value })
+  }
+
+  // Pasting a bare URL into a note offers to turn it into a rich preview card.
+  // The URL still pastes as text (ignoring the popup keeps it); on confirm we
+  // spawn the preview next to this note and strip the URL back out.
+  function onPasteText(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const pasted = e.clipboardData.getData('text')
+    if (!isSingleUrl(pasted)) return
+    const normalized = normalizeUrl(pasted)
+    if (!normalized) return
+    const rect = textareaRef.current?.getBoundingClientRect()
+    setUrlPopup({ url: normalized, raw: pasted.trim(), x: (rect?.left ?? 0) + 8, y: (rect?.bottom ?? 0) + 6 })
+  }
+
+  function confirmUrlPreview() {
+    const popup = urlPopup
+    setUrlPopup(null)
+    if (!popup) return
+    const create = data.onCreateUrlPreview as ((srcNodeId: string, url: string) => void) | undefined
+    // Never destroy the note's text unless we're actually creating a preview.
+    if (!create) return
+    create(id, popup.url)
+    const next = (text.includes(popup.raw) ? text.replace(popup.raw, '') : text).trim()
+    if (!next) {
+      ;(data.onDelete as (id: string) => void)?.(id)
+    } else {
+      setText(next)
+      save(next)
+    }
   }
 
   const hasBg = bgColor !== 'transparent'
@@ -546,10 +578,15 @@ export function TextNode({ id, data, selected }: NodeProps) {
         value={text}
         onChange={e => setText(e.target.value)}
         onBlur={() => save(text)}
+        onPaste={onPasteText}
         placeholder="Type…"
         className="nodrag nowheel flex-1 bg-transparent resize-none focus:outline-none px-2 pb-2 leading-snug overflow-y-auto"
         style={{ color, fontSize }}
       />
+
+      {urlPopup && (
+        <UrlPastePopup x={urlPopup.x} y={urlPopup.y} onConfirm={confirmUrlPreview} onDismiss={() => setUrlPopup(null)} />
+      )}
 
       {/* Colour picker popup */}
       {showColorPicker && (
@@ -876,6 +913,177 @@ export function ImageNode({ id, data }: NodeProps) {
   )
 }
 
+// ── URL preview: paste popup + card ──────────────────────────────────────────
+
+// A tiny floating prompt shown near the caret after a URL is pasted into a sticky.
+// Rendered to document.body via a portal so the canvas transform can't clip it.
+// Dismisses on click-away, Escape, or after 5s — ignoring it leaves the URL as text.
+function UrlPastePopup({ x, y, onConfirm, onDismiss }: { x: number; y: number; onConfirm: () => void; onDismiss: () => void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onDismiss() }
+    const onDown = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) onDismiss() }
+    const t = setTimeout(onDismiss, 5000)
+    document.addEventListener('keydown', onKey)
+    // Defer the click-away listener so the paste-triggering interaction doesn't dismiss it immediately.
+    const a = setTimeout(() => document.addEventListener('mousedown', onDown), 0)
+    return () => { clearTimeout(t); clearTimeout(a); document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown) }
+  }, [onDismiss])
+
+  const left = Math.min(x, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 220)
+  const top = Math.min(y, (typeof window !== 'undefined' ? window.innerHeight : 9999) - 48)
+
+  return createPortal(
+    <div ref={ref} style={{ position: 'fixed', left, top, zIndex: 10000 }} className="select-none">
+      <button
+        onClick={e => { e.stopPropagation(); onConfirm() }}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1d2125] text-white text-xs shadow-xl border border-white/15 hover:bg-[#2a2f35] transition-colors whitespace-nowrap"
+      >
+        <Link2 size={13} className="text-[#579dff]" />
+        Skapa förhandsvisning
+      </button>
+    </div>,
+    document.body,
+  )
+}
+
+// Guards against two concurrent enrichment requests for the same pending unit
+// (e.g. a duplicate mount). Cleared once the request settles.
+const enrichingUrlPreviews = new Set<string>()
+
+export function UrlPreviewNode({ id, data }: NodeProps) {
+  const { updateNodeData } = useReactFlow()
+  const onHold = data.onHold as ((id: string) => void) | undefined
+  const onSave = data.onSave as SaveFn | undefined
+  const url = (data.url as string) || ''
+  const status = (data.status as UrlPreviewStatus) || 'pending'
+  const domain = (data.domain as string) || (() => { try { return new URL(url).hostname.replace(/^www\./, '') } catch { return url } })()
+  const title = (data.title as string) || domain || url
+  const description = (data.description as string) || ''
+  const faviconUrl = data.faviconUrl as string | undefined
+  const storagePath = data.storagePath as string | undefined
+  const [imgSrc, setImgSrc] = useState<string>((data.imageUrl as string) || '')
+
+  // Presigned R2 URLs for the re-hosted og:image expire (~1h); re-mint a fresh one
+  // from the stable storage key on each load, exactly like ImageNode.
+  useEffect(() => {
+    if (!storagePath) return
+    let cancelled = false
+    getPresignedReadUrl(storagePath)
+      .then(r => { if (!cancelled && r.ok && r.url) setImgSrc(r.url) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [storagePath])
+
+  // Self-healing: any unit rendered in `pending` state (created by a paste, an MCP
+  // direct insert, or anything else) enriches itself through the shared endpoint
+  // exactly once, then persists via the normal onSave flow so local state + DB agree.
+  const didEnrich = useRef(false)
+  useEffect(() => {
+    if (status !== 'pending' || !url || didEnrich.current) return
+    if (enrichingUrlPreviews.has(id)) return
+    didEnrich.current = true
+    enrichingUrlPreviews.add(id)
+    ;(async () => {
+      try {
+        const res = await fetch('/api/units/url-preview/enrich', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ unitId: id.replace('el-', ''), url }),
+        })
+        if (res.ok) {
+          const { data: enriched } = await res.json() as { data: UrlPreviewData }
+          if (enriched) {
+            updateNodeData(id, enriched)
+            onSave?.(id, { ...data, ...enriched })
+          }
+        }
+      } catch {
+        /* leave pending; it will retry on the next fresh render */
+      } finally {
+        enrichingUrlPreviews.delete(id)
+      }
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, url, status])
+
+  const open = () => { if (url) window.open(url, '_blank', 'noopener,noreferrer') }
+  const showImage = status !== 'pending' && !!imgSrc
+
+  return (
+    <div onMouseDown={() => onHold?.(id)}>
+      <div
+        onDoubleClick={open}
+        title={url}
+        className="relative group select-none rounded-lg overflow-hidden shadow-lg border border-gray-200 bg-white cursor-pointer"
+        style={{ width: 280 }}
+      >
+        <SideHandles color="!bg-[#579dff]" />
+
+        {/* Action buttons (hover) */}
+        <div className="absolute top-1 right-1 z-10 flex gap-1 opacity-0 group-hover:opacity-100">
+          <button
+            className="nodrag bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-[#579dff]"
+            title="Open link"
+            onClick={e => { e.stopPropagation(); open() }}
+          >
+            <ExternalLink size={11} />
+          </button>
+          <button
+            className="nodrag bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-gray-600"
+            title="Hide (unhide from dashboard)"
+            onClick={e => { e.stopPropagation(); (data.onHide as (id: string) => void)?.(id) }}
+          >
+            <EyeOff size={11} />
+          </button>
+          <button
+            className="nodrag bg-white rounded-full p-0.5 shadow text-gray-400 hover:text-red-500"
+            title="Remove"
+            onClick={e => { e.stopPropagation(); (data.onDelete as (id: string) => void)(id) }}
+          >
+            <X size={11} />
+          </button>
+        </div>
+
+        {/* Header image / skeleton */}
+        {status === 'pending' ? (
+          <div className="w-full bg-gray-200 animate-pulse" style={{ aspectRatio: '16 / 9' }} />
+        ) : showImage ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={imgSrc} alt={title} draggable={false} className="w-full object-cover" style={{ aspectRatio: '16 / 9' }} />
+        ) : null}
+
+        {/* Body */}
+        <div className="px-3 py-2">
+          {status === 'pending' ? (
+            <div className="space-y-1.5 py-0.5">
+              <div className="h-3 bg-gray-200 rounded animate-pulse w-5/6" />
+              <div className="h-3 bg-gray-200 rounded animate-pulse w-2/3" />
+              <div className="h-2.5 bg-gray-100 rounded animate-pulse w-1/3 mt-2" />
+            </div>
+          ) : (
+            <>
+              <div className="text-[13px] font-semibold text-gray-800 leading-snug line-clamp-2">{title}</div>
+              {description && (
+                <div className="text-[11px] text-gray-500 leading-snug line-clamp-2 mt-0.5">{description}</div>
+              )}
+              <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-gray-400">
+                {faviconUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={faviconUrl} alt="" width={12} height={12} className="rounded-sm shrink-0" onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none' }} />
+                ) : (
+                  <Globe size={11} className="shrink-0" />
+                )}
+                <span className="truncate">{domain}</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Drawing Node ─────────────────────────────────────────────────────────────
 
 export function DrawingNode({ id, data }: NodeProps) {
@@ -1065,6 +1273,27 @@ function MiniUnit({ el }: { el: PortalContent['elements'][number] }) {
       <svg style={{ position: 'absolute', left: el.x, top: el.y, overflow: 'visible' }} width={bbox.width + 10} height={bbox.height + 10}>
         <path d={d.path as string} fill="none" stroke={(d.color as string) || '#1d4ed8'} strokeWidth={(d.strokeWidth as number) || 2} strokeLinecap="round" strokeLinejoin="round" />
       </svg>
+    )
+  }
+  if (el.type === 'url_preview') {
+    const w = el.width ?? 280
+    const title = (d.title as string) || (d.domain as string) || (d.url as string) || 'Link'
+    const domain = (d.domain as string) || ''
+    // Only show the image when it's a non-expiring remote URL. A storagePath-backed
+    // imageUrl is a presigned R2 URL that expires (~1h) and can't be re-minted in
+    // this static portal preview, so skip it to avoid a broken thumbnail.
+    const showImg = !d.storagePath && !!d.imageUrl
+    return (
+      <div style={{ position: 'absolute', left: el.x, top: el.y, width: w }} className="rounded-lg shadow border border-gray-200 bg-white overflow-hidden">
+        {showImg ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={d.imageUrl as string} alt="" style={{ width: '100%', aspectRatio: '16 / 9', objectFit: 'cover' }} draggable={false} />
+        ) : null}
+        <div style={{ padding: 8 }}>
+          <div className="text-[13px] font-semibold text-gray-800 leading-snug line-clamp-2">{title}</div>
+          {domain && <div className="text-[11px] text-gray-400 mt-1 truncate">{domain}</div>}
+        </div>
+      </div>
     )
   }
   return null
