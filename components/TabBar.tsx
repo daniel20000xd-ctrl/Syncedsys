@@ -348,16 +348,20 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
         </button>
       </div>
 
-        {/* Persona switcher — pinned top-right, outside the scrolling strip */}
-        <div className="relative shrink-0 flex items-stretch border-l border-white/10">
+        {/* Persona switcher — Google-style account avatar pinned top-right */}
+        <div className="relative shrink-0 flex items-center px-2 border-l border-white/10">
           <button
             onClick={() => setShowPersonas(v => !v)}
-            className="flex items-center gap-1.5 px-3 py-2.5 text-sm text-white/60 hover:text-white hover:bg-white/5 whitespace-nowrap"
-            title="Switch persona"
+            className="rounded-full transition focus:outline-none focus:ring-2 focus:ring-white/30"
+            title={activePersona ? `Persona: ${activePersona.name}` : 'Personas'}
+            aria-label="Switch persona"
           >
-            <CircleUserRound size={16} />
-            <span className="max-w-[120px] truncate hidden sm:inline">{activePersona?.name ?? 'Persona'}</span>
-            <ChevronDown size={12} className="opacity-60" />
+            <span
+              className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-semibold ring-1 ring-white/20 hover:ring-white/50 transition"
+              style={{ backgroundColor: activePersona?.color ?? '#6366f1' }}
+            >
+              {activePersona ? activePersona.name.charAt(0).toUpperCase() : <CircleUserRound size={18} />}
+            </span>
           </button>
           {showPersonas && (
             <>
