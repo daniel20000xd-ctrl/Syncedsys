@@ -18,17 +18,21 @@ export const BOARD_TAB_MIME = 'application/x-syncedsys-boardtab'
 // Drag payload used when dragging a tab onto the canvas to float it as a window.
 export const FLOAT_BOARD_MIME = 'application/x-syncedsys-floatboard'
 
-// Trigger a browser download of text content as a file.
-export function downloadTextFile(name: string, content: string) {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+// Trigger a browser download of an already-built Blob under the given filename.
+export function downloadBlob(name: string, blob: Blob) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = name || 'file.txt'
+  a.download = name || 'download'
   document.body.appendChild(a)
   a.click()
   a.remove()
   URL.revokeObjectURL(url)
+}
+
+// Trigger a browser download of text content as a file.
+export function downloadTextFile(name: string, content: string) {
+  downloadBlob(name || 'file.txt', new Blob([content], { type: 'text/plain;charset=utf-8' }))
 }
 
 export function isTextFile(file: File): boolean {

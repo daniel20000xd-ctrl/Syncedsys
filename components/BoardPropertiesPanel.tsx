@@ -5,9 +5,9 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone, Sparkles, Download } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced, exportBoardData } from '@/app/actions'
-import { exportBoardAsMarkdown, boardExportFilename } from '@/lib/exportBoard'
-import { downloadTextFile } from '@/lib/files'
+import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced } from '@/app/actions'
+import { boardExportFilename } from '@/lib/exportBoard'
+import { downloadBlob } from '@/lib/files'
 
 const COLORS = [
   '#0079bf', '#d29034', '#519839', '#b04632',
@@ -134,10 +134,19 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
     if (downloading) return
     setDownloading(true)
     try {
-      const data = await exportBoardData(board.id)
-      if (!data) return
-      const md = exportBoardAsMarkdown(data)
-      downloadTextFile(boardExportFilename(board.name) + '.md', md)
+      const res = await fetch('/api/boards/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ boardId: board.id }),
+      })
+      if (!res.ok) {
+        console.error('Tab download failed:', res.status, await res.text().catch(() => ''))
+        return
+      }
+      const blob = await res.blob()
+      downloadBlob(boardExportFilename(board.name) + '.zip', blob)
+    } catch (err) {
+      console.error('Tab download failed:', err)
     } finally {
       setDownloading(false)
     }
