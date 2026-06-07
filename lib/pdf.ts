@@ -6,6 +6,7 @@
 // version — this sidesteps all bundler worker-resolution quirks.
 
 import { STORAGE_URL } from '@/lib/storageUrl'
+import type { PickedFolder, ImportNode } from '@/lib/files'
 
 export const MAX_PDF_BYTES = 25_000_000 // 25 MB — generous for lecture slides
 // Cap stored extracted text so a huge PDF can't bloat a DB row / Claude context.
@@ -72,4 +73,46 @@ export async function uploadFile(file: File, boardId: string, kind = 'files'): P
 // Upload the raw PDF to R2 (kept as a named helper; delegates to uploadFile).
 export function uploadPdf(file: File, boardId: string): Promise<{ key: string; sizeBytes: number }> {
   return uploadFile(file, boardId, 'pdfs')
+}
+
+// Recursively upload a PickedFolder tree to R2, returning an ImportNode ready
+// for importFolderTree. PDF text extraction is best-effort — a scanned/corrupt
+// PDF is still stored even when pdfjs can't extract text. Tracks every uploaded
+// key in `uploadedKeys` so callers can clean up on failure; pushes file names to
+// `failed` on upload errors.
+export async function buildUploadTree(
+  node: PickedFolder,
+  boardId: string,
+  uploadedKeys: string[],
+  failed: string[],
+): Promise<ImportNode> {
+  const pdfs: NonNullable<ImportNode['pdfs']> = []
+  for (const pdf of node.pdfFiles) {
+    let key: string, sizeBytes: number
+    try {
+      ;({ key, sizeBytes } = await uploadFile(pdf, boardId, 'pdfs'))
+      uploadedKeys.push(key)
+    } catch (err) {
+      console.error('PDF upload failed:', pdf.name, err)
+      failed.push(pdf.name)
+      continue
+    }
+    let text = '', pageCount = 0
+    try { ;({ text, pageCount } = await extractPdfText(pdf)) } catch { /* keep PDF without text */ }
+    pdfs.push({ name: pdf.name, storagePath: key, sizeBytes, text, pageCount })
+  }
+  const binaries: NonNullable<ImportNode['binaries']> = []
+  for (const file of node.otherFiles) {
+    try {
+      const { key, sizeBytes } = await uploadFile(file, boardId)
+      uploadedKeys.push(key)
+      binaries.push({ name: file.name, storagePath: key, sizeBytes })
+    } catch (err) {
+      console.error('File upload failed:', file.name, err)
+      failed.push(file.name)
+    }
+  }
+  const dirs: ImportNode[] = []
+  for (const d of node.dirs) dirs.push(await buildUploadTree(d, boardId, uploadedKeys, failed))
+  return { name: node.name, files: node.textFiles, pdfs, binaries, dirs }
 }

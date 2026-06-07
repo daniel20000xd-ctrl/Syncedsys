@@ -10,8 +10,8 @@ import {
   moveElementToBoard, importFolderTree, moveBoardToParent, reorderFolderItems,
   createElement, getPdfUrl, getPresignedReadUrl, deleteStorageObjects,
 } from '@/app/actions'
-import { collectEntries, readDroppedEntries, readPickedFolder, downloadTextFile, type PickedFolder, type ImportNode } from '@/lib/files'
-import { uploadPdf, uploadFile, extractPdfText } from '@/lib/pdf'
+import { collectEntries, readDroppedEntries, readPickedFolder, downloadTextFile, type PickedFolder } from '@/lib/files'
+import { uploadPdf, uploadFile, extractPdfText, buildUploadTree } from '@/lib/pdf'
 import { folderUnitsStore } from '@/lib/folderUnitsStore'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
@@ -333,56 +333,39 @@ export default function FolderBoardView({
     const entries = collectEntries(e.dataTransfer)
     if (!entries && !e.dataTransfer.files?.length) return
     e.preventDefault()
-    const { trees, files: dropped, pdfs, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
+    const { trees, files: dropped, pdfs, binaries, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
     for (const f of dropped) { const el = await createTextFile(board.id, f.name, f.content); setFiles(prev => [...prev, el as BoardElement]) }
     for (const pdf of pdfs) {
       try {
-        const [{ key: storagePath, sizeBytes }, { text, pageCount }] = await Promise.all([uploadPdf(pdf, board.id), extractPdfText(pdf)])
+        let { key: storagePath, sizeBytes } = await uploadPdf(pdf, board.id)
+        let text = '', pageCount = 0
+        try { ;({ text, pageCount } = await extractPdfText(pdf)) } catch { /* keep PDF without text */ }
         const el = await createElement(board.id, 'pdf', 0, 0, { name: pdf.name, storagePath, sizeBytes, text, pageCount })
         setFiles(prev => [...prev, el as BoardElement])
       } catch (err) { console.error('Failed to add PDF:', err) }
     }
-    for (const tree of trees) { const top = await importFolderTree(board.id, tree, board.color); setFolders(prev => [...prev, top as Board]) }
-    if (skipped.length && !dropped.length && !trees.length && !pdfs.length) alert('Only text and PDF files are supported for now.')
+    for (const file of binaries) {
+      try {
+        const { key: storagePath, sizeBytes } = await uploadFile(file, board.id)
+        const el = await createElement(board.id, 'file', 0, 0, { name: file.name, storagePath, sizeBytes })
+        setFiles(prev => [...prev, el as BoardElement])
+      } catch (err) { console.error('Failed to add file:', err) }
+    }
+    for (const tree of trees) {
+      const uploadedKeys: string[] = []
+      const failed: string[] = []
+      try {
+        const serverTree = await buildUploadTree(tree, board.id, uploadedKeys, failed)
+        const top = await importFolderTree(board.id, serverTree, board.color)
+        setFolders(prev => [...prev, top as Board])
+      } catch (err) {
+        console.error('Failed to import dragged folder:', err)
+        if (uploadedKeys.length) deleteStorageObjects(uploadedKeys).catch(() => {})
+      }
+    }
   }
 
   // ── Upload a folder via the picker button ────────────────────────────────────
-
-  // Recursively turn a picked folder into the server import tree, uploading each
-  // PDF to R2 (and extracting its text) client-side first so it can be persisted
-  // as a 'pdf' unit in the right sub-folder. `uploadedKeys` collects every R2 key
-  // written (so a failed import can clean them up); `failedPdfs` collects names
-  // of PDFs that couldn't be uploaded (so the user is told, not silently dropped).
-  async function buildServerTree(node: PickedFolder, uploadedKeys: string[], failed: string[]): Promise<ImportNode> {
-    const pdfs: NonNullable<ImportNode['pdfs']> = []
-    for (const pdf of node.pdfFiles) {
-      try {
-        const [{ key, sizeBytes }, { text, pageCount }] = await Promise.all([
-          uploadPdf(pdf, board.id),
-          extractPdfText(pdf),
-        ])
-        uploadedKeys.push(key)
-        pdfs.push({ name: pdf.name, storagePath: key, sizeBytes, text, pageCount })
-      } catch (err) {
-        console.error('Failed to upload PDF during folder import:', pdf.name, err)
-        failed.push(pdf.name)
-      }
-    }
-    const binaries: NonNullable<ImportNode['binaries']> = []
-    for (const file of node.otherFiles) {
-      try {
-        const { key, sizeBytes } = await uploadFile(file, board.id)
-        uploadedKeys.push(key)
-        binaries.push({ name: file.name, storagePath: key, sizeBytes })
-      } catch (err) {
-        console.error('Failed to upload file during folder import:', file.name, err)
-        failed.push(file.name)
-      }
-    }
-    const dirs: ImportNode[] = []
-    for (const d of node.dirs) dirs.push(await buildServerTree(d, uploadedKeys, failed))
-    return { name: node.name, files: node.textFiles, pdfs, binaries, dirs }
-  }
 
   async function onFolderPicked(e: React.ChangeEvent<HTMLInputElement>) {
     const list = e.target.files
@@ -397,7 +380,7 @@ export default function FolderBoardView({
       for (const root of roots) {
         const uploadedKeys: string[] = []
         try {
-          const tree = await buildServerTree(root, uploadedKeys, failed)
+          const tree = await buildUploadTree(root, board.id, uploadedKeys, failed)
           const top = await importFolderTree(board.id, tree, board.color)
           setFolders(prev => [...prev, top as Board])
         } catch (err) {

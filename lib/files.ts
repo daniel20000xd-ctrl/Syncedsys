@@ -100,13 +100,21 @@ function readAllDirEntries(dir: FileSystemDirectoryEntry): Promise<FileSystemEnt
   })
 }
 
-async function entryToTree(dir: FileSystemDirectoryEntry, skipped: string[]): Promise<ImportNode> {
-  const node: ImportNode = { name: dir.name, files: [], dirs: [] }
+async function entryToTree(dir: FileSystemDirectoryEntry, skipped: string[]): Promise<PickedFolder> {
+  const node: PickedFolder = { name: dir.name, textFiles: [], pdfFiles: [], otherFiles: [], dirs: [] }
   for (const entry of await readAllDirEntries(dir)) {
     if (entry.isFile) {
       const file = await getFile(entry as FileSystemFileEntry)
-      if (isTextFile(file) && file.size <= MAX_BYTES) node.files.push({ name: file.name, content: await file.text() })
-      else skipped.push(file.name)
+      if (isPdf(file) && file.size <= MAX_PDF_BYTES) {
+        node.pdfFiles.push(file)
+      } else if (isTextFile(file) && file.size <= MAX_BYTES) {
+        try { node.textFiles.push({ name: file.name, content: await file.text() }) }
+        catch { skipped.push(file.name) }
+      } else if (file.size <= MAX_UPLOAD_BYTES) {
+        node.otherFiles.push(file)
+      } else {
+        skipped.push(`${file.name} (too large)`)
+      }
     } else if (entry.isDirectory) {
       node.dirs.push(await entryToTree(entry as FileSystemDirectoryEntry, skipped))
     }
@@ -119,14 +127,15 @@ async function entryToTree(dir: FileSystemDirectoryEntry, skipped: string[]): Pr
 export async function readDroppedEntries(
   entries: FileSystemEntry[] | null,
   fallbackFiles: FileList | File[] | null,
-): Promise<{ trees: ImportNode[]; files: DroppedTextFile[]; pdfs: File[]; skipped: string[] }> {
+): Promise<{ trees: PickedFolder[]; files: DroppedTextFile[]; pdfs: File[]; binaries: File[]; skipped: string[] }> {
   if (!entries) {
-    const { accepted, pdfs, skipped } = await readDroppedTextFiles(fallbackFiles ?? [])
-    return { trees: [], files: accepted, pdfs, skipped }
+    const { accepted, pdfs, binaries, skipped } = await readDroppedTextFiles(fallbackFiles ?? [])
+    return { trees: [], files: accepted, pdfs, binaries, skipped }
   }
-  const trees: ImportNode[] = []
+  const trees: PickedFolder[] = []
   const files: DroppedTextFile[] = []
   const pdfs: File[] = []
+  const binaries: File[] = []
   const skipped: string[] = []
   for (const entry of entries) {
     if (entry.isDirectory) {
@@ -134,37 +143,37 @@ export async function readDroppedEntries(
     } else if (entry.isFile) {
       const file = await getFile(entry as FileSystemFileEntry)
       if (isPdf(file) && file.size <= MAX_PDF_BYTES) pdfs.push(file)
-      else if (isTextFile(file) && file.size <= MAX_BYTES) files.push({ name: file.name, content: await file.text() })
-      else skipped.push(file.name)
+      else if (isTextFile(file) && file.size <= MAX_BYTES) {
+        try { files.push({ name: file.name, content: await file.text() }) }
+        catch { skipped.push(file.name) }
+      } else if (file.size <= MAX_UPLOAD_BYTES) binaries.push(file)
+      else skipped.push(`${file.name} (too large)`)
     }
   }
-  return { trees, files, pdfs, skipped }
+  return { trees, files, pdfs, binaries, skipped }
 }
 
-// Reads the text files out of a drop, skipping binaries and oversized files.
-// Returns the successfully-read files plus the names that were skipped.
+// Reads files out of a drop. Text and PDFs are handled inline; everything else
+// (images, Word docs, etc.) is returned as raw File objects in `binaries` for
+// the caller to upload to R2. Oversized files (>100 MB) go to `skipped`.
 export async function readDroppedTextFiles(
   files: FileList | File[],
-): Promise<{ accepted: DroppedTextFile[]; pdfs: File[]; skipped: string[] }> {
+): Promise<{ accepted: DroppedTextFile[]; pdfs: File[]; binaries: File[]; skipped: string[] }> {
   const accepted: DroppedTextFile[] = []
   const pdfs: File[] = []
+  const binaries: File[] = []
   const skipped: string[] = []
   for (const file of Array.from(files)) {
-    if (isPdf(file) && file.size <= MAX_PDF_BYTES) {
-      pdfs.push(file)
+    if (isPdf(file) && file.size <= MAX_PDF_BYTES) { pdfs.push(file); continue }
+    if (isTextFile(file) && file.size <= MAX_BYTES) {
+      try { accepted.push({ name: file.name, content: await file.text() }) }
+      catch { skipped.push(file.name) }
       continue
     }
-    if (!isTextFile(file) || file.size > MAX_BYTES) {
-      skipped.push(file.name)
-      continue
-    }
-    try {
-      accepted.push({ name: file.name, content: await file.text() })
-    } catch {
-      skipped.push(file.name)
-    }
+    if (file.size <= MAX_UPLOAD_BYTES) { binaries.push(file); continue }
+    skipped.push(`${file.name} (too large)`)
   }
-  return { accepted, pdfs, skipped }
+  return { accepted, pdfs, binaries, skipped }
 }
 
 // Reconstruct a folder forest from an <input type="file" webkitdirectory> pick.

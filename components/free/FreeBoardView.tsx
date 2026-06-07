@@ -16,12 +16,12 @@ import {
   upsertElement, deleteElement, updateListPosition, updateCardPosition,
   updateElement, createSubTab, updateBoardFreePosition, deleteList, deleteCard, upsertEdge,
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
-  loadBoardForFloat, getPresignedReadUrl,
+  loadBoardForFloat, getPresignedReadUrl, deleteStorageObjects,
 } from '@/app/actions'
 import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode, PdfNode, UrlPreviewNode } from './nodes'
 import { pendingPreviewData } from '@/lib/urlPreviewShared'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
-import { uploadPdf, extractPdfText, renderPdfThumbnail } from '@/lib/pdf'
+import { uploadPdf, uploadFile, extractPdfText, renderPdfThumbnail, buildUploadTree } from '@/lib/pdf'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
 import { unitsStore, type Unit } from '@/lib/unitsStore'
 import { collectEntries, readDroppedEntries, PORTAL_ITEM_MIME, FLOAT_BOARD_MIME } from '@/lib/files'
@@ -858,7 +858,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // ── Create a free-mode element (client-controlled id so undo can restore it) ──
   function addElement(
-    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview',
+    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file',
     x: number, y: number,
     data: Record<string, unknown>,
     w?: number, h?: number,
@@ -1047,7 +1047,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       return
     }
 
-    const { trees, files, pdfs, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
+    const { trees, files, pdfs, binaries, skipped } = await readDroppedEntries(entries, e.dataTransfer.files)
 
     if (currentDropTarget?.type === 'claude') {
       // Inject all text files directly into the chat composer (append one after another)
@@ -1097,21 +1097,42 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       }
     }
 
+    // Opaque binary files (images, Word docs, etc.) — upload to R2 and place on canvas.
+    // Skipped for Claude drop targets (no text content to inject into the composer).
+    for (let i = 0; i < binaries.length; i++) {
+      const file = binaries[i]
+      try {
+        const { key: storagePath, sizeBytes } = await uploadFile(file, board.id)
+        if (currentDropTarget?.type === 'subtab') {
+          const targetBoardId = currentDropTarget.nodeId.replace('sub-', '')
+          upsertElement(crypto.randomUUID(), targetBoardId, 'file', 20 + i * 24, 20 + i * 24, { name: file.name, storagePath, sizeBytes }, null, null)
+            .catch(err => console.error('Failed to drop file into sub-tab:', err))
+        } else if (currentDropTarget?.type !== 'claude') {
+          addElement('file', origin.x + (files.length + pdfs.length + i) * 24, origin.y + (files.length + pdfs.length + i) * 24, { name: file.name, storagePath, sizeBytes })
+        }
+      } catch (err) { console.error('Failed to add file:', err) }
+    }
+
     // Each dropped folder becomes a sub-tab (folder board) node on the canvas,
     // regardless of drop target (folders are complex structures — always import here).
     for (let i = 0; i < trees.length; i++) {
       const x = origin.x + (files.length + i) * 28, y = origin.y + (files.length + i) * 28
-      const top = await importFolderTree(board.id, trees[i], board.color)
-      await updateBoardFreePosition(top.id, x, y)
-      const newSub = { ...top, free_x: x, free_y: y } as Board
-      setSubBoards(prev => [...prev, newSub])
-      setNodes(prev => [...prev, {
-        id: `sub-${top.id}`, type: 'subTabNode', position: { x, y },
-        data: { boardId: top.id, name: top.name, color: top.color, mode: top.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
-      }])
-    }
-    if (skipped.length && !files.length && !trees.length && !pdfs.length) {
-      alert('Only text and PDF files are supported for now.')
+      const uploadedKeys: string[] = []
+      const failed: string[] = []
+      try {
+        const serverTree = await buildUploadTree(trees[i], board.id, uploadedKeys, failed)
+        const top = await importFolderTree(board.id, serverTree, board.color)
+        await updateBoardFreePosition(top.id, x, y)
+        const newSub = { ...top, free_x: x, free_y: y } as Board
+        setSubBoards(prev => [...prev, newSub])
+        setNodes(prev => [...prev, {
+          id: `sub-${top.id}`, type: 'subTabNode', position: { x, y },
+          data: { boardId: top.id, name: top.name, color: top.color, mode: top.mode, onNavigate: navigate, onDelete: (id: string) => handleDeleteNode(id, 'subtab'), onRename: renameSubTab, onOpenPanel: openSubPanel, onHold: holdNode },
+        }])
+      } catch (err) {
+        console.error('Failed to import dragged folder:', err)
+        if (uploadedKeys.length) deleteStorageObjects(uploadedKeys).catch(() => {})
+      }
     }
   }
 
