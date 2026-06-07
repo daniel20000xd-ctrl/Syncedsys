@@ -18,7 +18,8 @@ import {
   updateBoard, updateCard, updateCardDone, updateEdgeShape, setListHidden, setCardHidden, moveElementToBoard, importFolderTree, copyBoardInto,
   loadBoardForFloat, getPresignedReadUrl,
 } from '@/app/actions'
-import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode, PdfNode } from './nodes'
+import { ListNode, CardNode, ShapeNode, ImageNode, DrawingNode, SubTabNode, TextNode, TextFileNode, FolderLinkNode, DeletableEdge, PortalNode, ClaudeNode, PdfNode, UrlPreviewNode } from './nodes'
+import { pendingPreviewData } from '@/lib/urlPreviewShared'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { uploadPdf, extractPdfText, renderPdfThumbnail } from '@/lib/pdf'
 import BoardPropertiesPanel from '../BoardPropertiesPanel'
@@ -40,6 +41,7 @@ const nodeTypes: NodeTypes = {
   portalNode: PortalNode,
   claudeNode: ClaudeNode,
   pdfNode: PdfNode,
+  urlPreviewNode: UrlPreviewNode,
 }
 
 const edgeTypes: EdgeTypes = {
@@ -75,6 +77,7 @@ function buildNodes(
   onSetExpiry: (nodeId: string) => void,
   onHide: (nodeId: string) => void,
   onDecouple: (nodeId: string) => void,
+  onCreateUrlPreview: (srcNodeId: string, url: string) => void,
 ): Node[] {
   const listNodes: Node[] = lists.map((l, i) => ({
     id: `list-${l.id}`,
@@ -114,7 +117,7 @@ function buildNodes(
   }))
 
   const elementNodes: Node[] = elements.map(el => {
-    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'pdf' ? 'pdfNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : el.type === 'claude' ? 'claudeNode' : 'drawingNode'
+    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'pdf' ? 'pdfNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : el.type === 'claude' ? 'claudeNode' : el.type === 'url_preview' ? 'urlPreviewNode' : 'drawingNode'
     const base: Node = {
       id: `el-${el.id}`,
       type,
@@ -131,6 +134,7 @@ function buildNodes(
         onHide: (nodeId: string) => onHide(nodeId),
         ...(el.type === 'portal' ? { onOpenFully: onNavigate } : {}),
         ...(el.type === 'folderlink' ? { onNavigate, onDecouple } : {}),
+        ...(el.type === 'text' ? { onCreateUrlPreview } : {}),
         // Text/files/links manage their own interaction; everything else scales on hold+scroll
         ...(el.type === 'text' || el.type === 'textfile' || el.type === 'pdf' || el.type === 'folderlink' ? {} : { onHold }),
       },
@@ -213,8 +217,8 @@ function buildEdges(
 // ── Alignment-guide + grouping helpers (pure, module-level) ───────────────────
 
 // Fallback dimensions when a node hasn't been measured yet.
-const DEFAULT_W: Record<string, number> = { listNode: 208, cardNode: 176, shapeNode: 120, portalNode: 320, claudeNode: 340, subTabNode: 176, textNode: 180, textFileNode: 176, pdfNode: 176, folderLinkNode: 160, imageNode: 200, drawingNode: 80 }
-const DEFAULT_H: Record<string, number> = { listNode: 60, cardNode: 50, shapeNode: 80, portalNode: 220, claudeNode: 420, subTabNode: 96, textNode: 140, textFileNode: 90, pdfNode: 70, folderLinkNode: 80, imageNode: 150, drawingNode: 80 }
+const DEFAULT_W: Record<string, number> = { listNode: 208, cardNode: 176, shapeNode: 120, portalNode: 320, claudeNode: 340, subTabNode: 176, textNode: 180, textFileNode: 176, pdfNode: 176, folderLinkNode: 160, imageNode: 200, drawingNode: 80, urlPreviewNode: 280 }
+const DEFAULT_H: Record<string, number> = { listNode: 60, cardNode: 50, shapeNode: 80, portalNode: 220, claudeNode: 420, subTabNode: 96, textNode: 140, textFileNode: 90, pdfNode: 70, folderLinkNode: 80, imageNode: 150, drawingNode: 80, urlPreviewNode: 220 }
 
 function getNodeWH(n: Node): [number, number] {
   const sw = typeof n.style?.width === 'number' ? (n.style.width as number) : undefined
@@ -600,7 +604,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }
 
   const [nodes, setNodes, onNodesChangeRaw] = useNodesState(
-    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel, toggleCardDone, openExpiryPanel, (id) => hideUnit(id, true), (id) => decoupleFolderLink(id))
+    buildNodes(lists, cards, elements, subBoards, () => {}, handleDeleteNode, navigate, holdNode, saveElement, renameCard, renameSubTab, openSubPanel, toggleCardDone, openExpiryPanel, (id) => hideUnit(id, true), (id) => decoupleFolderLink(id), handleCreateUrlPreview)
   )
   const removeEdgeRef = useRef<(id: string) => void>(() => {})
   const reshapeEdgeRef = useRef<(id: string, offset: { cx: number; cy: number }) => void>(() => {})
@@ -854,7 +858,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
   // ── Create a free-mode element (client-controlled id so undo can restore it) ──
   function addElement(
-    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf',
+    type: 'shape' | 'drawing' | 'text' | 'image' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview',
     x: number, y: number,
     data: Record<string, unknown>,
     w?: number, h?: number,
@@ -862,7 +866,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   ) {
     const id = crypto.randomUUID()
     const nodeId = `el-${id}`
-    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'pdf' ? 'pdfNode' : type === 'folderlink' ? 'folderLinkNode' : type === 'portal' ? 'portalNode' : type === 'claude' ? 'claudeNode' : 'imageNode'
+    const nodeType = type === 'shape' ? 'shapeNode' : type === 'drawing' ? 'drawingNode' : type === 'text' ? 'textNode' : type === 'textfile' ? 'textFileNode' : type === 'pdf' ? 'pdfNode' : type === 'folderlink' ? 'folderLinkNode' : type === 'portal' ? 'portalNode' : type === 'claude' ? 'claudeNode' : type === 'url_preview' ? 'urlPreviewNode' : 'imageNode'
     const node: Node = {
       id: nodeId, type: nodeType, position: { x, y },
       ...(type === 'shape' || type === 'portal' || type === 'claude' || type === 'text' ? { style: { width: w, height: h } } : {}),
@@ -872,6 +876,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         onSave: saveElement,
         onHide: (i: string) => hideUnit(i, true),
         onSetExpiry: (i: string) => openExpiryPanel(i),
+        ...(type === 'text' ? { onCreateUrlPreview: handleCreateUrlPreview } : {}),
         ...(type === 'text' || type === 'textfile' || type === 'pdf' || type === 'folderlink' ? {} : { onHold: holdNode }),
         ...extraNodeData,
       },
@@ -885,6 +890,20 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   // Keep a stable ref so the paste handler doesn't capture a stale closure
   const addElementRef = useRef(addElement)
   useEffect(() => { addElementRef.current = addElement })
+
+  // Spawn a pending url_preview next to a sticky note (reusing the note's canvas
+  // coords + a small offset — no screen→canvas conversion). The card then
+  // self-enriches on render via the shared endpoint.
+  function handleCreateUrlPreview(srcNodeId: string, url: string) {
+    const rawId = srcNodeId.replace('el-', '')
+    const src = elementsRef.current.find(e => e.id === rawId)
+    if (!src) {
+      const c = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 })
+      addElement('url_preview', c.x - 140, c.y - 90, pendingPreviewData(url), 280)
+      return
+    }
+    addElement('url_preview', src.x + 24, src.y + (src.height ?? 140) + 16, pendingPreviewData(url), 280)
+  }
 
   // ── Drag & drop OS text files onto the canvas ──
   const [fileDragOver, setFileDragOver] = useState(false)
@@ -1141,7 +1160,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
   }, [nodes, edges]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function reconcileDb(s: Snapshot) {
-    const elTypeOf = (t?: string) => t === 'shapeNode' ? 'shape' : t === 'drawingNode' ? 'drawing' : t === 'textNode' ? 'text' : t === 'textFileNode' ? 'textfile' : t === 'pdfNode' ? 'pdf' : t === 'folderLinkNode' ? 'folderlink' : t === 'portalNode' ? 'portal' : t === 'claudeNode' ? 'claude' : 'image'
+    const elTypeOf = (t?: string) => t === 'shapeNode' ? 'shape' : t === 'drawingNode' ? 'drawing' : t === 'textNode' ? 'text' : t === 'textFileNode' ? 'textfile' : t === 'pdfNode' ? 'pdf' : t === 'folderLinkNode' ? 'folderlink' : t === 'portalNode' ? 'portal' : t === 'claudeNode' ? 'claude' : t === 'urlPreviewNode' ? 'url_preview' : 'image'
     const clean = (d: Record<string, unknown>) => Object.fromEntries(Object.entries(d).filter(([, v]) => typeof v !== 'function'))
     const targetEls = s.nodes.filter(n => n.id.startsWith('el-'))
     const targetIds = new Set(targetEls.map(n => n.id.replace('el-', '')))
@@ -1881,6 +1900,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
     if (n.type === 'folderLinkNode') return 'subtab'
     if (n.type === 'imageNode') return 'image'
     if (n.type === 'portalNode') return 'portal'
+    if (n.type === 'urlPreviewNode') return 'link'
     return 'unknown'
   }
   const unitLabel = (n: Node, kind: Unit['kind']): string => {
@@ -1899,6 +1919,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       if (matched) return matched.name
       return 'Portal'
     }
+    if (kind === 'link') return (d.title as string) || (d.domain as string) || (d.url as string) || 'Link'
     return 'Unit'
   }
 

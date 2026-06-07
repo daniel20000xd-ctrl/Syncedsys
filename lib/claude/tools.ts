@@ -3,6 +3,8 @@ import type Anthropic from '@anthropic-ai/sdk'
 import { listEvents, createEvent, updateEvent, deleteEvent } from '@/lib/google/calendar'
 import { readRange, writeRange, appendRow, clearRange, batchUpdate } from '@/lib/google/sheets'
 import { getDocument, documentPlainText, createDocument, appendText, insertText, replaceAllText } from '@/lib/google/docs'
+import { createUrlPreviewUnit } from '@/lib/urlPreview'
+import type { UrlPreviewData } from '@/lib/urlPreviewShared'
 
 // Tools exposed to the board-scoped Claude. READ tools are always available;
 // WRITE tools are only included when the user has enabled "Let Claude make
@@ -146,6 +148,19 @@ export const WRITE_TOOLS: Anthropic.Tool[] = [
         content: { type: 'string' },
       },
       required: ['boardId', 'name', 'content'],
+    },
+  },
+  {
+    name: 'create_url_preview',
+    description: "Create a visual link-preview card on the user's current board from a URL. Use this when the user asks to put a link, product page, listing, or website on the board, or when you want to surface a URL visually rather than as text. The card shows the page's image, title, and domain, and is clickable.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'The full URL to preview (http/https).' },
+        x: { type: 'number', description: 'Optional canvas X position. Omit to auto-place.' },
+        y: { type: 'number', description: 'Optional canvas Y position. Omit to auto-place.' },
+      },
+      required: ['url'],
     },
   },
   {
@@ -481,6 +496,10 @@ export type ToolCtx = {
   userId: string
   allowedIds: Set<string>
   accessToken?: string
+  // The current board (the conversation's root). Injected so tools like
+  // create_url_preview can act on "the current board" without the model
+  // passing a boardId.
+  rootBoardId: string
 }
 
 class ScopeError extends Error {}
@@ -547,6 +566,30 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const { data, error } = await s.from('lists').insert({ board_id: boardId, name: String(input.name), position }).select('id,name').single()
       if (error) throw new Error(error.message)
       return `Created list "${data.name}" (id ${data.id}).`
+    }
+
+    case 'create_url_preview': {
+      // boardId is injected from context (the current board), never a tool param.
+      const boardId = ctx.rootBoardId
+      ensureBoard(ctx, boardId)
+      const url = String(input.url)
+      const x = typeof input.x === 'number' ? input.x : undefined
+      const y = typeof input.y === 'number' ? input.y : undefined
+      // Cap the overall wait so a slow site can't hang the tool call; the unit is
+      // inserted (pending) before enrichment, so a timeout still leaves a card.
+      const work = createUrlPreviewUnit({ supabase: s, userId: ctx.userId, boardId, url, x, y })
+      // If the timeout wins the race, the still-running work promise must not surface
+      // as an unhandled rejection (e.g. a transport error on the background update).
+      work.catch(() => {})
+      const TIMEOUT = Symbol('timeout')
+      const result = await Promise.race([
+        work,
+        new Promise<typeof TIMEOUT>(res => setTimeout(() => res(TIMEOUT), 12000)),
+      ])
+      if (result === TIMEOUT) return 'Preview card added to the board, still loading its metadata.'
+      const { data } = result as { id: string; data: UrlPreviewData }
+      if (data.status === 'error') return `Added a link card for ${data.domain ?? url} (its page metadata could not be fetched).`
+      return `Created preview: "${data.title ?? data.domain ?? url}" (${data.domain ?? url}).`
     }
 
     case 'create_card': {

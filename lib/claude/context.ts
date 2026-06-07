@@ -271,6 +271,7 @@ async function renderContext(
         }
       }
       else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
+      else if (e.type === 'url_preview') label = `link "${d.title ?? d.domain ?? ''}" → ${d.url ?? '?'}`
       lines.push(`${indent}    element[${e.id}]: ${label}`)
     }
 

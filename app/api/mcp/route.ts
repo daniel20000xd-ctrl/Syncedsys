@@ -18,7 +18,7 @@ import {
   createList, deleteList, renameList, setListWidget, setListDeadline, setListHidden, updateListPosition,
   createCard, deleteCard, updateCard, updateCardDone, setCardDeadline, setCardRecur, setCardHidden,
   moveCard, reorderCards, updateCardPosition, createFreeCard,
-  createElement, updateElement, deleteElement, createTextFile, updateTextFile,
+  createElement, updateElement, deleteElement, createTextFile, updateTextFile, createUrlPreview,
   moveElementToBoard, upsertElement, reorderFolderItems,
   createEdge, deleteEdge, updateEdgeShape, upsertEdge,
   getPdfUrl,
@@ -34,7 +34,7 @@ export const dynamic = 'force-dynamic'
 
 type BoardMeta = { id: string; name: string; mode: string; meta: string | null }
 
-const ELEMENT_TYPE = z.enum(['shape', 'image', 'drawing', 'text', 'portal', 'textfile', 'folderlink', 'claude', 'pdf'])
+const ELEMENT_TYPE = z.enum(['shape', 'image', 'drawing', 'text', 'portal', 'textfile', 'folderlink', 'claude', 'pdf', 'url_preview'])
 const BOARD_MODE   = z.enum(['classic', 'trello', 'text', 'folder'])
 
 function ok(data: unknown) {
@@ -201,6 +201,7 @@ function buildServer(supabase: SupabaseClient, userId: string) {
         else if (e.type === 'pdf')       label = `pdf "${d.name ?? 'document'}" (${d.pageCount ?? '?'} pages)${String(d.text ?? '').trim() ? ': ' + String(d.text).slice(0, 2000) : ''}`
         else if (e.type === 'portal')    label = d.viewerKind ? `viewer-portal (${d.viewerKind})` : `portal → ${d.targetBoardId ?? '(unset)'}`
         else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
+        else if (e.type === 'url_preview') label = `link "${d.title ?? d.domain ?? ''}" → ${d.url ?? '?'}`
         lines.push(`  [${e.id}] ${label}${e.deadline ? ` [due ${e.deadline.slice(0,10)}]` : ''}`)
       }
     }
@@ -709,6 +710,21 @@ function buildServer(supabase: SupabaseClient, userId: string) {
   }, ({ boardId, name, content, x, y }) => wrapWrite(
     'create_text_file', { boardId, name, x, y },
     () => createTextFile(boardId, name, content, x, y),
+    undefined, [boardId],
+  ))
+
+  server.registerTool('create_url_preview', {
+    title: 'Create URL preview',
+    description: 'Creates a rich link-preview card on a board from a URL (fetches the page image, title and domain). Use this to put a link, product page, listing, or website on a board visually instead of as plain text. boardId is required; x/y are optional canvas coords.',
+    inputSchema: {
+      boardId: z.string(),
+      url:     z.string().describe('The full http/https URL to preview.'),
+      x:       z.number().optional(),
+      y:       z.number().optional(),
+    },
+  }, ({ boardId, url, x, y }) => wrapWrite(
+    'create_url_preview', { boardId, url, x, y },
+    () => createUrlPreview(boardId, url, x, y),
     undefined, [boardId],
   ))
 

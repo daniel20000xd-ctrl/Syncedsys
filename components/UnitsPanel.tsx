@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Frame, Eye, EyeOff, FileText, LayoutDashboard, AlignLeft, X, Trash2, ChevronRight } from 'lucide-react'
+import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Frame, Eye, EyeOff, FileText, LayoutDashboard, AlignLeft, X, Trash2, ChevronRight, Link2 } from 'lucide-react'
 import { useUnits, usePanelSel, unitsStore, type Unit } from '@/lib/unitsStore'
 
 function UnitIcon({ u }: { u: Unit }) {
@@ -13,7 +13,7 @@ function UnitIcon({ u }: { u: Unit }) {
   }
   const icons: Partial<Record<Unit['kind'], typeof Square>> = {
     list: ListIcon, card: CreditCard, shape: Square, text: Type,
-    image: ImageIcon, drawing: Pencil, portal: Frame, file: FileText,
+    image: ImageIcon, drawing: Pencil, portal: Frame, file: FileText, link: Link2,
   }
   const Icon = icons[u.kind] ?? Square
   return <Icon size={13} className="shrink-0 text-white/50" />
