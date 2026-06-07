@@ -4,7 +4,7 @@ import { useEffect, useCallback, useState, useRef } from 'react'
 import Link from 'next/link'
 import { createPortal } from 'react-dom'
 import { usePathname, useRouter } from 'next/navigation'
-import { Plus, LayoutGrid, ChevronDown, FolderPlus, Check, Trash2, X, CircleUserRound } from 'lucide-react'
+import { Plus, LayoutGrid, ChevronDown, FolderPlus, Check, Trash2, X, CircleUserRound, Settings2, User, Star, Briefcase, Heart, Zap, Globe, Music, Bookmark } from 'lucide-react'
 import type { Board } from '@/lib/types'
 import { createBoard, createGroup, moveTab, moveBoardToParent, updateBoard, deleteBoard, createPersona } from '@/app/actions'
 import { getPersonaId, listPersonas } from '@/lib/persona'
@@ -36,7 +36,15 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
   const [deleting, setDeleting] = useState(false)
   const [showPersonas, setShowPersonas] = useState(false)
   const [rememberedPersona, setRememberedPersona] = useState<string | null>(null)
+  const [expandedPersonaId, setExpandedPersonaId] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editColor, setEditColor] = useState('')
+  const [savingPersona, setSavingPersona] = useState(false)
   const draggingRef = useRef<string | null>(null)
+
+  const PERSONA_COLORS = ['#6366f1', '#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#ec4899', '#8b5cf6', '#14b8a6', '#f97316', '#64748b']
+  // TODO: Replace placeholder icons with a real icon picker once asset library is ready
+  const PLACEHOLDER_ICONS = [User, Star, Briefcase, Heart, Zap, Globe, Music, Bookmark]
 
   useEffect(() => { setBoards(initialBoards) }, [initialBoards])
   useEffect(() => { try { setRememberedPersona(localStorage.getItem('activePersonaId')) } catch {} }, [])
@@ -86,6 +94,26 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
   const isTopLevel = (b: Board) => !b.is_persona && b.parent_id === activePersonaId
   const topItems = boards.filter(b => isTopLevel(b) && !effectiveGroup(b)).sort(byPos)
   const membersOf = (gid: string) => boards.filter(b => isTopLevel(b) && effectiveGroup(b) === gid).sort(byPos)
+
+  function openPersonaEdit(p: Board) {
+    setExpandedPersonaId(p.id)
+    setEditName(p.name)
+    setEditColor(p.color)
+  }
+
+  async function savePersonaEdit(p: Board) {
+    setSavingPersona(true)
+    try {
+      const name = editName.trim() || p.name
+      await updateBoard(p.id, { name, color: editColor })
+      setBoards(prev => prev.map(b => b.id === p.id ? { ...b, name, color: editColor } : b))
+      setExpandedPersonaId(null)
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not update persona.')
+    } finally {
+      setSavingPersona(false)
+    }
+  }
 
   function switchPersona(p: Board) {
     setShowPersonas(false)
@@ -365,22 +393,98 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
           </button>
           {showPersonas && (
             <>
-              <div className="fixed inset-0 z-30" onClick={() => setShowPersonas(false)} />
-              <div className="absolute right-1 top-full mt-1 z-40 w-56 bg-[#282e33] border border-white/10 rounded-lg shadow-xl py-1">
+              <div className="fixed inset-0 z-30" onClick={() => { setShowPersonas(false); setExpandedPersonaId(null) }} />
+              <div className="absolute right-1 top-full mt-1 z-40 w-64 bg-[#282e33] border border-white/10 rounded-lg shadow-xl py-1">
                 <p className="px-3 py-1 text-[10px] uppercase tracking-wider text-white/30">Personas</p>
                 {personas.length === 0 && (
                   <p className="px-3 py-1.5 text-xs text-white/40">No personas yet</p>
                 )}
                 {personas.map(p => (
-                  <button
-                    key={p.id}
-                    onClick={() => switchPersona(p)}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left text-white/70 hover:bg-white/10 hover:text-white"
-                  >
-                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                    <span className="truncate flex-1">{p.name}</span>
-                    {p.id === activePersonaId && <Check size={14} className="text-[#579dff] shrink-0" />}
-                  </button>
+                  <div key={p.id}>
+                    <div className="group/prow flex items-center gap-1 px-3 py-1.5 hover:bg-white/5">
+                      <button
+                        onClick={() => switchPersona(p)}
+                        className="flex items-center gap-2 flex-1 min-w-0 text-sm text-left text-white/70 hover:text-white"
+                      >
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
+                        <span className="truncate flex-1">{p.name}</span>
+                        {p.id === activePersonaId && <Check size={14} className="text-[#579dff] shrink-0" />}
+                      </button>
+                      <button
+                        onClick={() => expandedPersonaId === p.id ? setExpandedPersonaId(null) : openPersonaEdit(p)}
+                        title="Persona settings"
+                        className="shrink-0 p-1 rounded text-white/25 hover:text-white/70 hover:bg-white/10 opacity-0 group-hover/prow:opacity-100 transition-opacity"
+                      >
+                        <Settings2 size={12} />
+                      </button>
+                    </div>
+
+                    {expandedPersonaId === p.id && (
+                      <div className="mx-2 mb-2 p-3 bg-white/5 rounded-lg border border-white/10">
+                        {/* Name */}
+                        <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1">Name</label>
+                        <input
+                          autoFocus
+                          value={editName}
+                          onChange={e => setEditName(e.target.value)}
+                          onKeyDown={e => { if (e.key === 'Enter') savePersonaEdit(p) }}
+                          className="w-full bg-white/10 border border-white/20 rounded px-2 py-1 text-sm text-white placeholder-white/30 focus:outline-none focus:border-white/40 mb-3"
+                        />
+
+                        {/* Color */}
+                        <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-1.5">Color</label>
+                        <div className="grid grid-cols-5 gap-1.5 mb-3">
+                          {PERSONA_COLORS.map(c => (
+                            <button
+                              key={c}
+                              onClick={() => setEditColor(c)}
+                              className="h-5 rounded-full relative"
+                              style={{ backgroundColor: c }}
+                            >
+                              {editColor === c && <Check size={10} className="absolute inset-0 m-auto text-white drop-shadow" />}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Icon — placeholder grid, replace with real picker later */}
+                        <label className="block text-[10px] text-white/40 uppercase tracking-wider mb-0.5">Icon</label>
+                        <p className="text-[10px] text-white/25 mb-1.5">Coming soon — placeholders only</p>
+                        {/* TODO: swap PLACEHOLDER_ICONS for a real asset/emoji icon library */}
+                        <div className="grid grid-cols-4 gap-1.5 mb-3">
+                          {PLACEHOLDER_ICONS.map((Icon, i) => (
+                            <button
+                              key={i}
+                              className="h-8 rounded-lg bg-white/8 flex items-center justify-center hover:bg-white/15 border border-dashed border-white/15 transition-colors"
+                              title="Placeholder — icon picker coming soon"
+                            >
+                              <Icon size={14} className="text-white/40" />
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Future settings stub */}
+                        <div className="border-t border-white/10 pt-2 mb-2.5">
+                          <p className="text-[10px] text-white/20 italic">More settings coming soon…</p>
+                        </div>
+
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => setExpandedPersonaId(null)}
+                            className="flex-1 py-1 text-xs rounded border border-white/20 text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => savePersonaEdit(p)}
+                            disabled={savingPersona}
+                            className="flex-1 py-1 text-xs rounded bg-indigo-500 hover:bg-indigo-600 text-white disabled:opacity-50 transition-colors"
+                          >
+                            {savingPersona ? 'Saving…' : 'Save'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 ))}
                 <div className="border-t border-white/10 my-1" />
                 <button
