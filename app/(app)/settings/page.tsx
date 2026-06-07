@@ -4,10 +4,12 @@ import { ArrowUpRight } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { isAdminEmail } from '@/lib/admin'
 import { getClaudeStatus, getClaudeUsage, getStorageUsage, syncStorageCounter, listMcpTokens } from '@/app/actions'
+import { getPersonaId } from '@/lib/persona'
 import ClaudeKeySettings from '@/components/ClaudeKeySettings'
 import ClaudeUsageCard from '@/components/ClaudeUsageCard'
 import McpConnectSettings from '@/components/McpConnectSettings'
 import StorageMeter from '@/components/StorageMeter'
+import PersonaSettings from '@/components/PersonaSettings'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
@@ -26,6 +28,20 @@ export default async function SettingsPage() {
   const proto = host.startsWith('localhost') || host.startsWith('127.') ? 'http' : 'https'
   const mcpUrl = `${proto}://${host}/api/mcp`
   const mcpTokens = await listMcpTokens()
+
+  // Personas (with the count of boards inside each, for the delete warning).
+  // select('*') + JS filter so this never errors on the pre-migration schema.
+  const { data: allBoards } = await supabase.from('boards').select('*').eq('user_id', user?.id ?? '')
+  const boards = allBoards ?? []
+  const personas = boards
+    .filter(b => b.is_persona)
+    .sort((a, b) => (a.tab_position - b.tab_position) || String(a.created_at).localeCompare(String(b.created_at)))
+    .map(p => ({
+      id: p.id as string,
+      name: p.name as string,
+      color: p.color as string,
+      boardCount: boards.filter(b => !b.is_persona && getPersonaId(b.id, boards) === p.id).length,
+    }))
 
   return (
     <div className="p-8 bg-gray-100 min-h-screen">
@@ -58,6 +74,8 @@ export default async function SettingsPage() {
         <ClaudeKeySettings initialHasKey={claude.hasKey} initialAutoApply={claude.autoApply} />
 
         <McpConnectSettings mcpUrl={mcpUrl} initialTokens={mcpTokens} />
+
+        {personas.length > 0 && <PersonaSettings personas={personas} />}
       </div>
     </div>
   )
