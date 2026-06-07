@@ -50,9 +50,10 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   const { id } = await params
   const supabase = await createClient()
 
-  // One round trip for the board + everything attached to it; sub-boards and
-  // the Claude gate run in parallel. RLS scopes all queries to the owner.
-  const [boardRes, subRes, claudeEnabled] = await Promise.all([
+  // One round trip for the board + everything attached to it; sub-boards,
+  // the Claude gate, and the current user run in parallel.
+  // RLS scopes all queries to the owner.
+  const [boardRes, subRes, claudeEnabled, userRes] = await Promise.all([
     supabase
       .from('boards')
       .select('*, lists(*, cards(*)), board_elements(*), board_edges(*)')
@@ -64,7 +65,10 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
       .eq('parent_id', id)
       .order('tab_position', { ascending: true }),
     isClaudeEnabled(supabase),
+    supabase.auth.getUser(),
   ])
+
+  const isAdmin = userRes.data.user?.email === process.env.ADMIN_EMAIL
 
   const board = boardRes.data
   if (!board) notFound()
@@ -99,6 +103,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
         initialEdges={edges}
         initialElements={elements}
         initialSubBoards={subBoards}
+        isAdmin={isAdmin}
       />
     )
   } else if (board.mode === 'text') {
@@ -107,7 +112,9 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
     const fileElements = elements.filter(e => e.type === 'textfile' || e.type === 'pdf' || e.type === 'file')
     view = <BoardDesktop board={board}><FolderBoardView board={board} initialFolders={subBoards} initialFiles={fileElements} /></BoardDesktop>
   } else if (board.mode === 'database') {
-    view = <BoardDesktop board={board}><DatabaseBoardViewWrapper boardId={board.id} config={board.content ?? ''} /></BoardDesktop>
+    view = isAdmin
+      ? <BoardDesktop board={board}><DatabaseBoardViewWrapper boardId={board.id} config={board.content ?? ''} /></BoardDesktop>
+      : <BoardDesktop board={board}><div className="flex-1 flex items-center justify-center text-sm text-gray-400">Not available</div></BoardDesktop>
   } else {
     view = <BoardDesktop board={board}><BoardView board={board} initialLists={lists} initialCards={cards} /></BoardDesktop>
   }

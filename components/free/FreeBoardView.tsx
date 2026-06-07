@@ -367,9 +367,10 @@ interface Props {
   initialSubBoards?: Board[]
   onClose?: () => void
   initialInset?: { top: number; right: number; bottom: number; left: number }
+  isAdmin?: boolean
 }
 
-function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [], onClose, initialInset }: Props) {
+function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [], onClose, initialInset, isAdmin = false }: Props) {
   const router = useRouter()
   const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes, zoomIn, zoomOut, fitView } = useReactFlow()
   const nodesInitialized = useNodesInitialized()
@@ -2536,6 +2537,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       {/* Sub-tab mode picker — shown before creating so the user can choose the type */}
       {subtabPickPos && (
         <SubtabModePicker
+          isAdmin={isAdmin}
           onPick={async (mode) => {
             const { x, y } = subtabPickPos
             setSubtabPickPos(null)
@@ -2758,16 +2760,17 @@ const SUBTAB_MODES = [
   { mode: 'database' as const,  emoji: '',    label: 'Database', desc: 'Structured table view — browse, filter and search stored records.', Icon: Database },
 ]
 
-function SubtabModePicker({ onPick, onClose }: {
+function SubtabModePicker({ onPick, onClose, isAdmin = false }: {
   onPick: (mode: 'classic' | 'trello' | 'text' | 'folder' | 'database') => void
   onClose: () => void
+  isAdmin?: boolean
 }) {
   return (
     <div className="fixed inset-0 flex items-center justify-center z-[9999] bg-black/30" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 p-5 w-80" onClick={e => e.stopPropagation()}>
         <p className="text-sm font-semibold text-gray-700 mb-4">Choose sub-tab type</p>
         <div className="grid grid-cols-1 gap-2">
-          {SUBTAB_MODES.map(({ mode, emoji, label, desc, Icon }) => (
+          {SUBTAB_MODES.filter(m => m.mode !== 'database' || isAdmin).map(({ mode, emoji, label, desc, Icon }) => (
             <button
               key={mode}
               onClick={() => onPick(mode)}
