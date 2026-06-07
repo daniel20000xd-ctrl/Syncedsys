@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Kill switch + free-tier / pay-per-use gate (platform-key requests only).
-  const gate = await claudeGate(supabase, user.id, keySource)
+  const gate = await claudeGate(supabase, user.id, keySource, user)
   if (!gate.ok) {
     const status = gate.error === 'claude_disabled' ? 503 : 402
     return new Response(JSON.stringify({ error: gate.error, spentUsd: gate.spentUsd, freeUsd: gate.freeUsd }), {

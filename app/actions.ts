@@ -5,12 +5,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
 import { encryptSecret, sha256Hex, randomToken } from '@/lib/crypto'
-import { billableUsd, freeAllowanceUsd, currentPeriodStartIso } from '@/lib/claude/pricing'
+import { billableUsd, currentPeriodStartIso } from '@/lib/claude/pricing'
+import { getAccountLimits } from '@/lib/limits'
 import { isAdminEmail } from '@/lib/admin'
 import { GetObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { getR2Client, R2_BUCKET } from '@/lib/r2'
 import { getGoogleAuthUrl, revokeGoogleAccess, hasGoogleAuth, getGoogleScopes, DEFAULT_GOOGLE_SCOPES } from '@/lib/google/auth'
+import { createUrlPreviewUnit } from '@/lib/urlPreview'
 
 // ── Claude / AI settings ──────────────────────────────────────────────────────
 
@@ -99,15 +101,15 @@ export async function getClaudeUsage(): Promise<{
   hasOwnKey: boolean
   usingPlatform: boolean
   payPerUse: boolean
-  freeUsd: number
+  freeUsd: number | null
   spentUsd: number
   owedUsd: number
 }> {
-  const free = freeAllowanceUsd()
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+  const { apiCreditUsd } = getAccountLimits(user ?? null)
   if (!user) {
-    return { keySource: 'platform', hasOwnKey: false, usingPlatform: false, payPerUse: false, freeUsd: free, spentUsd: 0, owedUsd: 0 }
+    return { keySource: 'platform', hasOwnKey: false, usingPlatform: false, payPerUse: false, freeUsd: apiCreditUsd, spentUsd: 0, owedUsd: 0 }
   }
 
   // Read the key flag on its own always-present column so a missing pay_per_use
@@ -131,7 +133,7 @@ export async function getClaudeUsage(): Promise<{
 
   return {
     keySource: hasOwnKey ? 'user' : 'platform',
-    hasOwnKey, usingPlatform, payPerUse, freeUsd: free, spentUsd,
+    hasOwnKey, usingPlatform, payPerUse, freeUsd: apiCreditUsd, spentUsd,
     owedUsd: billableUsd(spentUsd, payPerUse),
   }
 }
@@ -825,7 +827,7 @@ export async function getPresignedReadUrl(key: string): Promise<{ ok: boolean; u
 
 export async function createElement(
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number, height?: number
@@ -845,6 +847,18 @@ export async function updateElement(
 ) {
   const supabase = await createClient()
   await supabase.from('board_elements').update(updates).eq('id', elementId)
+}
+
+// Create an enriched url_preview element on a board. Thin server-action wrapper
+// over the shared lib/urlPreview.ts action — used by the MCP create_url_preview
+// tool. Ownership is enforced by RLS via the auth-scoped client (boards the user
+// doesn't own reject the insert).
+export async function createUrlPreview(boardId: string, url: string, x?: number, y?: number) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  const { id, data } = await createUrlPreviewUnit({ supabase, userId: user.id, boardId, url, x, y })
+  return { id, title: data.title, domain: data.domain, status: data.status }
 }
 
 export async function deleteElement(elementId: string) {
@@ -1231,7 +1245,7 @@ export async function ensureMirrorPortal(targetBoardId: string, backBoardId: str
 export async function upsertElement(
   id: string,
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number | null, height?: number | null

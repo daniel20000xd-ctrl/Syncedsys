@@ -1,10 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { KeySource } from '@/lib/claude/key'
-import { freeAllowanceUsd, currentPeriodStartIso } from '@/lib/claude/pricing'
+import { currentPeriodStartIso } from '@/lib/claude/pricing'
+import { getAccountLimits } from '@/lib/limits'
 
 export type GateResult =
   | { ok: true }
-  | { ok: false; error: 'claude_disabled' | 'free_tier_exhausted'; spentUsd?: number; freeUsd?: number }
+  | { ok: false; error: 'claude_disabled' | 'free_tier_exhausted'; spentUsd?: number; freeUsd?: number | null }
 
 // Decide whether a platform-key Claude request may proceed. Own-key requests are
 // never gated (no kill switch, no cap — the user pays Anthropic directly). For
@@ -18,6 +19,7 @@ export async function claudeGate(
   supabase: SupabaseClient,
   userId: string,
   keySource: KeySource,
+  user?: { email?: string | null } | null,
 ): Promise<GateResult> {
   if (keySource !== 'platform') return { ok: true }
 
@@ -42,7 +44,10 @@ export async function claudeGate(
   // of the OWNER's credit a user can consume — non-opted-in users are still never
   // charged (billableUsd returns 0 for them). Tighten with a reserve-then-reconcile
   // row or a per-user advisory lock if strict enforcement is ever needed.
-  const free = freeAllowanceUsd()
+  const { apiCreditUsd } = getAccountLimits(user)
+
+  // Admin has null (unlimited) — skip the cap check entirely, but still query
+  // spend so the gate returns it for any error path that needs it.
   const { data: rows } = await supabase
     .from('claude_usage')
     .select('cost_usd')
@@ -52,6 +57,8 @@ export async function claudeGate(
   const spent = ((rows ?? []) as { cost_usd: number | string | null }[])
     .reduce((s, r) => s + Number(r.cost_usd ?? 0), 0)
 
-  if (spent >= free) return { ok: false, error: 'free_tier_exhausted', spentUsd: spent, freeUsd: free }
+  if (apiCreditUsd !== null && spent >= apiCreditUsd) {
+    return { ok: false, error: 'free_tier_exhausted', spentUsd: spent, freeUsd: apiCreditUsd }
+  }
   return { ok: true }
 }

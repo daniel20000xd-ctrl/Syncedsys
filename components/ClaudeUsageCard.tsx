@@ -22,7 +22,7 @@ export default function ClaudeUsageCard({
   hasOwnKey: boolean
   usingPlatform: boolean
   initialPayPerUse: boolean
-  freeUsd: number
+  freeUsd: number | null
   spentUsd: number
   owedUsd: number
 }) {
@@ -37,8 +37,9 @@ export default function ClaudeUsageCard({
     })
   }
 
-  const pct = freeUsd > 0 ? Math.min(100, (spentUsd / freeUsd) * 100) : 100
-  const overFree = spentUsd >= freeUsd
+  const unlimited = freeUsd === null
+  const pct = !unlimited && freeUsd > 0 ? Math.min(100, (spentUsd / freeUsd) * 100) : 0
+  const overFree = !unlimited && spentUsd >= freeUsd!
   const barColor = overFree ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-green-500'
 
   return (
@@ -55,11 +56,17 @@ export default function ClaudeUsageCard({
       ) : usingPlatform ? (
         <>
           <p className="text-sm text-gray-500 mb-3">
-            {fmtUsd(spentUsd)} of {fmtUsd(freeUsd)} free used this month
+            {unlimited
+              ? <>Unlimited free credit &middot; {fmtUsd(spentUsd)} spent this month</>
+              : <>{fmtUsd(spentUsd)} of {fmtUsd(freeUsd!)} free used this month</>
+            }
           </p>
-          <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mb-4">
-            <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct.toFixed(2)}%` }} />
-          </div>
+
+          {!unlimited && (
+            <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mb-4">
+              <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct.toFixed(2)}%` }} />
+            </div>
+          )}
 
           {overFree && !payPerUse && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
@@ -83,7 +90,7 @@ export default function ClaudeUsageCard({
               <span className="block text-sm font-medium text-gray-800">Pay for usage beyond the free tier</span>
               <span className="block text-xs text-gray-500 mt-0.5">
                 When off, Claude pauses once your free monthly credit runs out — you&rsquo;re never charged. When on,
-                it keeps working and you pay for usage above {fmtUsd(freeUsd)}.
+                it keeps working and you pay for usage above {unlimited ? 'your allowance' : fmtUsd(freeUsd!)}.
               </span>
             </span>
           </label>

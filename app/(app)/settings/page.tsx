@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { ArrowUpRight } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { isAdminEmail } from '@/lib/admin'
+import { getAccountLimits } from '@/lib/limits'
 import { getClaudeStatus, getClaudeUsage, getStorageUsage, syncStorageCounter, listMcpTokens } from '@/app/actions'
 import { getPersonaId } from '@/lib/persona'
 import ClaudeKeySettings from '@/components/ClaudeKeySettings'
@@ -15,6 +16,7 @@ export default async function SettingsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   const isAdmin = isAdminEmail(user?.email)
+  const limits = getAccountLimits(user)
   let claude = { hasKey: false, autoApply: false }
   try { claude = await getClaudeStatus() } catch {
     // Crypto or DB error — degrade gracefully; the key section will still render
@@ -60,7 +62,7 @@ export default async function SettingsPage() {
           )}
         </section>
 
-        <StorageMeter usage={storage} />
+        <StorageMeter usage={storage} limitBytes={limits.storageBytes} />
 
         <ClaudeUsageCard
           hasOwnKey={claudeUsage.hasOwnKey}

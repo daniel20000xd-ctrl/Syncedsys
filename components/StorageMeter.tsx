@@ -1,6 +1,5 @@
 import { HardDrive } from 'lucide-react'
 import type { StorageUsage } from '@/app/actions'
-import { STORAGE_LIMIT_BYTES } from '@/lib/r2'
 
 function fmt(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -9,7 +8,13 @@ function fmt(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`
 }
 
-export default function StorageMeter({ usage }: { usage: StorageUsage | null }) {
+export default function StorageMeter({
+  usage,
+  limitBytes,
+}: {
+  usage: StorageUsage | null
+  limitBytes: number | null
+}) {
   if (!usage) return (
     <section className="bg-white rounded-xl p-5 shadow-sm">
       <h2 className="font-semibold text-gray-800 mb-1 flex items-center gap-2">
@@ -19,7 +24,8 @@ export default function StorageMeter({ usage }: { usage: StorageUsage | null }) 
     </section>
   )
 
-  const pct = Math.min(100, (usage.totalBytes / STORAGE_LIMIT_BYTES) * 100)
+  const unlimited = limitBytes === null
+  const pct = !unlimited ? Math.min(100, (usage.totalBytes / limitBytes!) * 100) : 0
   const barColor = pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-green-500'
   const apps = Object.entries(usage.apps).sort((a, b) => b[1].bytes - a[1].bytes)
 
@@ -29,15 +35,17 @@ export default function StorageMeter({ usage }: { usage: StorageUsage | null }) 
         <HardDrive size={16} className="text-gray-400" /> Storage
       </h2>
       <p className="text-sm text-gray-500 mb-3">
-        {fmt(usage.totalBytes)} used of {fmt(STORAGE_LIMIT_BYTES)}
+        {fmt(usage.totalBytes)} used{unlimited ? ' — Unlimited' : ` of ${fmt(limitBytes!)}`}
       </p>
 
-      <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mb-4">
-        <div
-          className={`h-full rounded-full ${barColor}`}
-          style={{ width: `${pct.toFixed(2)}%` }}
-        />
-      </div>
+      {!unlimited && (
+        <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden mb-4">
+          <div
+            className={`h-full rounded-full ${barColor}`}
+            style={{ width: `${pct.toFixed(2)}%` }}
+          />
+        </div>
+      )}
 
       {apps.length > 0 ? (
         <div className="space-y-2">
