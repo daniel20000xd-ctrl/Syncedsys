@@ -55,15 +55,21 @@ export async function renderPdfThumbnail(file: File, maxWidth = 120): Promise<st
   return canvas.toDataURL('image/jpeg', 0.75)
 }
 
-// Upload the raw PDF to R2. Returns the R2 key and file size so callers can
-// store both on the element (size is needed for accurate counter decrements on delete).
-export async function uploadPdf(file: File, boardId: string): Promise<{ key: string; sizeBytes: number }> {
+// Upload any raw file to R2. Returns the R2 key and size so callers can store
+// both on the element (size is needed for accurate counter decrements on delete).
+// `kind` is just a folder segment in the object key (e.g. 'pdfs', 'files').
+export async function uploadFile(file: File, boardId: string, kind = 'files'): Promise<{ key: string; sizeBytes: number }> {
   const form = new FormData()
   form.append('file', file)
   form.append('app', 'hub')
-  form.append('subpath', `pdfs/${boardId}/${crypto.randomUUID()}-${file.name}`)
+  form.append('subpath', `${kind}/${boardId}/${crypto.randomUUID()}-${file.name}`)
   const res = await fetch(`${STORAGE_URL}/api/storage/upload`, { method: 'POST', body: form })
   if (!res.ok) throw new Error(`R2 upload failed: ${res.status}`)
   const { key } = await res.json() as { key: string }
   return { key, sizeBytes: file.size }
+}
+
+// Upload the raw PDF to R2 (kept as a named helper; delegates to uploadFile).
+export function uploadPdf(file: File, boardId: string): Promise<{ key: string; sizeBytes: number }> {
+  return uploadFile(file, boardId, 'pdfs')
 }

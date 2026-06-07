@@ -272,6 +272,7 @@ async function renderContext(
       }
       else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
       else if (e.type === 'url_preview') label = `link "${d.title ?? d.domain ?? ''}" → ${d.url ?? '?'}`
+      else if (e.type === 'file') label = `stored file "${d.name ?? 'file'}" (not previewable)`
       lines.push(`${indent}    element[${e.id}]: ${label}`)
     }
 

@@ -831,7 +831,7 @@ export async function getPresignedReadUrl(key: string): Promise<{ ok: boolean; u
 
 export async function createElement(
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number, height?: number
@@ -987,6 +987,9 @@ export async function importFolderTree(parentBoardId: string, tree: ImportNode, 
     }
     for (const p of node.pdfs ?? []) {
       elements.push({ board_id: board.id, type: 'pdf', x: 0, y: 0, data: { name: p.name, storagePath: p.storagePath, sizeBytes: p.sizeBytes, text: p.text, pageCount: p.pageCount, folder_position: pos++ } })
+    }
+    for (const b of node.binaries ?? []) {
+      elements.push({ board_id: board.id, type: 'file', x: 0, y: 0, data: { name: b.name, storagePath: b.storagePath, sizeBytes: b.sizeBytes, folder_position: pos++ } })
     }
     if (elements.length) {
       await supabase.from('board_elements').insert(elements)
@@ -1280,7 +1283,7 @@ export async function ensureMirrorPortal(targetBoardId: string, backBoardId: str
 export async function upsertElement(
   id: string,
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview',
+  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number | null, height?: number | null

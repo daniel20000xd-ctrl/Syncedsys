@@ -49,19 +49,26 @@ function isPdf(file: File): boolean {
 }
 const MAX_PDF_BYTES = 25_000_000
 
+// Largest single non-text/non-PDF file we'll store as an opaque blob in R2.
+export const MAX_UPLOAD_BYTES = 100_000_000 // 100 MB
+
 // A PDF already uploaded to R2 + its extracted text, ready to be persisted as a
 // 'pdf' element by importFolderTree (the binary lives in R2, not in this object).
 export type ImportPdfRef = { name: string; storagePath: string; sizeBytes: number; text: string; pageCount: number }
 
-// A folder tree ready for the server: a folder with its text files, (optionally)
-// already-uploaded PDFs, and sub-folders. Shared with app/actions.ts via a
-// type-only import so the import pipeline has one canonical shape.
-export type ImportNode = { name: string; files: DroppedTextFile[]; pdfs?: ImportPdfRef[]; dirs: ImportNode[] }
+// Any other file already uploaded to R2, persisted as an opaque 'file' element
+// (no preview/edit — just stored and downloadable).
+export type ImportFileRef = { name: string; storagePath: string; sizeBytes: number }
 
-// A folder tree read from an <input webkitdirectory> picker. PDFs are kept as
-// raw File objects here because they must be uploaded to R2 client-side (see
-// lib/pdf.ts) before importFolderTree can persist them.
-export type PickedFolder = { name: string; textFiles: DroppedTextFile[]; pdfFiles: File[]; dirs: PickedFolder[] }
+// A folder tree ready for the server: a folder with its text files, (optionally)
+// already-uploaded PDFs and other binaries, and sub-folders. Shared with
+// app/actions.ts via a type-only import so the pipeline has one canonical shape.
+export type ImportNode = { name: string; files: DroppedTextFile[]; pdfs?: ImportPdfRef[]; binaries?: ImportFileRef[]; dirs: ImportNode[] }
+
+// A folder tree read from an <input webkitdirectory> picker. PDFs and other
+// binaries are kept as raw File objects here because they must be uploaded to
+// R2 client-side (see lib/pdf.ts) before importFolderTree can persist them.
+export type PickedFolder = { name: string; textFiles: DroppedTextFile[]; pdfFiles: File[]; otherFiles: File[]; dirs: PickedFolder[] }
 
 // Synchronously pull FileSystemEntry objects from a drop. MUST be called inside
 // the drop handler before any `await` — the DataTransferItemList is only valid
@@ -175,14 +182,14 @@ export async function readPickedFolder(
 
   const getRoot = (name: string): PickedFolder => {
     let r = rootByName.get(name)
-    if (!r) { r = { name, textFiles: [], pdfFiles: [], dirs: [] }; rootByName.set(name, r); roots.push(r) }
+    if (!r) { r = { name, textFiles: [], pdfFiles: [], otherFiles: [], dirs: [] }; rootByName.set(name, r); roots.push(r) }
     return r
   }
   const descend = (root: PickedFolder, segs: string[]): PickedFolder => {
     let node = root
     for (const seg of segs) {
       let child = node.dirs.find(d => d.name === seg)
-      if (!child) { child = { name: seg, textFiles: [], pdfFiles: [], dirs: [] }; node.dirs.push(child) }
+      if (!child) { child = { name: seg, textFiles: [], pdfFiles: [], otherFiles: [], dirs: [] }; node.dirs.push(child) }
       node = child
     }
     return node
@@ -201,8 +208,12 @@ export async function readPickedFolder(
     } else if (isTextFile(f) && f.size <= MAX_BYTES) {
       try { dir.textFiles.push({ name: f.name, content: await f.text() }) }
       catch { skipped.push(rel) }
+    } else if (f.size <= MAX_UPLOAD_BYTES) {
+      // Anything else (incl. oversized text/PDF, images, binaries) is stored as
+      // an opaque blob — not previewable/editable, but kept and downloadable.
+      dir.otherFiles.push(f)
     } else {
-      skipped.push(rel)
+      skipped.push(`${rel} (too large)`)
     }
   }
   return { roots, skipped }

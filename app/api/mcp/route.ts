@@ -202,6 +202,7 @@ function buildServer(supabase: SupabaseClient, userId: string) {
         else if (e.type === 'portal')    label = d.viewerKind ? `viewer-portal (${d.viewerKind})` : `portal → ${d.targetBoardId ?? '(unset)'}`
         else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
         else if (e.type === 'url_preview') label = `link "${d.title ?? d.domain ?? ''}" → ${d.url ?? '?'}`
+        else if (e.type === 'file')       label = `stored file "${d.name ?? 'file'}" (not previewable)`
         lines.push(`  [${e.id}] ${label}${e.deadline ? ` [due ${e.deadline.slice(0,10)}]` : ''}`)
       }
     }

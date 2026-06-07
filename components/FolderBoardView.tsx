@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createPortal } from 'react-dom'
-import { Folder, FolderPlus, FileText, FileType, ArrowLeft, Trash2, X, Save, Download, ChevronDown, Upload } from 'lucide-react'
+import { Folder, FolderPlus, FileText, FileType, File as FileIcon, ArrowLeft, Trash2, X, Save, Download, ChevronDown, Upload } from 'lucide-react'
 import type { Board, BoardElement } from '@/lib/types'
 import {
   createSubTab, deleteBoard, createTextFile, updateTextFile, deleteElement,
@@ -11,7 +11,7 @@ import {
   createElement, getPdfUrl, getPresignedReadUrl, deleteStorageObjects,
 } from '@/app/actions'
 import { collectEntries, readDroppedEntries, readPickedFolder, downloadTextFile, type PickedFolder, type ImportNode } from '@/lib/files'
-import { uploadPdf, extractPdfText } from '@/lib/pdf'
+import { uploadPdf, uploadFile, extractPdfText } from '@/lib/pdf'
 import { folderUnitsStore } from '@/lib/folderUnitsStore'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
 
@@ -353,7 +353,7 @@ export default function FolderBoardView({
   // as a 'pdf' unit in the right sub-folder. `uploadedKeys` collects every R2 key
   // written (so a failed import can clean them up); `failedPdfs` collects names
   // of PDFs that couldn't be uploaded (so the user is told, not silently dropped).
-  async function buildServerTree(node: PickedFolder, uploadedKeys: string[], failedPdfs: string[]): Promise<ImportNode> {
+  async function buildServerTree(node: PickedFolder, uploadedKeys: string[], failed: string[]): Promise<ImportNode> {
     const pdfs: NonNullable<ImportNode['pdfs']> = []
     for (const pdf of node.pdfFiles) {
       try {
@@ -365,19 +365,30 @@ export default function FolderBoardView({
         pdfs.push({ name: pdf.name, storagePath: key, sizeBytes, text, pageCount })
       } catch (err) {
         console.error('Failed to upload PDF during folder import:', pdf.name, err)
-        failedPdfs.push(pdf.name)
+        failed.push(pdf.name)
+      }
+    }
+    const binaries: NonNullable<ImportNode['binaries']> = []
+    for (const file of node.otherFiles) {
+      try {
+        const { key, sizeBytes } = await uploadFile(file, board.id)
+        uploadedKeys.push(key)
+        binaries.push({ name: file.name, storagePath: key, sizeBytes })
+      } catch (err) {
+        console.error('Failed to upload file during folder import:', file.name, err)
+        failed.push(file.name)
       }
     }
     const dirs: ImportNode[] = []
-    for (const d of node.dirs) dirs.push(await buildServerTree(d, uploadedKeys, failedPdfs))
-    return { name: node.name, files: node.textFiles, pdfs, dirs }
+    for (const d of node.dirs) dirs.push(await buildServerTree(d, uploadedKeys, failed))
+    return { name: node.name, files: node.textFiles, pdfs, binaries, dirs }
   }
 
   async function onFolderPicked(e: React.ChangeEvent<HTMLInputElement>) {
     const list = e.target.files
     if (!list || list.length === 0) return
     setUploading('Reading…')
-    const failedPdfs: string[] = []
+    const failed: string[] = []
     let importFailed = false
     try {
       const { roots, skipped } = await readPickedFolder(list)
@@ -386,11 +397,11 @@ export default function FolderBoardView({
       for (const root of roots) {
         const uploadedKeys: string[] = []
         try {
-          const tree = await buildServerTree(root, uploadedKeys, failedPdfs)
+          const tree = await buildServerTree(root, uploadedKeys, failed)
           const top = await importFolderTree(board.id, tree, board.color)
           setFolders(prev => [...prev, top as Board])
         } catch (err) {
-          // This root failed to persist — its just-uploaded PDFs are now orphaned
+          // This root failed to persist — its just-uploaded files are now orphaned
           // in R2 (no element references them), so best-effort clean them up.
           console.error('Folder import failed for:', root.name, err)
           importFailed = true
@@ -400,8 +411,8 @@ export default function FolderBoardView({
       }
       const notes: string[] = []
       if (importFailed) notes.push('Some folders could not be imported and were rolled back.')
-      if (failedPdfs.length) notes.push(`${failedPdfs.length} PDF(s) could not be uploaded and were skipped.`)
-      if (skipped.length) notes.push(`${skipped.length} unsupported file(s) were skipped (only text and PDF files are imported).`)
+      if (failed.length) notes.push(`${failed.length} file(s) could not be uploaded and were skipped.`)
+      if (skipped.length) notes.push(`${skipped.length} file(s) were too large and were skipped (max 100 MB each).`)
       if (notes.length) alert(notes.join('\n'))
     } catch (err) {
       console.error('Folder upload failed:', err)
@@ -416,6 +427,19 @@ export default function FolderBoardView({
     const w = window.open('', '_blank')
     try {
       const res = await getPdfUrl(path)
+      if (res.ok && res.url && w) w.location.href = res.url
+      else if (w) w.close()
+    } catch { if (w) w.close() }
+  }
+
+  // Open any stored file (opaque 'file' unit) via a presigned URL — the browser
+  // downloads or previews it depending on type. Tab opened before the await so
+  // popup blockers allow it.
+  async function openStored(path?: string) {
+    if (!path) return
+    const w = window.open('', '_blank')
+    try {
+      const res = await getPresignedReadUrl(path)
       if (res.ok && res.url && w) w.location.href = res.url
       else if (w) w.close()
     } catch { if (w) w.close() }
@@ -594,6 +618,7 @@ export default function FolderBoardView({
                 onClick={e => { e.stopPropagation(); toggleSelect(file.id, e.ctrlKey || e.metaKey || e.shiftKey) }}
                 onDoubleClick={async () => {
                   if (file.type === 'pdf') { openPdf(file.data.storagePath as string); return }
+                  if (file.type === 'file') { openStored(file.data.storagePath as string); return }
                   if (file.data.storagePath && !file.data.content) {
                     try {
                       const r = await getPresignedReadUrl(file.data.storagePath as string)
@@ -606,13 +631,15 @@ export default function FolderBoardView({
                   }
                 }}
                 className={fileTileClass(file)}
-                title={file.type === 'pdf' ? 'Double-click to open the PDF in a new tab' : 'Double-click to open · drag to reorder · click ⌄ for settings'}
+                title={file.type === 'pdf' ? 'Double-click to open the PDF in a new tab' : file.type === 'file' ? 'Stored file — double-click to open/download' : 'Double-click to open · drag to reorder · click ⌄ for settings'}
               >
                 {file.type === 'pdf'
                   ? <FileType size={42} className="text-red-400" />
+                  : file.type === 'file'
+                  ? <FileIcon size={42} className="text-gray-400" />
                   : <FileText size={42} className="text-indigo-400" />}
                 <span className="text-[11px] text-gray-700 text-center break-words line-clamp-2 leading-tight">
-                  {(file.data.name as string) || (file.type === 'pdf' ? 'Document.pdf' : 'Untitled.txt')}
+                  {(file.data.name as string) || (file.type === 'pdf' ? 'Document.pdf' : file.type === 'file' ? 'File' : 'Untitled.txt')}
                 </span>
                 <button
                   onClick={e => {
@@ -693,6 +720,7 @@ export default function FolderBoardView({
             boardId={board.id}
             anchorRect={fileMenu.rect}
             onClose={() => setFileMenu(null)}
+            onOpen={() => openStored(f.data.storagePath as string | undefined)}
             onSaved={updated => { setFiles(prev => prev.map(x => x.id === updated.id ? updated : x)); setFileMenu(null) }}
             onDeleted={() => { setFileMenu(null); removeFile(f.id) }}
           />
@@ -739,10 +767,11 @@ export default function FolderBoardView({
 
 // ── Per-file settings menu ────────────────────────────────────────────────────
 
-function FileMenuPanel({ file, boardId, anchorRect, onClose, onSaved, onDeleted }: {
+function FileMenuPanel({ file, boardId, anchorRect, onClose, onOpen, onSaved, onDeleted }: {
   file: BoardElement; boardId: string; anchorRect: DOMRect
-  onClose: () => void; onSaved: (f: BoardElement) => void; onDeleted: () => void
+  onClose: () => void; onOpen: () => void; onSaved: (f: BoardElement) => void; onDeleted: () => void
 }) {
+  const isStored = !!file.data.storagePath && !file.data.content
   const [name, setName] = useState((file.data.name as string) || '')
   const ref = useRef<HTMLDivElement>(null)
 
@@ -774,10 +803,10 @@ function FileMenuPanel({ file, boardId, anchorRect, onClose, onSaved, onDeleted 
       />
       <button onClick={save} className="w-full bg-[#0079bf] hover:bg-[#026aa7] text-white text-sm py-1.5 rounded mb-1.5">Save</button>
       <button
-        onClick={() => downloadTextFile((file.data.name as string) || 'file.txt', (file.data.content as string) || '')}
+        onClick={() => isStored ? onOpen() : downloadTextFile((file.data.name as string) || 'file.txt', (file.data.content as string) || '')}
         className="w-full flex items-center justify-center gap-1.5 text-xs text-gray-600 hover:bg-gray-100 py-1.5 rounded mb-1"
       >
-        <Download size={12} /> Download
+        <Download size={12} /> {isStored ? 'Open / download' : 'Download'}
       </button>
       <button onClick={onDeleted} className="w-full flex items-center justify-center gap-1.5 text-xs text-red-600 hover:bg-red-50 py-1.5 rounded">
         <Trash2 size={12} /> Delete

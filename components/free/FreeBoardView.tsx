@@ -117,7 +117,7 @@ function buildNodes(
   }))
 
   const elementNodes: Node[] = elements.map(el => {
-    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'pdf' ? 'pdfNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : el.type === 'claude' ? 'claudeNode' : el.type === 'url_preview' ? 'urlPreviewNode' : 'drawingNode'
+    const type = el.type === 'shape' ? 'shapeNode' : el.type === 'image' ? 'imageNode' : el.type === 'text' ? 'textNode' : el.type === 'textfile' ? 'textFileNode' : el.type === 'pdf' ? 'pdfNode' : el.type === 'file' ? 'pdfNode' : el.type === 'folderlink' ? 'folderLinkNode' : el.type === 'portal' ? 'portalNode' : el.type === 'claude' ? 'claudeNode' : el.type === 'url_preview' ? 'urlPreviewNode' : 'drawingNode'
     const base: Node = {
       id: `el-${el.id}`,
       type,
