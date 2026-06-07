@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
@@ -30,20 +30,22 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   const [color, setColor] = useState(board.color)
   const [hasDeadline, setHasDeadline] = useState(!!board.deadline)
   const [deadline, setDeadline] = useState(board.deadline ? board.deadline.slice(0, 10) : '')
-  const [mode, setMode] = useState<'classic' | 'trello' | 'text' | 'folder'>(board.mode ?? 'classic')
+  const [mode, setMode] = useState<'classic' | 'trello' | 'text' | 'folder' | 'database'>(board.mode ?? 'classic')
   const [saving, setSaving] = useState(false)
   // synced=true means included in iOS sync (default); false means excluded
   const [synced, setSynced] = useState(board.synced ?? true)
   const [meta, setMeta] = useState(board.meta ?? '')
-  // Text and spreadsheet tabs are specialised dead-ends — locked after creation.
+  // Text and database tabs are mode-locked after creation.
   const currentMode = board.mode ?? 'classic'
   const textLocked = currentMode === 'text'
+  const databaseLocked = currentMode === 'database'
+  const isModeLocked = textLocked || databaseLocked
   // Warnings shown inline before a potentially surprising mode switch.
   const warnings: string[] = []
   if (mode !== board.mode) {
     if (mode === 'text') {
       warnings.push('Lists, cards and any canvas items stay saved but are hidden in Text mode.')
-      warnings.push('Text tabs are locked to text — you won’t be able to switch this tab to another mode afterwards.')
+      warnings.push('Text tabs are locked to text — you won\'t be able to switch this tab to another mode afterwards.')
     } else if (mode === 'folder') {
       warnings.push('Folder view shows sub-folders and text files only. Lists, cards, shapes, drawings and connections stay saved but are hidden here.')
     } else if (board.mode === 'classic' && mode === 'trello') {
@@ -194,13 +196,13 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
 
       <label className="block text-xs text-gray-600 mb-1.5 flex items-center gap-1">
         Board preset
-        {textLocked && <Lock size={10} className="text-gray-400" />}
+        {isModeLocked && <Lock size={10} className="text-gray-400" />}
       </label>
       <div className="grid grid-cols-2 gap-1.5 mb-2">
         {(['classic', 'trello', 'text', 'folder'] as const).map(m => (
           <button
             key={m}
-            disabled={textLocked}
+            disabled={isModeLocked}
             onClick={() => setMode(m)}
             className={`py-2 rounded text-xs font-medium border capitalize transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${mode === m ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
           >
@@ -208,8 +210,11 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
           </button>
         ))}
       </div>
-      {textLocked ? (
-        <p className="text-[10px] text-gray-400 mb-3 flex items-center gap-1"><Lock size={9} /> Text tabs stay text — mode is locked.</p>
+      {isModeLocked ? (
+        <p className="text-[10px] text-gray-400 mb-3 flex items-center gap-1">
+          <Lock size={9} />
+          {databaseLocked ? 'Database tabs stay database — mode is locked.' : 'Text tabs stay text — mode is locked.'}
+        </p>
       ) : (
         <>
           {mode === 'classic' && <p className="text-[10px] text-gray-400 mb-3">Freeform canvas — drag anything, draw connections.</p>}

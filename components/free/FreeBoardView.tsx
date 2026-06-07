@@ -9,7 +9,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useRouter } from 'next/navigation'
-import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, Lock, Maximize, Eye, EyeOff, Trash2, Undo2, Redo2, type LucideIcon } from 'lucide-react'
+import { MousePointer2, Pencil, Square, Type, Hand, Frame, Clock, Sparkles, Plus, Minus, Maximize2, Lock, Maximize, Eye, EyeOff, Trash2, Undo2, Redo2, Database, type LucideIcon } from 'lucide-react'
 import type { Board, List, Card, BoardEdge, BoardElement } from '@/lib/types'
 import {
   createList, createFreeCard, deleteEdge, deleteBoard,
@@ -2751,14 +2751,15 @@ function ExpiryPanel({ initialValue, onSave, onClose }: {
 // ── Sub-tab mode picker ───────────────────────────────────────────────────────
 
 const SUBTAB_MODES = [
-  { mode: 'classic' as const,     emoji: '🎨', label: 'Canvas',      desc: 'Free-form boards & nodes' },
-  { mode: 'trello' as const,      emoji: '🗂',  label: 'Kanban',      desc: 'Lists & cards' },
-  { mode: 'text' as const,        emoji: '📝', label: 'Document',    desc: 'Rich text editor' },
-  { mode: 'folder' as const,      emoji: '📁', label: 'Folder',      desc: 'Files & sub-folders' },
+  { mode: 'classic' as const,   emoji: '🎨',  label: 'Canvas',   desc: 'Free-form boards & nodes', Icon: null as typeof Database | null },
+  { mode: 'trello' as const,    emoji: '🗂',   label: 'Kanban',   desc: 'Lists & cards', Icon: null as typeof Database | null },
+  { mode: 'text' as const,      emoji: '📝',  label: 'Document', desc: 'Rich text editor', Icon: null as typeof Database | null },
+  { mode: 'folder' as const,    emoji: '📁',  label: 'Folder',   desc: 'Files & sub-folders', Icon: null as typeof Database | null },
+  { mode: 'database' as const,  emoji: '',    label: 'Database', desc: 'Structured table view — browse, filter and search stored records.', Icon: Database },
 ]
 
 function SubtabModePicker({ onPick, onClose }: {
-  onPick: (mode: 'classic' | 'trello' | 'text' | 'folder') => void
+  onPick: (mode: 'classic' | 'trello' | 'text' | 'folder' | 'database') => void
   onClose: () => void
 }) {
   return (
@@ -2766,13 +2767,15 @@ function SubtabModePicker({ onPick, onClose }: {
       <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 p-5 w-80" onClick={e => e.stopPropagation()}>
         <p className="text-sm font-semibold text-gray-700 mb-4">Choose sub-tab type</p>
         <div className="grid grid-cols-1 gap-2">
-          {SUBTAB_MODES.map(({ mode, emoji, label, desc }) => (
+          {SUBTAB_MODES.map(({ mode, emoji, label, desc, Icon }) => (
             <button
               key={mode}
               onClick={() => onPick(mode)}
               className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-left transition-colors group"
             >
-              <span className="text-2xl">{emoji}</span>
+              {Icon
+                ? <Icon size={24} className="text-gray-500 group-hover:text-blue-600 shrink-0" />
+                : <span className="text-2xl">{emoji}</span>}
               <div>
                 <p className="text-sm font-medium text-gray-800 group-hover:text-blue-700">{label}</p>
                 <p className="text-[11px] text-gray-400">{desc}</p>

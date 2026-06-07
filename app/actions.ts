@@ -457,7 +457,7 @@ export async function updateBoardContent(boardId: string, content: string) {
   await supabase.from('boards').update({ content }).eq('id', boardId).eq('user_id', user.id)
 }
 
-export async function createSubTab(parentBoardId: string, name: string, color: string, mode: 'classic' | 'trello' | 'text' | 'folder' = 'classic') {
+export async function createSubTab(parentBoardId: string, name: string, color: string, mode: 'classic' | 'trello' | 'text' | 'folder' | 'database' = 'classic') {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
@@ -1491,4 +1491,73 @@ export async function getStorageUsage(): Promise<StorageUsage | null> {
   }
 
   return { totalBytes, apps }
+}
+
+// ── Library items ──────────────────────────────────────────────────────────────
+
+export async function updateLibraryItem(
+  id: string,
+  updates: {
+    summary?: string | null
+    tags?: string[]
+    verified?: boolean
+    metadata?: Record<string, unknown>
+  },
+): Promise<{ ok: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated' }
+
+  const { data: existing } = await supabase
+    .from('library_items')
+    .select('id, version')
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .eq('deleted', false)
+    .maybeSingle()
+  if (!existing) return { ok: false, error: 'Item not found' }
+
+  const patch: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+    version: (existing.version ?? 1) + 1,
+  }
+  if (updates.summary !== undefined) patch.summary = updates.summary
+  if (updates.tags !== undefined) patch.tags = updates.tags
+  if (updates.verified !== undefined) patch.verified = updates.verified
+  if (updates.metadata !== undefined) patch.metadata = updates.metadata
+
+  const { error } = await supabase
+    .from('library_items')
+    .update(patch)
+    .eq('id', id)
+    .eq('user_id', user.id)
+  if (error) return { ok: false, error: error.message }
+  return { ok: true }
+}
+
+export async function deleteLibraryItem(id: string): Promise<{ ok: boolean; error?: string }> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated' }
+
+  const { data: existing } = await supabase
+    .from('library_items')
+    .select('id, version')
+    .eq('id', id)
+    .eq('user_id', user.id)
+    .eq('deleted', false)
+    .maybeSingle()
+  if (!existing) return { ok: false, error: 'Item not found' }
+
+  const { error } = await supabase
+    .from('library_items')
+    .update({
+      deleted: true,
+      updated_at: new Date().toISOString(),
+      version: (existing.version ?? 1) + 1,
+    })
+    .eq('id', id)
+    .eq('user_id', user.id)
+  if (error) return { ok: false, error: error.message }
+  return { ok: true }
 }

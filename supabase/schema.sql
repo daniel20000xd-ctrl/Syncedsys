@@ -352,6 +352,58 @@ alter table app_config enable row level security;
 create policy "app config readable" on app_config
   for select using (auth.uid() is not null);
 
+-- ── Library items — personal reference database (legal cases + papers) ──────
+create table if not exists library_items (
+  id           uuid primary key default gen_random_uuid(),
+  user_id      uuid not null references auth.users(id),
+  type         text not null check (type in ('legal_case', 'paper')),
+  title        text not null,
+  summary      text,
+  tags         text[] default '{}',
+  source_url   text,
+  full_text    text,
+  metadata     jsonb default '{}',
+  content_hash text,
+  version      integer default 1,
+  verified     boolean default false,
+  deleted      boolean default false,
+  created_at   timestamptz default now(),
+  updated_at   timestamptz default now()
+);
+
+alter table library_items enable row level security;
+
+create policy "library owner only"
+  on library_items
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+create index if not exists lib_user_type on library_items(user_id, type);
+create index if not exists lib_tags      on library_items using gin(tags);
+create index if not exists lib_metadata  on library_items using gin(metadata);
+create index if not exists lib_updated   on library_items(updated_at);
+create index if not exists lib_hash      on library_items(content_hash);
+create index if not exists lib_deleted   on library_items(deleted);
+
+alter table library_items
+  add column if not exists tsv tsvector generated always as (
+    to_tsvector('swedish',
+      coalesce(title, '') || ' ' ||
+      coalesce(summary, '') || ' ' ||
+      coalesce(full_text, '')
+    )
+  ) stored;
+
+create index if not exists lib_tsv on library_items using gin(tsv);
+
+create unique index if not exists lib_beteckning_unique
+  on library_items((metadata->>'beteckning'), user_id)
+  where type = 'legal_case' and deleted = false;
+
+create unique index if not exists lib_doi_unique
+  on library_items((metadata->>'doi'), user_id)
+  where type = 'paper' and deleted = false;
+
 -- ── MCP access tokens (bring your own Claude) ─────────────────────────────────
 -- Per-user opaque tokens (stored as a SHA-256 hash) that let external Claude
 -- clients authenticate to /api/mcp as the user, with no Anthropic API key.

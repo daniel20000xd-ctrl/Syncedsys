@@ -4,7 +4,7 @@ export type Board = {
   color: string
   user_id: string
   deadline: string | null
-  mode: 'classic' | 'trello' | 'text' | 'folder'
+  mode: 'classic' | 'trello' | 'text' | 'folder' | 'database'
   content: string | null
   parent_id: string | null
   tab_position: number

@@ -14,6 +14,7 @@ const MODE_EMOJI: Record<Board['mode'], string> = {
   trello: '🗂',
   text: '📝',
   folder: '📁',
+  database: '🗄️',
 }
 
 const byPos = (a: Board, b: Board) =>

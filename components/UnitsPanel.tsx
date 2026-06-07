@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Frame, Eye, EyeOff, FileText, LayoutDashboard, AlignLeft, X, Trash2, ChevronRight, Link2 } from 'lucide-react'
+import { GripVertical, Settings2, List as ListIcon, Square, Type, Image as ImageIcon, Pencil, CreditCard, Frame, Eye, EyeOff, FileText, LayoutDashboard, AlignLeft, X, Trash2, ChevronRight, Link2, Database } from 'lucide-react'
 import { useUnits, usePanelSel, unitsStore, type Unit } from '@/lib/unitsStore'
 
 function UnitIcon({ u }: { u: Unit }) {
@@ -9,6 +9,7 @@ function UnitIcon({ u }: { u: Unit }) {
     if (u.mode === 'text')        return <AlignLeft size={13} className="shrink-0 text-white/50" />
     if (u.mode === 'folder')      return <FileText size={13} className="shrink-0 text-white/50" />
     if (u.mode === 'trello')      return <LayoutDashboard size={13} className="shrink-0 text-white/50" />
+    if (u.mode === 'database')    return <Database size={13} className="shrink-0 text-white/50" />
     return <Square size={13} className="shrink-0 text-white/50" />
   }
   const icons: Partial<Record<Unit['kind'], typeof Square>> = {
