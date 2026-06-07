@@ -10,6 +10,7 @@ export type Board = {
   tab_position: number
   group_id: string | null
   is_group: boolean
+  is_persona: boolean
   free_x: number
   free_y: number
   synced: boolean

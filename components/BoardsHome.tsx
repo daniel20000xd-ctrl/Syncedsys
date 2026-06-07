@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, useMemo } from 'react'
+import { useState, useTransition, useMemo, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { Plus, ChevronDown, X, Trash2 } from 'lucide-react'
@@ -30,6 +30,17 @@ export default function BoardsHome({ boards: initialBoards }: { boards: Board[] 
   const [pendingDelete, setPendingDelete] = useState<Board | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // Active persona — derived from the remembered pointer (set by the TabBar when
+  // inside a board), falling back to the first persona. Null = legacy data.
+  const [activePersonaId, setActivePersonaId] = useState<string | null>(null)
+  useEffect(() => {
+    const personas = boards.filter(b => b.is_persona)
+    let pid: string | null = null
+    try { pid = localStorage.getItem('activePersonaId') } catch {}
+    if (!pid || !personas.some(p => p.id === pid)) pid = personas[0]?.id ?? null
+    setActivePersonaId(pid)
+  }, [boards])
+
   const { roots, childrenOf } = useMemo(() => {
     const childrenOf = new Map<string, Board[]>()
     for (const b of boards) {
@@ -40,10 +51,10 @@ export default function BoardsHome({ boards: initialBoards }: { boards: Board[] 
       }
     }
     for (const arr of childrenOf.values()) arr.sort(byPos)
-    const ids = new Set(boards.map(b => b.id))
-    const roots = boards.filter(b => !b.parent_id || !ids.has(b.parent_id)).sort(byPos)
+    // Only the active persona's top-level boards (never personas themselves).
+    const roots = boards.filter(b => !b.is_persona && b.parent_id === activePersonaId).sort(byPos)
     return { roots, childrenOf }
-  }, [boards])
+  }, [boards, activePersonaId])
 
   async function handleDeleteConfirmed() {
     if (!pendingDelete) return
@@ -150,7 +161,7 @@ export default function BoardsHome({ boards: initialBoards }: { boards: Board[] 
           onClose={() => setShowModal(false)}
           onCreate={(name, color, mode) => {
             startTransition(async () => {
-              const board = await createBoard(name, color, mode)
+              const board = await createBoard(name, color, mode, activePersonaId)
               setBoards(prev => [...prev, board])
               setShowModal(false)
               router.push(`/board/${board.id}`)

@@ -58,7 +58,7 @@ function formatBoards(boards: BoardMeta[]): string {
 
 async function fetchBoards(supabase: SupabaseClient, userId: string): Promise<BoardMeta[] | null> {
   const { data, error } = await supabase
-    .from('boards').select('id,name,mode,meta').eq('user_id', userId)
+    .from('boards').select('id,name,mode,meta').eq('user_id', userId).eq('is_persona', false)
     .order('tab_position', { ascending: true })
   if (error) return null
   return data as BoardMeta[]

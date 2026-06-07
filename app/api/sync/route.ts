@@ -26,10 +26,13 @@ export async function GET(req: NextRequest) {
   // Sync ALL of the user's boards. The original `synced=true` filter was never
   // reachable (no UI existed to set it, so every board defaulted to false and
   // the iOS app always got empty arrays). Remove the filter so everything syncs.
+  // Exclude persona container rows — the iOS app treats their (unresolved)
+  // parent_id as a root, so boards still appear top-level as before.
   const { data: boards } = await admin
     .from('boards')
     .select('*')
     .eq('user_id', link.user_id)
+    .eq('is_persona', false)
     .order('tab_position', { ascending: true })
     .order('created_at', { ascending: true })
 

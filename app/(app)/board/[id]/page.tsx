@@ -1,4 +1,4 @@
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import type { Metadata } from 'next'
 import { createClient } from '@/lib/supabase/server'
@@ -13,20 +13,22 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 
   const { data: board } = await supabase
     .from('boards')
-    .select('id, name, parent_id')
+    .select('id, name, parent_id, is_persona')
     .eq('id', id)
     .single()
 
   if (!board) return {}
 
+  // Walk up to the top-level tab, stopping BEFORE the persona (the persona is a
+  // container, not the board context the title should show).
   let root = board
   while (root.parent_id) {
     const { data: parent } = await supabase
       .from('boards')
-      .select('id, name, parent_id')
+      .select('id, name, parent_id, is_persona')
       .eq('id', root.parent_id)
       .single()
-    if (!parent) break
+    if (!parent || parent.is_persona) break
     root = parent
   }
 
@@ -63,6 +65,12 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
 
   const board = boardRes.data
   if (!board) notFound()
+
+  // Personas aren't navigable as boards — redirect into the persona's first tab.
+  if (board.is_persona) {
+    const first = (subRes.data ?? [])[0] as Board | undefined
+    redirect(first ? `/board/${first.id}` : '/boards')
+  }
 
   const lists = ((board.lists ?? []) as List[]).slice().sort((a, b) => a.position - b.position)
   const cards = lists.flatMap(l => ((l as unknown as { cards?: Card[] }).cards ?? [])).slice().sort((a, b) => a.position - b.position)

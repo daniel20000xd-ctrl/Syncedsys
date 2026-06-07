@@ -14,6 +14,7 @@ import GoogleCalendarPortal from './GoogleCalendarPortal'
 import GoogleSheetsPortal from './GoogleSheetsPortal'
 import GoogleDocsPortal from './GoogleDocsPortal'
 import TextPortal from './TextPortal'
+import { getPersonaId, isInPersona } from '@/lib/persona'
 import ClaudeChat from '@/components/claude/ClaudeChat'
 import { ClaudeMark } from '@/components/claude/ClaudeMark'
 import { recurLabel } from '@/lib/recur'
@@ -1123,7 +1124,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
 
   const [choosing, setChoosing] = useState(false)
   const [accessToken, setAccessToken] = useState<string | null>(null)
-  const [boards, setBoards] = useState<{ id: string; name: string; color: string; parent_id: string | null }[]>([])
+  const [boards, setBoards] = useState<{ id: string; name: string; color: string; parent_id: string | null; is_persona?: boolean }[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [content, setContent] = useState<PortalContent | null>(null)
   const [folderContent, setFolderContent] = useState<FolderContent | null>(null)
@@ -1143,6 +1144,10 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   const fileTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const contentElRef = useRef<HTMLDivElement>(null)
   const rawContentRef = useRef<string>('') // raw boards.content for the viewed text board
+
+  // Portals are scoped to the persona of the board they live on (data.home), so
+  // the picker never shows tabs from another persona. Null = legacy data.
+  const portalPersonaId = getPersonaId(home, boards)
 
   const viewId = stack.length ? stack[stack.length - 1] : targetBoardId
   const isBase = viewId === targetBoardId
@@ -1187,7 +1192,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   useEffect(() => {
     let cancel = false
     import('@/lib/supabase/client').then(({ createClient }) => {
-      createClient().from('boards').select('id,name,color,parent_id').order('tab_position', { ascending: true }).then(({ data: b }) => { if (!cancel) setBoards(b ?? []) })
+      createClient().from('boards').select('id,name,color,parent_id,is_persona').order('tab_position', { ascending: true }).then(({ data: b }) => { if (!cancel) setBoards(b ?? []) })
     })
     return () => { cancel = true }
   }, [])
@@ -1319,6 +1324,9 @@ export function PortalNode({ id, data, selected }: NodeProps) {
   }
 
   async function pickBoard(boardId: string) {
+    // Defense-in-depth: never target a persona row or a board in another persona.
+    const tgt = boards.find(b => b.id === boardId)
+    if (tgt?.is_persona || !isInPersona(boardId, portalPersonaId, boards)) return
     setChoosing(false)
     fittedRef.current = null
     const bName = boards.find(b => b.id === boardId)?.name ?? null
@@ -1517,7 +1525,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
             <div className="flex-1 flex flex-col overflow-y-auto p-2">
               <p className="text-[9px] font-semibold text-fuchsia-300/70 uppercase tracking-wider mb-1.5 px-1">Tabs</p>
               {boards.length === 0 && <p className="text-[10px] text-white/30 px-1">Loading…</p>}
-              {boards.filter(b => !b.parent_id).map(b => {
+              {boards.filter(b => b.parent_id === portalPersonaId && !b.is_persona).map(b => {
                 const children = boards.filter(c => c.parent_id === b.id)
                 const isHome = b.id === home
                 return (
@@ -1627,7 +1635,7 @@ export function PortalNode({ id, data, selected }: NodeProps) {
       {/* Tab chooser — rendered OUTSIDE overflow-hidden so it is never clipped.
           onWheel stops scroll from zooming the main canvas while the list is open. */}
       {choosing && (() => {
-        const topBoards = boards.filter(b => !b.parent_id)
+        const topBoards = boards.filter(b => b.parent_id === portalPersonaId && !b.is_persona)
         const childrenOf = (pid: string) => boards.filter(b => b.parent_id === pid)
 
         return (

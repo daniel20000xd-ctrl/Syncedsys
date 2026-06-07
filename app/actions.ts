@@ -304,20 +304,20 @@ export async function removeDeviceLink(id: string) {
 
 // ── Boards ──────────────────────────────────────────────────────────────────
 
-export async function createBoard(name: string, color: string, mode = 'classic') {
+export async function createBoard(name: string, color: string, mode = 'classic', activePersonaId: string | null = null) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
 
-  // Append to the end of the top-level tab order.
-  const { data: last } = await supabase
-    .from('boards').select('tab_position').eq('user_id', user.id).is('parent_id', null).is('group_id', null)
-    .order('tab_position', { ascending: false }).limit(1)
+  // Append to the end of the active persona's tab order (legacy root when null).
+  let posQ = supabase.from('boards').select('tab_position').eq('user_id', user.id).is('group_id', null)
+  posQ = activePersonaId ? posQ.eq('parent_id', activePersonaId) : posQ.is('parent_id', null)
+  const { data: last } = await posQ.order('tab_position', { ascending: false }).limit(1)
   const tab_position = last && last.length > 0 ? last[0].tab_position + 1 : 0
 
   const { data, error } = await supabase
     .from('boards')
-    .insert({ name, color, user_id: user.id, tab_position, mode })
+    .insert({ name, color, user_id: user.id, parent_id: activePersonaId, tab_position, mode })
     .select()
     .single()
 
@@ -326,11 +326,62 @@ export async function createBoard(name: string, color: string, mode = 'classic')
   return data
 }
 
+// Create a new persona (top-level container) plus one empty canvas board to land
+// on, so switching to it feels like a fresh account. Returns both rows.
+export async function createPersona(name = 'New persona', color = '#6366f1') {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data: last } = await supabase
+    .from('boards').select('tab_position').eq('user_id', user.id).is('parent_id', null).eq('is_persona', true)
+    .order('tab_position', { ascending: false }).limit(1)
+  const tab_position = last && last.length > 0 ? last[0].tab_position + 1 : 0
+
+  const { data: persona, error } = await supabase
+    .from('boards')
+    .insert({ name, color, user_id: user.id, is_persona: true, parent_id: null, tab_position, mode: 'classic' })
+    .select().single()
+  if (error) throw error
+
+  const { data: board, error: bErr } = await supabase
+    .from('boards')
+    .insert({ name: 'My First Board', color, user_id: user.id, parent_id: persona.id, tab_position: 0, mode: 'classic' })
+    .select().single()
+  if (bErr) throw bErr
+
+  revalidatePath('/', 'layout')
+  return { persona, board }
+}
+
+// Delete a persona and its entire subtree. Refuses to remove the last persona,
+// deletes each top-level child via deleteBoard (which handles R2 + sub-trees),
+// then removes the now-empty persona (the DB trigger blocks deleting a non-empty
+// persona, so order matters).
+export async function deletePersona(personaId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  const { data: persona } = await supabase
+    .from('boards').select('*').eq('id', personaId).eq('user_id', user.id).maybeSingle()
+  if (!persona || !(persona as { is_persona?: boolean }).is_persona) throw new Error('Not a persona')
+
+  const { data: personas } = await supabase
+    .from('boards').select('id').eq('user_id', user.id).eq('is_persona', true)
+  if ((personas ?? []).length <= 1) throw new Error('You must keep at least one persona.')
+
+  const { data: topChildren } = await supabase.from('boards').select('id').eq('parent_id', personaId)
+  for (const c of topChildren ?? []) await deleteBoard(c.id)
+  await supabase.from('boards').delete().eq('id', personaId).eq('user_id', user.id)
+  revalidatePath('/', 'layout')
+}
+
 // ── Tab groups (symbolic groupings in the tab bar) ────────────────────────────
 
 // A group is a board with is_group=true; members link via group_id (soft —
 // deleting the group nulls members' group_id, never deletes them).
-export async function createGroup(name: string, color: string, mode: 'folder' | 'classic', parentGroupId: string | null = null) {
+export async function createGroup(name: string, color: string, mode: 'folder' | 'classic', parentGroupId: string | null = null, activePersonaId: string | null = null) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
@@ -340,14 +391,17 @@ export async function createGroup(name: string, color: string, mode: 'folder' | 
     if (parent?.group_id) throw new Error('Groups can only be nested two levels deep')
   }
 
-  let posQ = supabase.from('boards').select('tab_position').eq('user_id', user.id).is('parent_id', null)
+  // parent_id always scopes the group to the active persona; group_id does the
+  // (orthogonal) nesting under another group.
+  let posQ = supabase.from('boards').select('tab_position').eq('user_id', user.id)
+  posQ = activePersonaId ? posQ.eq('parent_id', activePersonaId) : posQ.is('parent_id', null)
   posQ = parentGroupId ? posQ.eq('group_id', parentGroupId) : posQ.is('group_id', null)
   const { data: last } = await posQ.order('tab_position', { ascending: false }).limit(1)
   const tab_position = last && last.length > 0 ? last[0].tab_position + 1 : 0
 
   const { data, error } = await supabase
     .from('boards')
-    .insert({ name, color, user_id: user.id, is_group: true, mode, group_id: parentGroupId, tab_position })
+    .insert({ name, color, user_id: user.id, is_group: true, mode, group_id: parentGroupId, parent_id: activePersonaId, tab_position })
     .select().single()
   if (error) throw error
   revalidatePath('/', 'layout')
@@ -356,7 +410,7 @@ export async function createGroup(name: string, color: string, mode: 'folder' | 
 
 // Move a tab (board or group) into a container (a group, or top level when
 // newGroupId is null) and reorder it before `beforeBoardId` (or to the end).
-export async function moveTab(boardId: string, newGroupId: string | null, beforeBoardId: string | null) {
+export async function moveTab(boardId: string, newGroupId: string | null, beforeBoardId: string | null, activePersonaId: string | null = null) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
@@ -370,9 +424,11 @@ export async function moveTab(boardId: string, newGroupId: string | null, before
     if (target.group_id) throw new Error('Groups can only be nested two levels deep')
   }
 
-  await supabase.from('boards').update({ group_id: newGroupId, parent_id: null }).eq('id', boardId).eq('user_id', user.id)
+  // Tabs stay parented to the active persona (not orphaned at the true root).
+  await supabase.from('boards').update({ group_id: newGroupId, parent_id: activePersonaId }).eq('id', boardId).eq('user_id', user.id)
 
-  let q = supabase.from('boards').select('id').eq('user_id', user.id).is('parent_id', null)
+  let q = supabase.from('boards').select('id').eq('user_id', user.id)
+  q = activePersonaId ? q.eq('parent_id', activePersonaId) : q.is('parent_id', null)
   q = newGroupId ? q.eq('group_id', newGroupId) : q.is('group_id', null)
   const { data: sibs } = await q.order('tab_position', { ascending: true }).order('created_at', { ascending: true })
   const ids = (sibs ?? []).map(s => s.id).filter(id => id !== boardId)
@@ -426,6 +482,14 @@ export async function deleteBoard(boardId: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
+
+  // Never delete a persona through this path — it would cascade the whole
+  // workspace. (select('*') so this is a no-op on the pre-migration schema.)
+  const { data: target } = await supabase
+    .from('boards').select('*').eq('id', boardId).eq('user_id', user.id).maybeSingle()
+  if (target && (target as { is_persona?: boolean }).is_persona) {
+    throw new Error('Cannot delete a persona here — use the persona switcher.')
+  }
 
   // BFS to collect every board ID in the subtree before the cascade delete
   const allBoardIds: string[] = []
@@ -943,8 +1007,15 @@ export async function copyBoardInto(sourceBoardId: string, destParentBoardId: st
     const { data: els } = await supabase.from('board_elements').select('*').eq('board_id', srcId)
     const elMap = new Map<string, string>()
     for (const el of els ?? []) {
+      let elData = el.data
+      if (el.type === 'portal') {
+        // Don't carry a portal's target across a copy — it may point outside this
+        // subtree/persona. Re-home it to the clone and clear the target so the
+        // user re-picks within the destination persona.
+        elData = { ...(el.data as Record<string, unknown>), home: nb.id, targetBoardId: null, targetBoardName: null }
+      }
       const { data: ne } = await supabase.from('board_elements').insert({
-        board_id: nb.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height, data: el.data, deadline: el.deadline,
+        board_id: nb.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height, data: elData, deadline: el.deadline,
       }).select('id').single()
       if (ne) elMap.set(el.id, ne.id)
     }
@@ -982,7 +1053,7 @@ export async function copyBoardInto(sourceBoardId: string, destParentBoardId: st
 // Re-parent a folder (board) under another board, or to the top level (null).
 // Guards against moving a folder into itself or into one of its own
 // descendants, which would create a cycle.
-export async function moveBoardToParent(boardId: string, newParentId: string | null, fromParentId?: string) {
+export async function moveBoardToParent(boardId: string, newParentId: string | null, fromParentId?: string, activePersonaId: string | null = null) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
@@ -1004,12 +1075,15 @@ export async function moveBoardToParent(boardId: string, newParentId: string | n
     }
   }
 
+  // Moving to "top level" means top level of the active persona, not the true root.
+  const effectiveParent = newParentId ?? activePersonaId
+
   let posQuery = supabase.from('boards').select('tab_position').eq('user_id', user.id).order('tab_position', { ascending: false }).limit(1)
-  posQuery = newParentId ? posQuery.eq('parent_id', newParentId) : posQuery.is('parent_id', null)
+  posQuery = effectiveParent ? posQuery.eq('parent_id', effectiveParent) : posQuery.is('parent_id', null)
   const { data: existing } = await posQuery
   const tab_position = existing && existing.length > 0 ? existing[0].tab_position + 1 : 0
 
-  await supabase.from('boards').update({ parent_id: newParentId, tab_position }).eq('id', boardId).eq('user_id', user.id)
+  await supabase.from('boards').update({ parent_id: effectiveParent, tab_position }).eq('id', boardId).eq('user_id', user.id)
   if (fromParentId) revalidatePath(`/board/${fromParentId}`)
   if (newParentId) revalidatePath(`/board/${newParentId}`)
   revalidatePath('/', 'layout')

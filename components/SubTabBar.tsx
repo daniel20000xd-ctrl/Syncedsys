@@ -13,7 +13,7 @@ function getAncestorChain(allBoards: Board[], boardId: string): Board[] {
   let currentId: string | null = boardId
   while (currentId) {
     const board = allBoards.find(b => b.id === currentId)
-    if (!board) break
+    if (!board || board.is_persona) break  // stop before the persona container
     chain.unshift(board)
     currentId = board.parent_id ?? null
   }
@@ -57,7 +57,10 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
   const currentBoard = allBoards.find(b => b.id === boardId)
   if (!currentBoard) return null
 
-  const isSubTab = !!currentBoard.parent_id
+  // A board is a "sub-tab" only when its parent is a real board, not a persona
+  // (top-level tabs, whose parent is the persona, live in the TabBar).
+  const parentBoard = currentBoard.parent_id ? allBoards.find(b => b.id === currentBoard.parent_id) : null
+  const isSubTab = !!currentBoard.parent_id && !parentBoard?.is_persona
   const hasChildren = allBoards.some(b => b.parent_id === boardId)
 
   if (!isSubTab && !hasChildren) return null
@@ -68,7 +71,9 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
 
   for (let i = 0; i < chain.length; i++) {
     const board = chain[i]
-    if (!board.parent_id) continue
+    const parent = board.parent_id ? allBoards.find(b => b.id === board.parent_id) : null
+    // Skip the top-level tab's own row (its siblings are the TabBar's tabs).
+    if (!board.parent_id || parent?.is_persona) continue
     const siblings = allBoards
       .filter(b => b.parent_id === board.parent_id)
       .sort((a, b) => a.tab_position - b.tab_position || a.created_at.localeCompare(b.created_at))

@@ -18,6 +18,7 @@ type BoardRow = {
   mode: string
   parent_id: string | null
   content: string | null
+  is_persona?: boolean
 }
 
 type ElementRow = {
@@ -41,7 +42,7 @@ export async function buildClaudeContext(
   // Load all of the user's boards once (RLS scopes to the owner) and all
   // portal/folder-link elements so we can resolve cross-references in memory.
   const [{ data: boardsRaw }, { data: elsRaw }] = await Promise.all([
-    supabase.from('boards').select('id,name,color,mode,parent_id,content'),
+    supabase.from('boards').select('id,name,color,mode,parent_id,content,is_persona'),
     supabase.from('board_elements').select('id,board_id,type,data').in('type', ['portal', 'folderlink']),
   ])
   const boards = (boardsRaw ?? []) as BoardRow[]
@@ -72,7 +73,9 @@ export async function buildClaudeContext(
   while (queue.length) {
     const id = queue.shift()!
     if (allowedIds.has(id)) continue
-    if (!boardById.has(id)) continue // ignore dangling references / not owned
+    const bd = boardById.get(id)
+    if (!bd) continue // ignore dangling references / not owned
+    if (bd.is_persona) continue // never let Claude range over a whole persona
     allowedIds.add(id)
     for (const child of childrenByParent.get(id) ?? []) queue.push(child.id)
     for (const tid of linkTargetsByBoard.get(id) ?? []) queue.push(tid)

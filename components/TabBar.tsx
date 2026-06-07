@@ -4,9 +4,10 @@ import { useEffect, useCallback, useState, useRef } from 'react'
 import Link from 'next/link'
 import { createPortal } from 'react-dom'
 import { usePathname, useRouter } from 'next/navigation'
-import { Plus, LayoutGrid, ChevronDown, FolderPlus, Check, Trash2, X } from 'lucide-react'
+import { Plus, LayoutGrid, ChevronDown, FolderPlus, Check, Trash2, X, CircleUserRound } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { createBoard, createGroup, moveTab, moveBoardToParent, updateBoard, deleteBoard } from '@/app/actions'
+import { createBoard, createGroup, moveTab, moveBoardToParent, updateBoard, deleteBoard, createPersona } from '@/app/actions'
+import { getPersonaId, listPersonas } from '@/lib/persona'
 import { BOARD_TAB_MIME, FLOAT_BOARD_MIME } from '@/lib/files'
 import NewBoardModal from './NewBoardModal'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
@@ -33,21 +34,71 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Board | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [showPersonas, setShowPersonas] = useState(false)
+  const [rememberedPersona, setRememberedPersona] = useState<string | null>(null)
   const draggingRef = useRef<string | null>(null)
 
   useEffect(() => { setBoards(initialBoards) }, [initialBoards])
+  useEffect(() => { try { setRememberedPersona(localStorage.getItem('activePersonaId')) } catch {} }, [])
 
-  // Prefetch every board page as soon as the tab bar is visible so clicking any tab is instant.
+  // ── Active persona ──
+  // Structural source of truth: walk the current board up to its persona. On the
+  // /boards screen (no board context) fall back to the remembered persona, then
+  // the first persona. Null = legacy pre-migration data → behave as before.
+  const currentBoardId = pathname.match(/\/board\/([^/]+)/)?.[1] ?? null
+  const personas = listPersonas(boards)
+  const derivedPersonaId = getPersonaId(currentBoardId, boards)
+  const activePersonaId =
+    derivedPersonaId ??
+    (rememberedPersona && personas.some(p => p.id === rememberedPersona) ? rememberedPersona : null) ??
+    personas[0]?.id ?? null
+  const activePersona = personas.find(p => p.id === activePersonaId) ?? null
+
+  // Remember the persona whenever we're actually inside one.
   useEffect(() => {
-    initialBoards.forEach(b => { if (!b.parent_id) router.prefetch(`/board/${b.id}`) })
-  }, [initialBoards, router])
+    if (derivedPersonaId) {
+      try { localStorage.setItem('activePersonaId', derivedPersonaId) } catch {}
+      setRememberedPersona(derivedPersonaId)
+    }
+  }, [derivedPersonaId])
+
+  // Prefetch the active persona's top tabs so clicking any is instant.
+  useEffect(() => {
+    initialBoards.forEach(b => {
+      if (!b.is_persona && b.parent_id === activePersonaId) router.prefetch(`/board/${b.id}`)
+    })
+  }, [initialBoards, router, activePersonaId])
 
   // A membership only counts if its group still exists and is actually a group.
   // Otherwise the tab falls back to the top level — never orphaned/invisible.
+  // "Top level" now means a direct child of the active persona (personas excluded).
   const groupIds = new Set(boards.filter(b => b.is_group).map(b => b.id))
   const effectiveGroup = (b: Board) => (b.group_id && groupIds.has(b.group_id) ? b.group_id : null)
-  const topItems = boards.filter(b => !b.parent_id && !effectiveGroup(b)).sort(byPos)
-  const membersOf = (gid: string) => boards.filter(b => !b.parent_id && effectiveGroup(b) === gid).sort(byPos)
+  const isTopLevel = (b: Board) => !b.is_persona && b.parent_id === activePersonaId
+  const topItems = boards.filter(b => isTopLevel(b) && !effectiveGroup(b)).sort(byPos)
+  const membersOf = (gid: string) => boards.filter(b => isTopLevel(b) && effectiveGroup(b) === gid).sort(byPos)
+
+  function switchPersona(p: Board) {
+    setShowPersonas(false)
+    try { localStorage.setItem('activePersonaId', p.id) } catch {}
+    setRememberedPersona(p.id)
+    const firstChild = boards.filter(b => b.parent_id === p.id && !b.is_persona).sort(byPos)[0]
+    router.push(firstChild ? `/board/${firstChild.id}` : `/board/${p.id}`)
+  }
+
+  async function handleCreatePersona() {
+    setShowPersonas(false)
+    try {
+      const { persona, board } = await createPersona()
+      setBoards(prev => [...prev, persona as Board, board as Board])
+      try { localStorage.setItem('activePersonaId', persona.id) } catch {}
+      setRememberedPersona(persona.id)
+      router.push(`/board/${board.id}`)
+      router.refresh()
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not create persona.')
+    }
+  }
 
   // Flattened visual order for Alt+Q / Alt+W navigation.
   const flatOrder: Board[] = []
@@ -101,7 +152,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
       const from = next.findIndex(b => b.id === id)
       if (from === -1) return prev
       const [moved] = next.splice(from, 1)
-      const updated = { ...moved, group_id: groupId ?? null, parent_id: null }
+      const updated = { ...moved, group_id: groupId ?? null, parent_id: activePersonaId }
       if (beforeId) {
         const to = next.findIndex(b => b.id === beforeId)
         next.splice(to >= 0 ? to : next.length, 0, updated)
@@ -113,7 +164,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
     })
 
     // Persist in background; only refresh on error
-    moveTab(id, groupId, beforeId)
+    moveTab(id, groupId, beforeId, activePersonaId)
       .then(() => router.refresh())
       .catch(err => { alert(err instanceof Error ? err.message : 'Could not move that tab.'); router.refresh() })
   }
@@ -252,8 +303,9 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
 
   return (
     <>
+      <div className="flex items-stretch bg-[#1d2125] border-b border-white/10 shrink-0">
       <div
-        className="flex items-stretch bg-[#1d2125] border-b border-white/10 overflow-x-auto shrink-0 px-1"
+        className="flex items-stretch overflow-x-auto flex-1 px-1"
         onDragOver={e => { if (draggingRef.current || e.dataTransfer.types.includes(BOARD_TAB_MIME)) { e.preventDefault(); setDragOverId('__strip__') } }}
         onDrop={e => { e.preventDefault(); doMove(draggingRef.current ?? e.dataTransfer.getData(BOARD_TAB_MIME), null, null) }}
       >
@@ -277,12 +329,55 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
           <Plus size={14} />
         </button>
         <button
-          onClick={async () => { const g = await createGroup('New group', GROUP_COLORS[Math.floor(Math.random() * GROUP_COLORS.length)], 'folder'); setBoards(prev => [...prev, g]); router.refresh() }}
+          onClick={async () => { const g = await createGroup('New group', GROUP_COLORS[Math.floor(Math.random() * GROUP_COLORS.length)], 'folder', null, activePersonaId); setBoards(prev => [...prev, g]); router.refresh() }}
           className="flex items-center gap-1.5 px-2 py-2.5 text-white/40 hover:text-white/70 text-sm whitespace-nowrap border-t-2 border-transparent shrink-0"
           title="New group"
         >
           <FolderPlus size={14} />
         </button>
+      </div>
+
+        {/* Persona switcher — pinned top-right, outside the scrolling strip */}
+        <div className="relative shrink-0 flex items-stretch border-l border-white/10">
+          <button
+            onClick={() => setShowPersonas(v => !v)}
+            className="flex items-center gap-1.5 px-3 py-2.5 text-sm text-white/60 hover:text-white hover:bg-white/5 whitespace-nowrap"
+            title="Switch persona"
+          >
+            <CircleUserRound size={16} />
+            <span className="max-w-[120px] truncate hidden sm:inline">{activePersona?.name ?? 'Persona'}</span>
+            <ChevronDown size={12} className="opacity-60" />
+          </button>
+          {showPersonas && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setShowPersonas(false)} />
+              <div className="absolute right-1 top-full mt-1 z-40 w-56 bg-[#282e33] border border-white/10 rounded-lg shadow-xl py-1">
+                <p className="px-3 py-1 text-[10px] uppercase tracking-wider text-white/30">Personas</p>
+                {personas.length === 0 && (
+                  <p className="px-3 py-1.5 text-xs text-white/40">No personas yet</p>
+                )}
+                {personas.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => switchPersona(p)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left text-white/70 hover:bg-white/10 hover:text-white"
+                  >
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
+                    <span className="truncate flex-1">{p.name}</span>
+                    {p.id === activePersonaId && <Check size={14} className="text-[#579dff] shrink-0" />}
+                  </button>
+                ))}
+                <div className="border-t border-white/10 my-1" />
+                <button
+                  onClick={handleCreatePersona}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left text-white/60 hover:bg-white/10 hover:text-white"
+                >
+                  <Plus size={14} /> New persona
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {openPanel && (() => {
@@ -325,7 +420,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
         <NewBoardModal
           onClose={() => setShowNewBoard(false)}
           onCreate={async (name, color, mode) => {
-            const board = await createBoard(name, color, mode)
+            const board = await createBoard(name, color, mode, activePersonaId)
             setBoards(prev => [...prev, board])
             setShowNewBoard(false)
             router.push(`/board/${board.id}`)
