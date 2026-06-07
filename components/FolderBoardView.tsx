@@ -3,14 +3,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createPortal } from 'react-dom'
-import { Folder, FolderPlus, FileText, FileType, ArrowLeft, Trash2, X, Save, Download, ChevronDown } from 'lucide-react'
+import { Folder, FolderPlus, FileText, FileType, ArrowLeft, Trash2, X, Save, Download, ChevronDown, Upload } from 'lucide-react'
 import type { Board, BoardElement } from '@/lib/types'
 import {
   createSubTab, deleteBoard, createTextFile, updateTextFile, deleteElement,
   moveElementToBoard, importFolderTree, moveBoardToParent, reorderFolderItems,
-  createElement, getPdfUrl, getPresignedReadUrl,
+  createElement, getPdfUrl, getPresignedReadUrl, deleteStorageObjects,
 } from '@/app/actions'
-import { collectEntries, readDroppedEntries, downloadTextFile } from '@/lib/files'
+import { collectEntries, readDroppedEntries, readPickedFolder, downloadTextFile, type PickedFolder, type ImportNode } from '@/lib/files'
 import { uploadPdf, extractPdfText } from '@/lib/pdf'
 import { folderUnitsStore } from '@/lib/folderUnitsStore'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
@@ -71,6 +71,8 @@ export default function FolderBoardView({
   const [fileMenu, setFileMenu] = useState<{ fileId: string; rect: DOMRect } | null>(null)
   const dragDepth = useRef(0)
   const marqueeStart = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  const folderInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploading, setUploading] = useState<string | null>(null)
 
   // ── Reorder helpers ──────────────────────────────────────────────────────────
 
@@ -344,6 +346,72 @@ export default function FolderBoardView({
     if (skipped.length && !dropped.length && !trees.length && !pdfs.length) alert('Only text and PDF files are supported for now.')
   }
 
+  // ── Upload a folder via the picker button ────────────────────────────────────
+
+  // Recursively turn a picked folder into the server import tree, uploading each
+  // PDF to R2 (and extracting its text) client-side first so it can be persisted
+  // as a 'pdf' unit in the right sub-folder. `uploadedKeys` collects every R2 key
+  // written (so a failed import can clean them up); `failedPdfs` collects names
+  // of PDFs that couldn't be uploaded (so the user is told, not silently dropped).
+  async function buildServerTree(node: PickedFolder, uploadedKeys: string[], failedPdfs: string[]): Promise<ImportNode> {
+    const pdfs: NonNullable<ImportNode['pdfs']> = []
+    for (const pdf of node.pdfFiles) {
+      try {
+        const [{ key, sizeBytes }, { text, pageCount }] = await Promise.all([
+          uploadPdf(pdf, board.id),
+          extractPdfText(pdf),
+        ])
+        uploadedKeys.push(key)
+        pdfs.push({ name: pdf.name, storagePath: key, sizeBytes, text, pageCount })
+      } catch (err) {
+        console.error('Failed to upload PDF during folder import:', pdf.name, err)
+        failedPdfs.push(pdf.name)
+      }
+    }
+    const dirs: ImportNode[] = []
+    for (const d of node.dirs) dirs.push(await buildServerTree(d, uploadedKeys, failedPdfs))
+    return { name: node.name, files: node.textFiles, pdfs, dirs }
+  }
+
+  async function onFolderPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const list = e.target.files
+    if (!list || list.length === 0) return
+    setUploading('Reading…')
+    const failedPdfs: string[] = []
+    let importFailed = false
+    try {
+      const { roots, skipped } = await readPickedFolder(list)
+      if (!roots.length) { alert('That folder had no importable files.'); return }
+      setUploading('Uploading…')
+      for (const root of roots) {
+        const uploadedKeys: string[] = []
+        try {
+          const tree = await buildServerTree(root, uploadedKeys, failedPdfs)
+          const top = await importFolderTree(board.id, tree, board.color)
+          setFolders(prev => [...prev, top as Board])
+        } catch (err) {
+          // This root failed to persist — its just-uploaded PDFs are now orphaned
+          // in R2 (no element references them), so best-effort clean them up.
+          console.error('Folder import failed for:', root.name, err)
+          importFailed = true
+          if (uploadedKeys.length) deleteStorageObjects(uploadedKeys).catch(() => {})
+          break
+        }
+      }
+      const notes: string[] = []
+      if (importFailed) notes.push('Some folders could not be imported and were rolled back.')
+      if (failedPdfs.length) notes.push(`${failedPdfs.length} PDF(s) could not be uploaded and were skipped.`)
+      if (skipped.length) notes.push(`${skipped.length} unsupported file(s) were skipped (only text and PDF files are imported).`)
+      if (notes.length) alert(notes.join('\n'))
+    } catch (err) {
+      console.error('Folder upload failed:', err)
+      alert('Could not upload that folder.')
+    } finally {
+      setUploading(null)
+      if (folderInputRef.current) folderInputRef.current.value = '' // allow re-picking the same folder
+    }
+  }
+
   async function openPdf(path: string) {
     const w = window.open('', '_blank')
     try {
@@ -416,9 +484,29 @@ export default function FolderBoardView({
         <span className="text-sm font-medium text-gray-700">{board.name}</span>
         <span className="text-xs text-gray-400">· {folders.length + files.length} items</span>
         <div className="flex-1" />
+        <button
+          onClick={() => folderInputRef.current?.click()}
+          disabled={!!uploading}
+          className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Upload a folder from your computer — its structure becomes folders and files here"
+        >
+          <Upload size={14} /> {uploading ?? 'Upload folder'}
+        </button>
         <button onClick={handleNewFolder} className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800">
           <FolderPlus size={14} /> New folder
         </button>
+        {/* Hidden folder picker. webkitdirectory/directory are set imperatively
+            since React has no typed props for them. */}
+        <input
+          ref={el => {
+            folderInputRef.current = el
+            if (el) { el.setAttribute('webkitdirectory', ''); el.setAttribute('directory', '') }
+          }}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={onFolderPicked}
+        />
       </div>
 
       {/* Grid */}

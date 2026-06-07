@@ -49,8 +49,19 @@ function isPdf(file: File): boolean {
 }
 const MAX_PDF_BYTES = 25_000_000
 
-// A folder tree read from a drop: a folder with its text files and sub-folders.
-export type ImportNode = { name: string; files: DroppedTextFile[]; dirs: ImportNode[] }
+// A PDF already uploaded to R2 + its extracted text, ready to be persisted as a
+// 'pdf' element by importFolderTree (the binary lives in R2, not in this object).
+export type ImportPdfRef = { name: string; storagePath: string; sizeBytes: number; text: string; pageCount: number }
+
+// A folder tree ready for the server: a folder with its text files, (optionally)
+// already-uploaded PDFs, and sub-folders. Shared with app/actions.ts via a
+// type-only import so the import pipeline has one canonical shape.
+export type ImportNode = { name: string; files: DroppedTextFile[]; pdfs?: ImportPdfRef[]; dirs: ImportNode[] }
+
+// A folder tree read from an <input webkitdirectory> picker. PDFs are kept as
+// raw File objects here because they must be uploaded to R2 client-side (see
+// lib/pdf.ts) before importFolderTree can persist them.
+export type PickedFolder = { name: string; textFiles: DroppedTextFile[]; pdfFiles: File[]; dirs: PickedFolder[] }
 
 // Synchronously pull FileSystemEntry objects from a drop. MUST be called inside
 // the drop handler before any `await` — the DataTransferItemList is only valid
@@ -147,4 +158,52 @@ export async function readDroppedTextFiles(
     }
   }
   return { accepted, pdfs, skipped }
+}
+
+// Reconstruct a folder forest from an <input type="file" webkitdirectory> pick.
+// Such an input yields a FLAT FileList where each file's `webkitRelativePath`
+// encodes its path ("root/sub/dir/name.ext"). We rebuild the nested tree from
+// those paths, reading text files inline and keeping PDFs as raw File objects
+// (uploaded to R2 by the caller). Returns one root per distinct top segment.
+export async function readPickedFolder(
+  list: FileList | File[],
+): Promise<{ roots: PickedFolder[]; skipped: string[] }> {
+  const files = Array.from(list)
+  const skipped: string[] = []
+  const roots: PickedFolder[] = []
+  const rootByName = new Map<string, PickedFolder>()
+
+  const getRoot = (name: string): PickedFolder => {
+    let r = rootByName.get(name)
+    if (!r) { r = { name, textFiles: [], pdfFiles: [], dirs: [] }; rootByName.set(name, r); roots.push(r) }
+    return r
+  }
+  const descend = (root: PickedFolder, segs: string[]): PickedFolder => {
+    let node = root
+    for (const seg of segs) {
+      let child = node.dirs.find(d => d.name === seg)
+      if (!child) { child = { name: seg, textFiles: [], pdfFiles: [], dirs: [] }; node.dirs.push(child) }
+      node = child
+    }
+    return node
+  }
+
+  for (const f of files) {
+    const rel = f.webkitRelativePath || f.name
+    const parts = rel.split('/').filter(Boolean)
+    const fileName = parts[parts.length - 1] ?? ''
+    if (!fileName || fileName.startsWith('.')) continue // skip dotfiles (.DS_Store, .git, …)
+    const rootName = parts.length > 1 ? parts[0] : 'Uploaded folder'
+    const dir = descend(getRoot(rootName), parts.slice(1, -1))
+
+    if (isPdf(f) && f.size <= MAX_PDF_BYTES) {
+      dir.pdfFiles.push(f)
+    } else if (isTextFile(f) && f.size <= MAX_BYTES) {
+      try { dir.textFiles.push({ name: f.name, content: await f.text() }) }
+      catch { skipped.push(rel) }
+    } else {
+      skipped.push(rel)
+    }
+  }
+  return { roots, skipped }
 }

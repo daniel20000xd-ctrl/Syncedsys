@@ -13,6 +13,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { getR2Client, R2_BUCKET } from '@/lib/r2'
 import { getGoogleAuthUrl, revokeGoogleAccess, hasGoogleAuth, getGoogleScopes, DEFAULT_GOOGLE_SCOPES } from '@/lib/google/auth'
 import { createUrlPreviewUnit } from '@/lib/urlPreview'
+import type { ImportNode } from '@/lib/files'
 
 // ── Claude / AI settings ──────────────────────────────────────────────────────
 
@@ -511,9 +512,12 @@ export async function deleteBoard(boardId: string) {
   const { data: els } = await supabase
     .from('board_elements').select('data').in('board_id', allBoardIds)
 
+  // Only delete R2 objects under THIS user's prefix. storagePath is freeform
+  // jsonb a caller could have set to another tenant's key; the read paths guard
+  // the same way, so the delete paths must too (no cross-tenant object deletion).
   const storageItems = (els ?? [])
     .map(el => el.data as { storagePath?: string; sizeBytes?: number })
-    .filter(d => !!d.storagePath)
+    .filter(d => !!d.storagePath && d.storagePath.startsWith(`${user.id}/`))
 
   if (storageItems.length > 0) {
     const keys = storageItems.map(d => d.storagePath!)
@@ -863,6 +867,7 @@ export async function createUrlPreview(boardId: string, url: string, x?: number,
 
 export async function deleteElement(elementId: string) {
   const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
 
   // Read before deleting so we can clean up any R2 object (pdf, image, textfile —
   // any element type that stores a storagePath).
@@ -873,30 +878,53 @@ export async function deleteElement(elementId: string) {
     .maybeSingle()
 
   const d = el?.data as { storagePath?: string; sizeBytes?: number } | undefined
-  if (d?.storagePath) {
+  // Only touch R2 for objects under this user's own prefix — storagePath is
+  // freeform jsonb that could point at another tenant's key (read paths guard
+  // identically, so the delete path must too).
+  if (d?.storagePath && user && d.storagePath.startsWith(`${user.id}/`)) {
     try {
       await getR2Client().send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: d.storagePath }))
     } catch {}
     if (d.sizeBytes) {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        const { data: secrets } = await supabase
-          .from('user_secrets')
-          .select('storage_bytes')
-          .eq('user_id', user.id)
-          .maybeSingle()
-        const current = (secrets?.storage_bytes as number | null) ?? 0
-        await supabase
-          .from('user_secrets')
-          .upsert(
-            { user_id: user.id, storage_bytes: Math.max(0, current - d.sizeBytes) },
-            { onConflict: 'user_id' }
-          )
-      }
+      const { data: secrets } = await supabase
+        .from('user_secrets')
+        .select('storage_bytes')
+        .eq('user_id', user.id)
+        .maybeSingle()
+      const current = (secrets?.storage_bytes as number | null) ?? 0
+      await supabase
+        .from('user_secrets')
+        .upsert(
+          { user_id: user.id, storage_bytes: Math.max(0, current - d.sizeBytes) },
+          { onConflict: 'user_id' }
+        )
     }
   }
 
   await supabase.from('board_elements').delete().eq('id', elementId)
+}
+
+// Best-effort delete of R2 objects by key — used to clean up orphaned uploads
+// (e.g. PDFs uploaded for a folder import whose DB persistence then failed).
+// Only deletes keys under the caller's own prefix.
+export async function deleteStorageObjects(keys: string[]): Promise<void> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return
+  const safe = Array.from(new Set(
+    (keys ?? []).filter(k => typeof k === 'string' && k.startsWith(`${user.id}/`)),
+  ))
+  if (!safe.length) return
+  try {
+    const chunks: string[][] = []
+    for (let i = 0; i < safe.length; i += 1000) chunks.push(safe.slice(i, i + 1000))
+    await Promise.all(chunks.map(chunk =>
+      getR2Client().send(new DeleteObjectsCommand({
+        Bucket: R2_BUCKET,
+        Delete: { Objects: chunk.map(Key => ({ Key })), Quiet: true },
+      }))
+    ))
+  } catch {}
 }
 
 // A text file is a board_element of type 'textfile'. Content lives in R2;
@@ -935,11 +963,10 @@ export async function createTextFile(boardId: string, name: string, content: str
   return data
 }
 
-// Recreate a dropped folder tree under a parent board: each folder becomes a
-// child board (mode 'folder'), each text file a 'textfile' element. Returns the
+// Recreate a folder tree under a parent board: each folder becomes a child board
+// (mode 'folder'), each text file a 'textfile' element, and each already-uploaded
+// PDF (R2 storagePath supplied by the caller) a 'pdf' element. Returns the
 // top-level folder board so the caller can show it immediately.
-type ImportNode = { name: string; files: { name: string; content: string }[]; dirs: ImportNode[] }
-
 export async function importFolderTree(parentBoardId: string, tree: ImportNode, color: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -951,10 +978,18 @@ export async function importFolderTree(parentBoardId: string, tree: ImportNode, 
       .insert({ name: node.name, color, user_id: user!.id, parent_id: parentId, tab_position: tabPos, mode: 'folder' })
       .select().single()
     if (error) throw error
-    if (node.files.length) {
-      await supabase.from('board_elements').insert(
-        node.files.map(f => ({ board_id: board.id, type: 'textfile', x: 0, y: 0, data: { name: f.name, content: f.content } }))
-      )
+    const elements: { board_id: string; type: string; x: number; y: number; data: Record<string, unknown> }[] = []
+    // A single position counter across text files THEN pdfs so the within-folder
+    // order is durable across reloads (FolderBoardView sorts by folder_position).
+    let pos = 0
+    for (const f of node.files) {
+      elements.push({ board_id: board.id, type: 'textfile', x: 0, y: 0, data: { name: f.name, content: f.content, folder_position: pos++ } })
+    }
+    for (const p of node.pdfs ?? []) {
+      elements.push({ board_id: board.id, type: 'pdf', x: 0, y: 0, data: { name: p.name, storagePath: p.storagePath, sizeBytes: p.sizeBytes, text: p.text, pageCount: p.pageCount, folder_position: pos++ } })
+    }
+    if (elements.length) {
+      await supabase.from('board_elements').insert(elements)
     }
     for (let i = 0; i < node.dirs.length; i++) {
       await createDir(node.dirs[i], board.id, i)
