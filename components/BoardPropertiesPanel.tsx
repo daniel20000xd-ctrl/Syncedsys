@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone, Sparkles, Download } from 'lucide-react'
+import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone, Sparkles, Download, Database } from 'lucide-react'
 import type { Board } from '@/lib/types'
 import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced } from '@/app/actions'
 import { boardExportFilename } from '@/lib/exportBoard'
@@ -22,9 +22,10 @@ interface Props {
   onUpdate: (updated: Board) => void
   showAddSubTab?: boolean
   onRemove?: () => void
+  isAdmin?: boolean
 }
 
-export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpdate, showAddSubTab = true, onRemove }: Props) {
+export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpdate, showAddSubTab = true, onRemove, isAdmin = false }: Props) {
   const router = useRouter()
   const [name, setName] = useState(board.name)
   const [color, setColor] = useState(board.color)
@@ -46,6 +47,8 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
     if (mode === 'text') {
       warnings.push('Lists, cards and any canvas items stay saved but are hidden in Text mode.')
       warnings.push('Text tabs are locked to text — you won\'t be able to switch this tab to another mode afterwards.')
+    } else if (mode === 'database') {
+      warnings.push('Database mode is permanent — you won\'t be able to switch this tab to another mode afterwards.')
     } else if (mode === 'folder') {
       warnings.push('Folder view shows sub-folders and text files only. Lists, cards, shapes, drawings and connections stay saved but are hidden here.')
     } else if (board.mode === 'classic' && mode === 'trello') {
@@ -198,7 +201,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
         Board preset
         {isModeLocked && <Lock size={10} className="text-gray-400" />}
       </label>
-      <div className="grid grid-cols-2 gap-1.5 mb-2">
+      <div className="grid grid-cols-2 gap-1.5 mb-1.5">
         {(['classic', 'trello', 'text', 'folder'] as const).map(m => (
           <button
             key={m}
@@ -210,6 +213,15 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
           </button>
         ))}
       </div>
+      {isAdmin && (
+        <button
+          disabled={isModeLocked}
+          onClick={() => setMode('database')}
+          className={`w-full py-2 rounded text-xs font-medium border flex items-center justify-center gap-1.5 transition-colors mb-2 disabled:cursor-not-allowed disabled:opacity-50 ${mode === 'database' ? 'bg-blue-500 text-white border-blue-500' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+        >
+          <Database size={11} /> Database
+        </button>
+      )}
       {isModeLocked ? (
         <p className="text-[10px] text-gray-400 mb-3 flex items-center gap-1">
           <Lock size={9} />
@@ -221,6 +233,7 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
           {mode === 'trello' && <p className="text-[10px] text-gray-400 mb-3">Kanban columns and cards.</p>}
           {mode === 'text' && <p className="text-[10px] text-gray-400 mb-3">Document — a plain writing space, auto-saved.</p>}
           {mode === 'folder' && <p className="text-[10px] text-gray-400 mb-3">File explorer — sub-folders and dropped text files.</p>}
+          {mode === 'database' && <p className="text-[10px] text-gray-400 mb-3">Structured table — browse, filter and search the case library.</p>}
         </>
       )}
 

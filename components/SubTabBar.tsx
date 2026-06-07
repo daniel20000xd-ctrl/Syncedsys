@@ -22,7 +22,7 @@ function getAncestorChain(allBoards: Board[], boardId: string): Board[] {
 
 type OpenPanel = { boardId: string; rect: DOMRect } | null
 
-export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
+export default function SubTabBar({ allBoards, isAdmin = false }: { allBoards: Board[]; isAdmin?: boolean }) {
   const pathname = usePathname()
   const router = useRouter()
   const [creating, setCreating] = useState(false)
@@ -195,6 +195,7 @@ export default function SubTabBar({ allBoards }: { allBoards: Board[] }) {
               if (wasActive) router.push(board.parent_id ? `/board/${board.parent_id}` : '/boards')
               else router.refresh()
             }}
+            isAdmin={isAdmin}
           />
         )
       })()}

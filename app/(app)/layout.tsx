@@ -43,8 +43,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="flex h-full min-h-screen">
       <Sidebar boards={allBoards ?? []} userId={userId} isAdmin={isAdmin} devices={devices ?? []} />
       <div className="flex-1 flex flex-col overflow-hidden">
-        <TabBar boards={allBoards ?? []} />
-        <SubTabBar allBoards={allBoards ?? []} />
+        <TabBar boards={allBoards ?? []} isAdmin={isAdmin} />
+        <SubTabBar allBoards={allBoards ?? []} isAdmin={isAdmin} />
         <main className="flex-1 overflow-hidden">{children}</main>
       </div>
     </div>

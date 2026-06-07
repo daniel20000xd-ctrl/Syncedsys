@@ -2592,6 +2592,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
               setSubPanel(null)
             }}
             onRemove={() => handleDeleteNode(`sub-${sb.id}`, 'subtab')}
+            isAdmin={isAdmin}
           />
         )
       })()}

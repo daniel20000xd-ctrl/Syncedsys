@@ -23,7 +23,7 @@ const byPos = (a: Board, b: Board) => a.tab_position - b.tab_position || a.creat
 type OpenPanel = { boardId: string; rect: DOMRect } | null
 type GroupMenu = { groupId: string; rect: DOMRect } | null
 
-export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
+export default function TabBar({ boards: initialBoards, isAdmin = false }: { boards: Board[]; isAdmin?: boolean }) {
   const pathname = usePathname()
   const router = useRouter()
   const [boards, setBoards] = useState(initialBoards)
@@ -513,6 +513,7 @@ export default function TabBar({ boards: initialBoards }: { boards: Board[] }) {
               setOpenPanel(null)
               setPendingDelete(board)
             }}
+            isAdmin={isAdmin}
           />
         )
       })()}
