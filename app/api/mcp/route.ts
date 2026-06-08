@@ -179,7 +179,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
       listIds.length
         ? supabase.from('cards').select('id,list_id,title,description,done,done_at,deadline,position').in('list_id', listIds).order('position')
         : Promise.resolve({ data: [] }),
-      supabase.from('board_elements').select('id,type,data,deadline').eq('board_id', board_id),
+      supabase.from('board_elements').select('id,type,x,y,width,height,data,deadline').eq('board_id', board_id),
     ])
     const cardsByList = new Map<string, typeof cardsResult.data>()
     for (const c of cardsResult.data ?? []) {
@@ -207,19 +207,26 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     }
     const els = elementsResult.data ?? []
     if (els.length) {
+      // Fields that carry no semantic value for an AI reader — large binary paths,
+      // internal storage keys/URLs, and React callback props.
+      const STRIP_KEYS = new Set(['strokes', 'drawing', 'storageKey', 'storageUrl', 'src', 'ogImage', 'home'])
       lines.push('\n## Canvas elements')
       for (const e of els) {
-        const d = e.data ?? {}
-        let label = e.type
-        if (e.type === 'text')           label = `text: ${String(d.text ?? '').slice(0, 200)}`
-        else if (e.type === 'shape')     label = `shape(${d.shape ?? 'rect'})${d.label ? ` "${d.label}"` : ''}`
-        else if (e.type === 'textfile')  label = `file "${d.name ?? 'untitled'}"`
-        else if (e.type === 'pdf')       label = `pdf "${d.name ?? 'document'}" (${d.pageCount ?? '?'} pages)${String(d.text ?? '').trim() ? ': ' + String(d.text).slice(0, 2000) : ''}`
-        else if (e.type === 'portal')    label = d.viewerKind ? `viewer-portal (${d.viewerKind})` : `portal → ${d.targetBoardId ?? '(unset)'}`
-        else if (e.type === 'folderlink') label = `folder-link "${d.name ?? ''}" → ${d.targetBoardId ?? '?'}`
-        else if (e.type === 'url_preview') label = `link "${d.title ?? d.domain ?? ''}" → ${d.url ?? '?'}`
-        else if (e.type === 'file')       label = `stored file "${d.name ?? 'file'}" (not previewable)`
-        lines.push(`  [${e.id}] ${label}${e.deadline ? ` [due ${e.deadline.slice(0,10)}]` : ''}`)
+        const d = (e.data ?? {}) as Record<string, unknown>
+        const pos = `pos=(${Math.round((e.x as number) ?? 0)},${Math.round((e.y as number) ?? 0)})`
+        const sz = e.width != null ? ` size=${Math.round(e.width as number)}×${Math.round((e.height as number) ?? 0)}` : ''
+        const due = e.deadline ? ` [due ${e.deadline.slice(0,10)}]` : ''
+        lines.push(`  [${e.id}] type=${e.type} ${pos}${sz}${due}`)
+        const payload = Object.fromEntries(
+          Object.entries(d).filter(([k, v]) => !STRIP_KEYS.has(k) && typeof v !== 'function')
+        )
+        // Cap PDF extracted text so it doesn't dominate the response.
+        if (e.type === 'pdf' && typeof payload.text === 'string' && payload.text.length > 3000) {
+          payload.text = payload.text.slice(0, 3000) + '…'
+        }
+        if (Object.keys(payload).length) {
+          lines.push(`    ${JSON.stringify(payload)}`)
+        }
       }
     }
     return ok(lines.join('\n'))
