@@ -4,7 +4,12 @@
 
 const BASE = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://syncedsys.com').replace(/\/$/, '')
 
-const CORS = { 'Access-Control-Allow-Origin': '*' }
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, mcp-protocol-version',
+  'Access-Control-Max-Age': '86400',
+}
 
 export function GET() {
   return Response.json({
@@ -16,9 +21,9 @@ export function GET() {
     grant_types_supported: ['authorization_code'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: ['none'],
-  }, { headers: CORS })
+  }, { headers: CORS_HEADERS })
 }
 
 export function OPTIONS() {
-  return new Response(null, { status: 204, headers: CORS })
+  return new Response(null, { status: 204, headers: CORS_HEADERS })
 }

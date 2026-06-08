@@ -8,7 +8,12 @@ import { randomUUID } from 'crypto'
 
 export const dynamic = 'force-dynamic'
 
-const CORS = { 'Access-Control-Allow-Origin': '*' }
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, mcp-protocol-version',
+  'Access-Control-Max-Age': '86400',
+}
 
 export async function POST(req: NextRequest): Promise<Response> {
   let body: Record<string, unknown> = {}
@@ -23,9 +28,9 @@ export async function POST(req: NextRequest): Promise<Response> {
     response_types: body.response_types ?? ['code'],
     token_endpoint_auth_method: 'none',
     client_name: body.client_name ?? 'Claude',
-  }, { status: 201, headers: CORS })
+  }, { status: 201, headers: CORS_HEADERS })
 }
 
 export function OPTIONS() {
-  return new Response(null, { status: 204, headers: CORS })
+  return new Response(null, { status: 204, headers: CORS_HEADERS })
 }
