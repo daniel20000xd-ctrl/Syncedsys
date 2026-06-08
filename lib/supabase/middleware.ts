@@ -34,8 +34,15 @@ export async function updateSession(request: NextRequest) {
     // pairing, or their own cookie check) and must return JSON status codes — never
     // an HTML login redirect, which a cookieless API client cannot follow.
     !request.nextUrl.pathname.startsWith('/api/') &&
-    // OAuth authorization endpoint — handles its own auth state (shows login prompt if unauthenticated)
-    !request.nextUrl.pathname.startsWith('/authorize')
+    // OAuth discovery + endpoints for the MCP connector. Claude.ai reads the
+    // discovery doc at /.well-known/oauth-authorization-server and, when present,
+    // hits these root-level default paths. They authenticate themselves (PKCE /
+    // bearer) or render their own login prompt — never an HTML login redirect,
+    // which an OAuth client cannot follow.
+    !request.nextUrl.pathname.startsWith('/.well-known/') &&
+    !request.nextUrl.pathname.startsWith('/authorize') &&
+    !request.nextUrl.pathname.startsWith('/token') &&
+    !request.nextUrl.pathname.startsWith('/register')
   ) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
