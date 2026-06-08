@@ -33,7 +33,9 @@ export async function updateSession(request: NextRequest) {
     // API routes authenticate themselves (bearer tokens for MCP/iOS sync/device
     // pairing, or their own cookie check) and must return JSON status codes — never
     // an HTML login redirect, which a cookieless API client cannot follow.
-    !request.nextUrl.pathname.startsWith('/api/')
+    !request.nextUrl.pathname.startsWith('/api/') &&
+    // OAuth authorization endpoint — handles its own auth state (shows login prompt if unauthenticated)
+    !request.nextUrl.pathname.startsWith('/authorize')
   ) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
