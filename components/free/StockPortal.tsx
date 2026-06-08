@@ -15,11 +15,19 @@ export default function StockPortal({ config, onPersistConfig, onUpdateContext }
   const iframeRef      = useRef<HTMLIFrameElement>(null)
   const onPersistRef   = useRef(onPersistConfig)
   const onContextRef   = useRef(onUpdateContext)
+  // Track the ticker the iframe was last LOADED with so we can detect external
+  // config changes (e.g. another device / future tooling) without reloading when
+  // the change came from within the iframe itself.
+  const loadedTickerRef = useRef<string | undefined>(undefined)
   useEffect(() => { onPersistRef.current  = onPersistConfig }, [onPersistConfig])
   useEffect(() => { onContextRef.current  = onUpdateContext  }, [onUpdateContext])
 
-  // Build the iframe URL once on mount — includes auth tokens in hash
+  // Build / rebuild the iframe URL. Runs on mount and whenever config.ticker
+  // changes to a value that differs from what the iframe is already showing.
+  // When the user searches inside the iframe the message handler updates
+  // loadedTickerRef first, so the subsequent config prop change is a no-op here.
   useEffect(() => {
+    if (config.ticker !== undefined && config.ticker === loadedTickerRef.current) return
     async function buildSrc() {
       const { createClient } = await import('@/lib/supabase/client')
       const supabase = createClient()
@@ -33,11 +41,12 @@ export default function StockPortal({ config, onPersistConfig, onUpdateContext }
       if (session) {
         src += `#access_token=${encodeURIComponent(session.access_token)}&refresh_token=${encodeURIComponent(session.refresh_token ?? '')}`
       }
+      loadedTickerRef.current = config.ticker
       setIframeSrc(src)
     }
     buildSrc()
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [config.ticker])
 
   // Listen for postMessage from THIS portal's own iframe. All portals share the
   // parent window, so without the e.source check every portal would react to every
@@ -48,7 +57,12 @@ export default function StockPortal({ config, onPersistConfig, onUpdateContext }
       if (e.origin !== SATELLITE) return
       if (e.source !== iframeRef.current?.contentWindow) return
       if (e.data?.type === 'stock_context') onContextRef.current?.(e.data.context)
-      if (e.data?.type === 'stock_config')  onPersistRef.current({ ticker: e.data.ticker, interval: e.data.interval })
+      if (e.data?.type === 'stock_config') {
+        // Mark the new ticker as "already loaded" so the buildSrc effect won't
+        // reload the iframe when the config prop updates to match.
+        loadedTickerRef.current = e.data.ticker
+        onPersistRef.current({ ticker: e.data.ticker, interval: e.data.interval })
+      }
     }
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
