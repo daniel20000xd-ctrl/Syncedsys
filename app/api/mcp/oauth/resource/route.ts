@@ -5,8 +5,11 @@
 // Derive the base URL from the request host (apex 308-redirects to www; a
 // hardcoded host makes the client's token POST hit a redirect it won't follow).
 function baseFromReq(req: Request): string {
-  const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'www.syncedsys.com'
+  let host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'www.syncedsys.com'
   const proto = req.headers.get('x-forwarded-proto') ?? 'https'
+  // The bare apex 308-redirects to www. Advertise the www host so the client's
+  // token-exchange POST never hits a redirect it won't follow.
+  if (host === 'syncedsys.com') host = 'www.syncedsys.com'
   return `${proto}://${host}`
 }
 

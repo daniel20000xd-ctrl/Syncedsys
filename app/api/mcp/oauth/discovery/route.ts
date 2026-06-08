@@ -7,8 +7,11 @@
 // 308-redirects to www; hardcoding either one makes the token POST hit a
 // cross-origin redirect the OAuth client won't follow, breaking the exchange.
 function baseFromReq(req: Request): string {
-  const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'www.syncedsys.com'
+  let host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'www.syncedsys.com'
   const proto = req.headers.get('x-forwarded-proto') ?? 'https'
+  // The bare apex 308-redirects to www. Advertise the www endpoints so the
+  // client's token-exchange POST never hits a redirect it won't follow.
+  if (host === 'syncedsys.com') host = 'www.syncedsys.com'
   return `${proto}://${host}`
 }
 

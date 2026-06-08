@@ -1068,7 +1068,13 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 async function handle(req: NextRequest): Promise<Response> {
   const [auth, adminUserId] = await Promise.all([resolveMcpAuth(req), getAdminUserId()])
   if (!auth.ok) {
-    const base = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://syncedsys.com').replace(/\/$/, '')
+    // Point clients at the www host directly — the bare apex 308-redirects, and
+    // the resource metadata + OAuth exchange must avoid a redirect the client
+    // won't follow with its request body.
+    let host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'www.syncedsys.com'
+    if (host === 'syncedsys.com') host = 'www.syncedsys.com'
+    const proto = req.headers.get('x-forwarded-proto') ?? 'https'
+    const base = `${proto}://${host}`
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (auth.status === 401) {
       // Signal to MCP clients (e.g. Claude.ai) where to find the OAuth server.
