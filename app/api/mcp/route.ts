@@ -1077,9 +1077,13 @@ async function handle(req: NextRequest): Promise<Response> {
     const base = `${proto}://${host}`
     const headers: Record<string, string> = { 'content-type': 'application/json' }
     if (auth.status === 401) {
-      // Signal to MCP clients (e.g. Claude.ai) where to find the OAuth server.
+      // Point MCP clients (Claude.ai) at the Protected Resource Metadata.
+      // RFC 9728 §5.1: the param is exactly `resource_metadata` (NOT
+      // `resource_metadata_url`) and the URL must be a quoted-string. The
+      // canonical location is well-known path-insertion: the segment goes
+      // between host and the resource's path (/api/mcp).
       headers['WWW-Authenticate'] =
-        `Bearer resource_metadata_url=${base}/api/mcp/.well-known/oauth-protected-resource`
+        `Bearer resource_metadata="${base}/.well-known/oauth-protected-resource/api/mcp"`
     }
     return new Response(JSON.stringify({ error: auth.error }), { status: auth.status, headers })
   }

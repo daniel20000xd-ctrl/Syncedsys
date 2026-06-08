@@ -24,8 +24,21 @@ const nextConfig: NextConfig = {
         destination: '/api/mcp/oauth/discovery',
       },
       {
-        // OAuth Protected Resource Metadata (RFC 9728 / MCP auth spec) —
-        // referenced in the WWW-Authenticate header returned by /api/mcp on 401.
+        // OAuth Protected Resource Metadata (RFC 9728 / MCP auth spec).
+        // RFC 9728 §3.1 well-known path-insertion: for resource
+        // https://host/api/mcp the metadata lives at
+        // https://host/.well-known/oauth-protected-resource/api/mcp — this is
+        // the canonical URL Claude probes (and the one the 401 header points to).
+        source: '/.well-known/oauth-protected-resource/api/mcp',
+        destination: '/api/mcp/oauth/resource',
+      },
+      {
+        // Root-level fallback some clients probe when the resource has a path.
+        source: '/.well-known/oauth-protected-resource',
+        destination: '/api/mcp/oauth/resource',
+      },
+      {
+        // Legacy appended form (earlier MCP drafts) — kept for compatibility.
         source: '/api/mcp/.well-known/oauth-protected-resource',
         destination: '/api/mcp/oauth/resource',
       },

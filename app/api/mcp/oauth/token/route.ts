@@ -55,11 +55,14 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   try {
     const token = await createPatForUser(record.userId, `Claude (${clientId})`)
+    // RFC 6749 §5.1: access_token + token_type required; expires_in RECOMMENDED
+    // (Claude expects it). The sk_ssys_ PAT does not expire, so advertise a long
+    // honest lifetime. no-store is mandated so intermediaries can't cache it.
     return Response.json({
       access_token: token,
       token_type: 'Bearer',
-      scope: '',
-    }, { headers: CORS })
+      expires_in: 31536000,
+    }, { headers: { ...CORS, 'Cache-Control': 'no-store', 'Pragma': 'no-cache' } })
   } catch (err) {
     console.error('OAuth token exchange failed:', err)
     return jsonErr('server_error', 500)

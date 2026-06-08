@@ -25,6 +25,7 @@ export function GET(req: Request) {
   return Response.json({
     resource: `${BASE}/api/mcp`,
     authorization_servers: [BASE],
+    bearer_methods_supported: ['header'],
   }, { headers: CORS_HEADERS })
 }
 
