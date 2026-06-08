@@ -350,6 +350,7 @@ export default function DatabaseBoardView({ boardId: _boardId, config }: { board
   const [currentOffset, setCurrentOffset] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [fetchError, setFetchError] = useState<string | null>(null)
 
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
@@ -382,10 +383,18 @@ export default function DatabaseBoardView({ boardId: _boardId, config }: { board
     let cancelled = false
     async function load() {
       setLoading(true)
+      setFetchError(null)
       try {
         const res = await fetch(`/api/library/search?${buildParams(0)}`)
         if (cancelled) return
-        const data: LibraryItem[] = res.ok ? await res.json() : []
+        if (!res.ok) {
+          const body = await res.text()
+          setFetchError(`HTTP ${res.status}: ${body.slice(0, 200)}`)
+          setItems([])
+          setHasMore(false)
+          return
+        }
+        const data: LibraryItem[] = await res.json()
         setItems(data)
         setCurrentOffset(0)
         setHasMore(data.length === LIMIT)
@@ -504,7 +513,12 @@ export default function DatabaseBoardView({ boardId: _boardId, config }: { board
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-center text-white/30">
             <Database size={36} className="mb-3 opacity-30" />
-            {hasFilters
+            {fetchError
+              ? <>
+                  <p className="text-sm text-red-400">Search failed</p>
+                  <p className="text-xs mt-1 font-mono text-red-300/70 max-w-sm break-all">{fetchError}</p>
+                </>
+              : hasFilters
               ? <p className="text-sm">No items match the current filters.</p>
               : <>
                   <p className="text-sm">No items yet.</p>

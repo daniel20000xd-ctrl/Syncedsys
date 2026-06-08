@@ -6,6 +6,7 @@ import type { Board, List, Card, BoardElement, BoardEdge } from '@/lib/types'
 import { resetDueRecurringCards } from '@/lib/recur'
 import { isClaudeEnabled } from '@/lib/mcp'
 import BoardDesktop from '@/components/BoardDesktop'
+import { isAdminEmail } from '@/lib/admin'
 
 export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
   const { id } = await params
@@ -68,7 +69,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
     supabase.auth.getUser(),
   ])
 
-  const isAdmin = userRes.data.user?.email === process.env.ADMIN_EMAIL
+  const isAdmin = isAdminEmail(userRes.data.user?.email)
 
   const board = boardRes.data
   if (!board) notFound()

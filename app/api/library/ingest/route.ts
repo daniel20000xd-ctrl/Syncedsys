@@ -27,10 +27,10 @@ export async function POST(req: NextRequest) {
 
   if (ingestKey && bearer === ingestKey) {
     // Script path: look up the admin user by email so inserts are scoped correctly.
-    const adminEmail = process.env.ADMIN_EMAIL
+    const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase()
     if (!adminEmail) return NextResponse.json({ error: 'ADMIN_EMAIL not configured' }, { status: 500 })
     const { data: { users } } = await admin.auth.admin.listUsers()
-    const adminUser = users.find(u => u.email === adminEmail)
+    const adminUser = users.find(u => u.email?.toLowerCase() === adminEmail)
     if (!adminUser) return NextResponse.json({ error: 'Admin user not found' }, { status: 500 })
     userId = adminUser.id
   } else {
