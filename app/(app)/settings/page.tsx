@@ -11,6 +11,7 @@ import ClaudeUsageCard from '@/components/ClaudeUsageCard'
 import McpConnectSettings from '@/components/McpConnectSettings'
 import StorageMeter from '@/components/StorageMeter'
 import PersonaSettings from '@/components/PersonaSettings'
+import DevicePairingSettings from '@/components/DevicePairingSettings'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
@@ -30,6 +31,12 @@ export default async function SettingsPage() {
   const proto = host.startsWith('localhost') || host.startsWith('127.') ? 'http' : 'https'
   const mcpUrl = `${proto}://${host}/api/mcp`
   const mcpTokens = await listMcpTokens()
+
+  const { data: deviceLinks } = await supabase
+    .from('device_links')
+    .select('id, name, pairing_code, paired, last_seen, created_at')
+    .eq('user_id', user?.id ?? '')
+    .order('created_at', { ascending: false })
 
   // Personas (with the count of boards inside each, for the delete warning).
   // select('*') + JS filter so this never errors on the pre-migration schema.
@@ -76,6 +83,8 @@ export default async function SettingsPage() {
         <ClaudeKeySettings initialHasKey={claude.hasKey} initialAutoApply={claude.autoApply} />
 
         <McpConnectSettings mcpUrl={mcpUrl} initialTokens={mcpTokens} />
+
+        <DevicePairingSettings initialDevices={deviceLinks ?? []} />
 
         {personas.length > 0 && <PersonaSettings personas={personas} />}
       </div>
