@@ -94,8 +94,13 @@ export type WorkspacePhoto = {
   expires_at: string | null
   is_saved: boolean
   project_tag: string | null
+  description: string | null
   width: number | null
   height: number | null
 }
 
-export type WorkspacePhotoWithUrl = WorkspacePhoto & { signed_url: string }
+export type WorkspacePhotoWithUrl = WorkspacePhoto & { signed_url: string; number: number }
+
+export type PhotoLibrarySettings = {
+  pause_deletion: boolean
+}

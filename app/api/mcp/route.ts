@@ -1070,18 +1070,20 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     return ok(data)
   })
 
+  const PHOTO_SELECT = 'id, filename, r2_key, mime_type, size_bytes, created_at, expires_at, is_saved, project_tag, description, width, height'
+
   server.registerTool('get_workspace_photos', {
     title: 'Get workspace photos',
-    description: 'Returns workspace photos uploaded from the user\'s iOS companion app. Each photo includes a signed URL Claude can use to view the image. Use this to see visual context the user has captured for their active project — reference these images without asking the user to find or send them.',
+    description: 'Returns workspace photos uploaded from the user\'s iOS companion app. Each photo has a number (1 = newest), a signed URL to view the image, and a description field. Reference photos by number when the user says "first image", "second image", etc. Use this before update_workspace_photo so you have the correct ID.',
     inputSchema: {
-      limit: z.number().min(1).max(50).default(20).optional().describe('Maximum number of photos to return (default 20, max 50)'),
+      limit: z.number().min(1).max(50).optional().describe('Maximum number of photos to return (default 20, max 50)'),
       project_tag: z.string().optional().describe('Filter by project tag'),
-      saved_only: z.boolean().optional().describe('Return only saved/permanent photos (default false)'),
+      saved_only: z.boolean().optional().describe('Return only saved/permanent photos'),
     },
   }, async ({ limit = 20, project_tag, saved_only }) => {
     let query = adminSupabase
       .from('workspace_photos')
-      .select('id, filename, r2_key, mime_type, size_bytes, created_at, expires_at, is_saved, project_tag, width, height')
+      .select(PHOTO_SELECT)
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(Math.min(limit, 50))
@@ -1094,7 +1096,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 
     const r2 = getR2Client()
     const photos = await Promise.all(
-      (data ?? []).map(async photo => {
+      (data ?? []).map(async (photo, i) => {
         const signed_url = await getSignedUrl(
           r2,
           new GetObjectCommand({ Bucket: R2_BUCKET, Key: photo.r2_key }),
@@ -1102,11 +1104,85 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
         ).catch(() => '')
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { r2_key: _key, ...rest } = photo
-        return { ...rest, signed_url }
+        return { ...rest, number: i + 1, signed_url }
       }),
     )
 
     return ok(photos)
+  })
+
+  server.registerTool('update_workspace_photo', {
+    title: 'Update workspace photo',
+    description: 'Update a workspace photo\'s description or exemption from deletion. Identify the photo by its number (1 = newest) or its UUID. Call get_workspace_photos first to get IDs and numbers. Use this to: add/update a description so the photo is easier to reference later; set is_saved=true to exempt it from auto-deletion.',
+    inputSchema: {
+      id: z.string().optional().describe('Photo UUID (from get_workspace_photos)'),
+      number: z.number().int().min(1).optional().describe('Photo number — 1 is the newest photo'),
+      description: z.string().optional().describe('New description for the photo (set to empty string to clear)'),
+      is_saved: z.boolean().optional().describe('true = exempt from auto-deletion; false = restore 7-day expiry'),
+    },
+  }, async ({ id, number, description, is_saved }) => {
+    if (!id && !number) return fail('Provide either id or number')
+
+    let photoId = id
+    if (!photoId && number != null) {
+      const { data, error } = await adminSupabase
+        .from('workspace_photos')
+        .select('id')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .range(number - 1, number - 1)
+        .single()
+      if (error || !data) return fail(`No photo found at position ${number}`)
+      photoId = data.id
+    }
+
+    const patch: Record<string, unknown> = {}
+    if (typeof description === 'string') patch.description = description.trim() || null
+    if (typeof is_saved === 'boolean') {
+      patch.is_saved = is_saved
+      patch.expires_at = is_saved ? null : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    }
+    if (Object.keys(patch).length === 0) return fail('No fields to update')
+
+    const { data, error } = await adminSupabase
+      .from('workspace_photos')
+      .update(patch)
+      .eq('id', photoId!)
+      .eq('user_id', userId)
+      .select(PHOTO_SELECT)
+      .single()
+
+    if (error || !data) return fail('Photo not found or update failed')
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { r2_key: _key, ...rest } = data
+    return ok(rest)
+  })
+
+  server.registerTool('get_photo_settings', {
+    title: 'Get photo library settings',
+    description: 'Returns the current photo library settings, including whether auto-deletion is paused.',
+    inputSchema: undefined,
+  }, async () => {
+    const { data } = await adminSupabase
+      .from('photo_library_settings')
+      .select('pause_deletion')
+      .eq('user_id', userId)
+      .maybeSingle()
+    return ok({ pause_deletion: data?.pause_deletion ?? false })
+  })
+
+  server.registerTool('set_photo_settings', {
+    title: 'Update photo library settings',
+    description: 'Update photo library settings. Set pause_deletion=true to pause all automatic photo deletion indefinitely; false to resume it.',
+    inputSchema: {
+      pause_deletion: z.boolean().describe('true = pause all auto-deletion; false = resume normal 7-day expiry'),
+    },
+  }, async ({ pause_deletion }) => {
+    const { error } = await adminSupabase
+      .from('photo_library_settings')
+      .upsert({ user_id: userId, pause_deletion, updated_at: new Date().toISOString() })
+    if (error) return fail(error.message)
+    return ok({ pause_deletion })
   })
 
   return server
