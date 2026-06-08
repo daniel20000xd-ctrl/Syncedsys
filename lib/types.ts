@@ -82,3 +82,20 @@ export type BoardElement = {
   deadline: string | null
   created_at: string
 }
+
+export type WorkspacePhoto = {
+  id: string
+  user_id: string
+  filename: string
+  r2_key: string
+  mime_type: string
+  size_bytes: number
+  created_at: string
+  expires_at: string | null
+  is_saved: boolean
+  project_tag: string | null
+  width: number | null
+  height: number | null
+}
+
+export type WorkspacePhotoWithUrl = WorkspacePhoto & { signed_url: string }

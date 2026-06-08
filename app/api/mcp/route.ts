@@ -6,6 +6,9 @@ import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { GetObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+import { getR2Client, R2_BUCKET } from '@/lib/r2'
 import { snapshotBefore, logAction } from '@/lib/mcp'
 import { supabaseAuthContext } from '@/lib/supabase/authContext'
 import { resolveMcpAuth } from '@/lib/mcpAuth'
@@ -1065,6 +1068,45 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     if (error) return fail(error.message)
     if (!data) return fail('Item not found')
     return ok(data)
+  })
+
+  server.registerTool('get_workspace_photos', {
+    title: 'Get workspace photos',
+    description: 'Returns workspace photos uploaded from the user\'s iOS companion app. Each photo includes a signed URL Claude can use to view the image. Use this to see visual context the user has captured for their active project — reference these images without asking the user to find or send them.',
+    inputSchema: {
+      limit: z.number().min(1).max(50).default(20).optional().describe('Maximum number of photos to return (default 20, max 50)'),
+      project_tag: z.string().optional().describe('Filter by project tag'),
+      saved_only: z.boolean().optional().describe('Return only saved/permanent photos (default false)'),
+    },
+  }, async ({ limit = 20, project_tag, saved_only }) => {
+    let query = adminSupabase
+      .from('workspace_photos')
+      .select('id, filename, r2_key, mime_type, size_bytes, created_at, expires_at, is_saved, project_tag, width, height')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(Math.min(limit, 50))
+
+    if (saved_only) query = query.eq('is_saved', true)
+    if (project_tag) query = query.eq('project_tag', project_tag)
+
+    const { data, error } = await query
+    if (error) return fail(error.message)
+
+    const r2 = getR2Client()
+    const photos = await Promise.all(
+      (data ?? []).map(async photo => {
+        const signed_url = await getSignedUrl(
+          r2,
+          new GetObjectCommand({ Bucket: R2_BUCKET, Key: photo.r2_key }),
+          { expiresIn: 3600 },
+        ).catch(() => '')
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { r2_key: _key, ...rest } = photo
+        return { ...rest, signed_url }
+      }),
+    )
+
+    return ok(photos)
   })
 
   return server
