@@ -11,6 +11,7 @@ export function GET() {
     issuer: BASE,
     authorization_endpoint: `${BASE}/api/mcp/oauth/authorize`,
     token_endpoint: `${BASE}/api/mcp/oauth/token`,
+    registration_endpoint: `${BASE}/api/mcp/oauth/register`,
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code'],
     code_challenge_methods_supported: ['S256'],
