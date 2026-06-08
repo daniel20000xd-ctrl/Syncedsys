@@ -4,6 +4,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import Anthropic from '@anthropic-ai/sdk'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { snapshotBefore, logAction } from '@/lib/mcp'
 import { supabaseAuthContext } from '@/lib/supabase/authContext'
@@ -29,6 +30,21 @@ import {
 } from '@/app/actions'
 
 export const dynamic = 'force-dynamic'
+
+// ── Admin user ID cache (resolved once per cold start) ────────────────────────
+
+let _adminUserId: string | null | undefined = undefined
+
+async function getAdminUserId(): Promise<string | null> {
+  if (_adminUserId !== undefined) return _adminUserId
+  const admin = createAdminClient()
+  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase()
+  if (!adminEmail) { _adminUserId = null; return null }
+  const { data } = await admin.auth.admin.listUsers()
+  const user = data?.users?.find(u => u.email?.toLowerCase() === adminEmail)
+  _adminUserId = user?.id ?? null
+  return _adminUserId
+}
 
 // ── Shared types & helpers ────────────────────────────────────────────────────
 
@@ -88,7 +104,7 @@ export async function suggestBoardMeta(
 
 // ── MCP server builder ────────────────────────────────────────────────────────
 
-function buildServer(supabase: SupabaseClient, userId: string) {
+function buildServer(supabase: SupabaseClient, userId: string, adminUserId: string | null) {
   const server = new McpServer({ name: 'syncedsys', version: '1.0.0' })
 
   // Every write tool runs snapshotBefore + logAction before executing.
@@ -964,13 +980,93 @@ function buildServer(supabase: SupabaseClient, userId: string) {
     undefined, [linkId],
   ))
 
+  // ── Library tools (read-only, admin-scoped via service role) ─────────────────
+
+  const adminSupabase = createAdminClient()
+
+  server.registerTool('list_library_groups', {
+    title: 'List library groups',
+    description: 'List the available groups and categories in the personal legal and research library, with item counts. Always call this first before searching — it tells you which area to filter by and how many items exist in each group.',
+    inputSchema: {
+      type: z.enum(['legal_case', 'paper']).optional().describe('Optional: filter to one item type'),
+    },
+  }, async ({ type: itemType }) => {
+    if (!adminUserId) return fail('Library not configured (ADMIN_EMAIL missing or user not found)')
+    let query = adminSupabase
+      .from('library_items')
+      .select('type, metadata')
+      .eq('user_id', adminUserId)
+      .eq('deleted', false)
+    if (itemType) query = query.eq('type', itemType)
+    const { data, error } = await query
+    if (error) return fail(error.message)
+    const counts = new Map<string, number>()
+    for (const row of data ?? []) {
+      const meta = row.metadata as Record<string, unknown> | null
+      const areas: string[] = Array.isArray(meta?.rattsomrade) ? (meta!.rattsomrade as unknown[]).map(String) : []
+      for (const area of areas.length ? areas : ['(uncategorized)']) {
+        const k = `${row.type}\t${area}`
+        counts.set(k, (counts.get(k) ?? 0) + 1)
+      }
+    }
+    const groups = Array.from(counts.entries())
+      .map(([k, count]) => { const [type, group] = k.split('\t'); return { type, group, count } })
+      .sort((a, b) => b.count - a.count)
+    return ok(groups)
+  })
+
+  server.registerTool('search_library', {
+    title: 'Search library',
+    description: 'Search the personal legal case and research paper library. Returns compact results — title, summary, key metadata — WITHOUT full text. Use this to identify 1-2 relevant items, then call get_library_item for the full text of finalists only. Never call get_library_item on more than 2 items per query.',
+    inputSchema: {
+      query: z.string().optional().describe('Full-text search — keywords, legal concepts, statute citations'),
+      type: z.enum(['legal_case', 'paper']).optional().describe('Optional: filter to one item type'),
+      tags: z.array(z.string()).optional().describe('Optional: filter by tags (rättsområde, principer, or custom)'),
+      limit: z.number().optional().describe('Max results to return (default 8, max 20)'),
+    },
+  }, async ({ query, type: itemType, tags, limit: rawLimit }) => {
+    if (!adminUserId) return fail('Library not configured (ADMIN_EMAIL missing or user not found)')
+    const limit = Math.min(20, Math.max(1, rawLimit ?? 8))
+    let q = adminSupabase
+      .from('library_items')
+      .select('id, type, title, summary, tags, source_url, metadata, updated_at, verified')
+      .eq('user_id', adminUserId)
+      .eq('deleted', false)
+    if (itemType) q = q.eq('type', itemType)
+    if (tags?.length) q = q.contains('tags', tags)
+    if (query) q = q.textSearch('tsv', query, { config: 'swedish', type: 'websearch' })
+    q = q.order('updated_at', { ascending: false }).limit(limit)
+    const { data, error } = await q
+    if (error) return fail(error.message)
+    return ok(data ?? [])
+  })
+
+  server.registerTool('get_library_item', {
+    title: 'Get library item',
+    description: 'Get the complete record for one library item, including the full case or paper text. This is expensive — only call it for 1-2 finalist items after using search_library to narrow down candidates. Never use this to browse or discover.',
+    inputSchema: {
+      id: z.string().describe('The item ID from search_library results'),
+    },
+  }, async ({ id }) => {
+    if (!adminUserId) return fail('Library not configured (ADMIN_EMAIL missing or user not found)')
+    const { data, error } = await adminSupabase
+      .from('library_items')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', adminUserId)
+      .maybeSingle()
+    if (error) return fail(error.message)
+    if (!data) return fail('Item not found')
+    return ok(data)
+  })
+
   return server
 }
 
 // ── Route handler ─────────────────────────────────────────────────────────────
 
 async function handle(req: NextRequest): Promise<Response> {
-  const auth = await resolveMcpAuth(req)
+  const [auth, adminUserId] = await Promise.all([resolveMcpAuth(req), getAdminUserId()])
   if (!auth.ok) {
     return new Response(JSON.stringify({ error: auth.error }), {
       status: auth.status,
@@ -983,7 +1079,7 @@ async function handle(req: NextRequest): Promise<Response> {
   return supabaseAuthContext.run({ accessToken: auth.accessToken }, async () => {
     const supabase = await createClient()
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined })
-    const server = buildServer(supabase, auth.userId)
+    const server = buildServer(supabase, auth.userId, adminUserId)
     await server.connect(transport)
     return transport.handleRequest(req)
   })
