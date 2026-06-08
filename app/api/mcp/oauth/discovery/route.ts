@@ -2,7 +2,15 @@
 // Served at /.well-known/oauth-authorization-server via next.config.ts rewrite.
 // Claude.ai fetches this to discover the authorize + token endpoints.
 
-const BASE = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://syncedsys.com').replace(/\/$/, '')
+// Derive the base URL from the request host so the advertised endpoints always
+// match the domain the client is actually talking to. The apex domain
+// 308-redirects to www; hardcoding either one makes the token POST hit a
+// cross-origin redirect the OAuth client won't follow, breaking the exchange.
+function baseFromReq(req: Request): string {
+  const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'www.syncedsys.com'
+  const proto = req.headers.get('x-forwarded-proto') ?? 'https'
+  return `${proto}://${host}`
+}
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -11,7 +19,8 @@ const CORS_HEADERS = {
   'Access-Control-Max-Age': '86400',
 }
 
-export function GET() {
+export function GET(req: Request) {
+  const BASE = baseFromReq(req)
   return Response.json({
     issuer: BASE,
     authorization_endpoint: `${BASE}/api/mcp/oauth/authorize`,
