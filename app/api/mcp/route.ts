@@ -1158,6 +1158,77 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     return ok(rest)
   })
 
+  server.registerTool('get_photo_image', {
+    title: 'View photo image',
+    description: 'Fetch a workspace photo as an inline image so you can directly view its contents. Use this instead of fetching the signed URL separately. Identify by number (1 = newest) or UUID. Call get_workspace_photos first to see what is available.',
+    inputSchema: {
+      id: z.string().optional().describe('Photo UUID'),
+      number: z.number().int().min(1).optional().describe('Photo number — 1 is the newest'),
+    },
+  }, async ({ id, number }) => {
+    if (!id && !number) return fail('Provide either id or number')
+
+    type PhotoRow = { id: string; r2_key: string; mime_type: string; filename: string; description: string | null }
+    let row: PhotoRow | null = null
+
+    if (number != null && !id) {
+      const { data, error } = await adminSupabase
+        .from('workspace_photos')
+        .select('id, r2_key, mime_type, filename, description')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .range(number - 1, number - 1)
+        .single()
+      if (error || !data) return fail(`No photo found at position ${number}`)
+      row = data as PhotoRow
+    } else {
+      const { data, error } = await adminSupabase
+        .from('workspace_photos')
+        .select('id, r2_key, mime_type, filename, description')
+        .eq('id', id!)
+        .eq('user_id', userId)
+        .single()
+      if (error || !data) return fail('Photo not found')
+      row = data as PhotoRow
+    }
+
+    if (row.mime_type === 'image/heic') {
+      return fail('HEIC images cannot be displayed inline. Use the signed URL from get_workspace_photos to view this photo.')
+    }
+
+    let imageData: string
+    try {
+      const r2Res = await getR2Client().send(new GetObjectCommand({ Bucket: R2_BUCKET, Key: row.r2_key }))
+      const chunks: Uint8Array[] = []
+      for await (const chunk of r2Res.Body as AsyncIterable<Uint8Array>) {
+        chunks.push(chunk)
+      }
+      imageData = Buffer.concat(chunks).toString('base64')
+    } catch {
+      return fail('Failed to fetch image from storage')
+    }
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify({
+            id: row.id,
+            number,
+            filename: row.filename,
+            description: row.description,
+            mime_type: row.mime_type,
+          }, null, 2),
+        },
+        {
+          type: 'image' as const,
+          data: imageData,
+          mimeType: row.mime_type as 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif',
+        },
+      ],
+    }
+  })
+
   server.registerTool('get_photo_settings', {
     title: 'Get photo library settings',
     description: 'Returns the current photo library settings, including whether auto-deletion is paused.',

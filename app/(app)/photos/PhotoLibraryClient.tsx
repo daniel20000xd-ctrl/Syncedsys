@@ -239,9 +239,17 @@ export default function PhotoLibraryClient() {
               const expiry = expiryLabel(photo, settings.pause_deletion)
               return (
                 <div key={photo.id} className="bg-white rounded-xl shadow-sm px-4 py-3 flex items-start gap-4">
-                  {/* Number badge */}
-                  <div className="w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-500 shrink-0 mt-0.5">
-                    {photo.number}
+                  {/* Thumbnail */}
+                  <div className="relative w-14 h-14 shrink-0">
+                    <img
+                      src={photo.signed_url}
+                      alt={photo.filename}
+                      className="w-14 h-14 rounded-lg object-cover bg-gray-100"
+                      loading="lazy"
+                    />
+                    <span className="absolute bottom-0.5 right-0.5 text-[9px] font-bold text-white bg-black/60 rounded px-1 leading-4">
+                      #{photo.number}
+                    </span>
                   </div>
 
                   {/* Main info */}
