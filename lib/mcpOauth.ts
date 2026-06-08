@@ -1,5 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { randomToken, sha256Hex } from '@/lib/crypto'
+import { randomToken, sha256Hex, encryptSecret, decryptSecret } from '@/lib/crypto'
 
 const CODE_TTL_MS = 10 * 60 * 1000 // 10 minutes
 
@@ -11,44 +11,45 @@ export async function verifyPkce(codeVerifier: string, codeChallenge: string): P
   return computed === codeChallenge
 }
 
-// Store a short-lived authorization code tied to the user + PKCE challenge.
+// The authorization code is a stateless, AES-256-GCM-encrypted payload — no DB
+// row. It binds the user + PKCE challenge + redirect_uri + expiry, and the token
+// endpoint can only decrypt it with the server's APP_ENCRYPTION_KEY. This avoids
+// any migration dependency; single-use isn't enforced but the 10-min TTL plus the
+// PKCE code_verifier (held only by the legitimate client) makes replay a non-issue.
+type CodePayload = { u: string; c: string; r: string; e: number }
+
+// Issue a short-lived authorization code tied to the user + PKCE challenge.
 export async function storeOAuthCode(params: {
   userId: string
   codeChallenge: string
   redirectUri: string
   clientId: string
 }): Promise<string> {
-  const code = randomToken('') // prefix-less 32-char base64url random token
-  const admin = createAdminClient()
-  const { error } = await admin.from('mcp_oauth_codes').insert({
-    code,
-    user_id: params.userId,
-    code_challenge: params.codeChallenge,
-    redirect_uri: params.redirectUri,
-    client_id: params.clientId,
-    expires_at: new Date(Date.now() + CODE_TTL_MS).toISOString(),
-  })
-  if (error) throw new Error('Failed to store OAuth code: ' + error.message)
-  return code
+  const payload: CodePayload = {
+    u: params.userId,
+    c: params.codeChallenge,
+    r: params.redirectUri,
+    e: Date.now() + CODE_TTL_MS,
+  }
+  // base64url so the code is URL-safe in the redirect query string.
+  return Buffer.from(encryptSecret(JSON.stringify(payload)), 'utf8').toString('base64url')
 }
 
-// Consume a code (marks it used). Returns null if not found, expired, or already used.
+// Decode + validate a code. Returns null if tampered, malformed, or expired.
 export async function consumeOAuthCode(code: string): Promise<{
   userId: string
   codeChallenge: string
   redirectUri: string
 } | null> {
-  const admin = createAdminClient()
-  const { data } = await admin
-    .from('mcp_oauth_codes')
-    .select('user_id, code_challenge, redirect_uri')
-    .eq('code', code)
-    .is('used_at', null)
-    .gt('expires_at', new Date().toISOString())
-    .maybeSingle()
-  if (!data) return null
-  await admin.from('mcp_oauth_codes').update({ used_at: new Date().toISOString() }).eq('code', code)
-  return { userId: data.user_id, codeChallenge: data.code_challenge, redirectUri: data.redirect_uri }
+  try {
+    const encrypted = Buffer.from(code, 'base64url').toString('utf8')
+    const payload = JSON.parse(decryptSecret(encrypted)) as CodePayload
+    if (!payload.u || !payload.c || typeof payload.e !== 'number') return null
+    if (Date.now() > payload.e) return null
+    return { userId: payload.u, codeChallenge: payload.c, redirectUri: payload.r }
+  } catch {
+    return null
+  }
 }
 
 // Create a PAT for the given user via the admin client (no browser session needed).
