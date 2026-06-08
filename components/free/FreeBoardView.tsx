@@ -144,7 +144,7 @@ function buildNodes(
     if (el.type === 'text') base.style = { width: el.width ?? 180, height: el.height ?? 140 }
     const opacity = typeof el.data.opacity === 'number' ? (el.data.opacity as number) : 1
     base.style = { ...(base.style ?? {}), opacity }
-    base.zIndex = typeof el.data.z === 'number' ? el.data.z as number : 0
+    base.zIndex = typeof el.data.z === 'number' ? el.data.z as number : (el.type === 'shape' ? -1 : 0)
     return base
   })
 
