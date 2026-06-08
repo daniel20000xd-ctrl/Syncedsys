@@ -12,6 +12,7 @@ const SATELLITE = 'https://stocks.syncedsys.com'
 
 export default function StockPortal({ config, onPersistConfig, onUpdateContext }: Props) {
   const [iframeSrc, setIframeSrc] = useState<string | null>(null)
+  const iframeRef      = useRef<HTMLIFrameElement>(null)
   const onPersistRef   = useRef(onPersistConfig)
   const onContextRef   = useRef(onUpdateContext)
   useEffect(() => { onPersistRef.current  = onPersistConfig }, [onPersistConfig])
@@ -38,10 +39,14 @@ export default function StockPortal({ config, onPersistConfig, onUpdateContext }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Listen for postMessage from the satellite
+  // Listen for postMessage from THIS portal's own iframe. All portals share the
+  // parent window, so without the e.source check every portal would react to every
+  // other portal's messages — overwriting each portal's saved ticker/context with
+  // whichever stock was last opened anywhere on the board.
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
       if (e.origin !== SATELLITE) return
+      if (e.source !== iframeRef.current?.contentWindow) return
       if (e.data?.type === 'stock_context') onContextRef.current?.(e.data.context)
       if (e.data?.type === 'stock_config')  onPersistRef.current({ ticker: e.data.ticker, interval: e.data.interval })
     }
@@ -55,7 +60,7 @@ export default function StockPortal({ config, onPersistConfig, onUpdateContext }
       onPointerDown={e => e.stopPropagation()}
     >
       {iframeSrc
-        ? <iframe src={iframeSrc} className="w-full h-full border-0" title="Stock Viewer" />
+        ? <iframe ref={iframeRef} src={iframeSrc} className="w-full h-full border-0" title="Stock Viewer" />
         : <div className="flex items-center justify-center h-full"><p className="text-white/30 text-xs">Loading…</p></div>
       }
     </div>
