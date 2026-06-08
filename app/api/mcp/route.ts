@@ -1068,10 +1068,14 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 async function handle(req: NextRequest): Promise<Response> {
   const [auth, adminUserId] = await Promise.all([resolveMcpAuth(req), getAdminUserId()])
   if (!auth.ok) {
-    return new Response(JSON.stringify({ error: auth.error }), {
-      status: auth.status,
-      headers: { 'content-type': 'application/json' },
-    })
+    const base = (process.env.NEXT_PUBLIC_SITE_URL ?? 'https://syncedsys.com').replace(/\/$/, '')
+    const headers: Record<string, string> = { 'content-type': 'application/json' }
+    if (auth.status === 401) {
+      // Signal to MCP clients (e.g. Claude.ai) where to find the OAuth server.
+      headers['WWW-Authenticate'] =
+        `Bearer resource_metadata_url=${base}/api/mcp/.well-known/oauth-protected-resource`
+    }
+    return new Response(JSON.stringify({ error: auth.error }), { status: auth.status, headers })
   }
 
   // Run the entire MCP exchange inside the auth context so every server action's

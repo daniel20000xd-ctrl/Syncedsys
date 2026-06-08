@@ -11,6 +11,26 @@ const nextConfig: NextConfig = {
       static: 300,
     },
   },
+
+  // MCP OAuth discovery endpoints. The well-known paths can't be served
+  // directly from dotfolders in the App Router on all platforms, so we use
+  // rewrites to route them to regular API route files.
+  async rewrites() {
+    return [
+      {
+        // OAuth Authorization Server Metadata (RFC 8414) — Claude.ai fetches
+        // this from the domain root to discover the authorize + token endpoints.
+        source: '/.well-known/oauth-authorization-server',
+        destination: '/api/mcp/oauth/discovery',
+      },
+      {
+        // OAuth Protected Resource Metadata (RFC 9728 / MCP auth spec) —
+        // referenced in the WWW-Authenticate header returned by /api/mcp on 401.
+        source: '/api/mcp/.well-known/oauth-protected-resource',
+        destination: '/api/mcp/oauth/resource',
+      },
+    ]
+  },
 };
 
 export default nextConfig;
