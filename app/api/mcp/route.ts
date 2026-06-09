@@ -9,6 +9,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { GetObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { getR2Client, R2_BUCKET } from '@/lib/r2'
+import { researchFetch } from '@/lib/research'
 import { snapshotBefore, logAction } from '@/lib/mcp'
 import { supabaseAuthContext } from '@/lib/supabase/authContext'
 import { resolveMcpAuth } from '@/lib/mcpAuth'
@@ -1069,6 +1070,112 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     if (!data) return fail('Item not found')
     return ok(data)
   })
+
+  // ── Research satellite tools (i.syncedsys, over HTTP via researchFetch) ───────
+  // These drive the two-phase research workflow against the i.syncedsys API:
+  //   Phase 2 (enrich):  research_list_domains → research_search(phase2_status=pending)
+  //                      → reason about each record → research_enrich_record
+  //   Phase 3 (connect): research_upsert_concept → research_search(not_concept_id=<id>)
+  //                      → reason about relevance → research_connect_record (per record)
+  //                      → research_record_concept_run (once, at the end)
+
+  server.registerTool('research_list_domains', {
+    title: 'List research domains',
+    description: 'List every research domain with its display_name, record_count, enrichment_context, structural_tag_categories, and last_*_at timestamps. ALWAYS call this first when enriching (Phase 2): a domain\'s enrichment_context and structural_tag_categories are the classification guidance you must read before assigning structural tags to any record in it.',
+    inputSchema: undefined,
+  }, () => wrap(() => researchFetch('/api/research/domains')))
+
+  server.registerTool('research_search', {
+    title: 'Search research records',
+    description: 'Search records within one domain. Returns compact records (not full text). In Phase 2 pass phase2_status="pending" to find records that still need structural tags. In Phase 3 pass not_concept_id=<concept id> to find records not yet checked against a concept. Combine with q, structural_tag, derived_tag, concept_id, date_from/date_to, and limit/offset as needed.',
+    inputSchema: {
+      domain: z.string().describe('Domain slug from research_list_domains (e.g. "legal_cases")'),
+      q: z.string().optional().describe('Full-text search query'),
+      structural_tag: z.string().optional().describe('Only records carrying this structural tag'),
+      derived_tag: z.string().optional().describe('Only records carrying this derived tag'),
+      concept_id: z.string().optional().describe('Only records already connected to this concept'),
+      not_concept_id: z.string().optional().describe('Only records NOT yet checked against this concept — use in Phase 3 to find remaining work'),
+      phase2_status: z.string().optional().describe('Enrichment status filter — pass "pending" to find records not yet enriched (Phase 2)'),
+      date_from: z.string().optional().describe('ISO date lower bound (inclusive)'),
+      date_to: z.string().optional().describe('ISO date upper bound (inclusive)'),
+      limit: z.number().int().optional().describe('Max records to return'),
+      offset: z.number().int().optional().describe('Pagination offset'),
+    },
+  }, ({ domain, ...query }) => wrap(() => researchFetch(`/api/research/${encodeURIComponent(domain)}`, { query })))
+
+  server.registerTool('research_get_record', {
+    title: 'Get research record',
+    description: 'Get the complete record — including its full text — for one record in a domain. Use after research_search has narrowed down which record you need to reason about (in Phase 2 to enrich, or Phase 3 to judge relevance).',
+    inputSchema: {
+      domain: z.string().describe('Domain slug'),
+      id: z.string().describe('Record ID from research_search results'),
+    },
+  }, ({ domain, id }) => wrap(() => researchFetch(`/api/research/${encodeURIComponent(domain)}/${encodeURIComponent(id)}`)))
+
+  server.registerTool('research_list_concepts', {
+    title: 'List research concepts',
+    description: 'List existing concepts — the cross-cutting ideas that records get connected to in Phase 3. Optionally filter by q (name search) or domain. Use this to find an existing concept id before creating a new one with research_upsert_concept.',
+    inputSchema: {
+      q: z.string().optional().describe('Search concept names'),
+      domain: z.string().optional().describe('Filter to concepts used in this domain'),
+    },
+  }, ({ q, domain }) => wrap(() => researchFetch('/api/research/concepts', { query: { q, domain } })))
+
+  server.registerTool('research_enrich_record', {
+    title: 'Enrich research record (Phase 2)',
+    description: 'Assign structural tags to one record during Phase 2, AFTER reasoning about its content against the domain\'s enrichment_context and structural_tag_categories (from research_list_domains). Each tag names the category it belongs to and a 0–1 confidence.',
+    inputSchema: {
+      domain: z.string().describe('Domain slug'),
+      id: z.string().describe('Record ID to tag'),
+      structural_tags: z.array(z.object({
+        tag: z.string().describe('The tag value'),
+        category: z.string().describe('Which of the domain\'s structural_tag_categories this tag belongs to'),
+        confidence: z.number().min(0).max(1).describe('0–1 confidence that this tag applies'),
+      })).describe('The structural tags to assign to this record'),
+    },
+  }, ({ domain, id, structural_tags }) => wrap(() => researchFetch(
+    `/api/research/${encodeURIComponent(domain)}/${encodeURIComponent(id)}/enrich`,
+    { body: { structural_tags } },
+  )))
+
+  server.registerTool('research_connect_record', {
+    title: 'Connect research record to a concept (Phase 3)',
+    description: 'Record a Phase 3 relevance judgment: whether one record relates to one concept, with your reasoning. Set relevant=false to record a checked-but-not-relevant result — this still marks the record as checked so a later research_search with not_concept_id skips it. Cite the supporting passage when relevant=true.',
+    inputSchema: {
+      domain: z.string().describe('Domain slug'),
+      id: z.string().describe('Record ID being judged'),
+      concept_id: z.string().describe('Concept ID (from research_upsert_concept)'),
+      concept_name: z.string().describe('Concept name'),
+      relevant: z.boolean().describe('Whether this record is relevant to the concept'),
+      confidence: z.number().min(0).max(1).describe('0–1 confidence in the judgment'),
+      reasoning: z.string().describe('Why the record is or is not relevant to the concept'),
+      specific_passage: z.string().optional().describe('The exact passage from the record that supports a relevant=true judgment'),
+    },
+  }, ({ domain, id, ...body }) => wrap(() => researchFetch(
+    `/api/research/${encodeURIComponent(domain)}/${encodeURIComponent(id)}/connect`,
+    { body },
+  )))
+
+  server.registerTool('research_upsert_concept', {
+    title: 'Create or fetch a research concept',
+    description: 'Create a concept (or fetch the existing one with the same name) and return it including its id. Call this first in Phase 3 to get the concept_id you then pass to research_search (not_concept_id), research_connect_record, and research_record_concept_run.',
+    inputSchema: {
+      name: z.string().describe('Concept name'),
+      description: z.string().optional().describe('What the concept means — the definition used to judge record relevance'),
+    },
+  }, ({ name, description }) => wrap(() => researchFetch('/api/research/concepts', { body: { name, description } })))
+
+  server.registerTool('research_record_concept_run', {
+    title: 'Record a Phase 3 concept run',
+    description: 'Call once at the END of a Phase 3 pass over a domain, after every record has been connected/checked for this concept. Records that the concept was run against this domain (updates its last-run bookkeeping).',
+    inputSchema: {
+      id: z.string().describe('Concept ID'),
+      domain: z.string().describe('Domain the Phase 3 pass covered'),
+    },
+  }, ({ id, domain }) => wrap(() => researchFetch(
+    `/api/research/concepts/${encodeURIComponent(id)}/record-run`,
+    { body: { domain } },
+  )))
 
   const PHOTO_SELECT = 'id, filename, r2_key, mime_type, size_bytes, created_at, expires_at, is_saved, project_tag, description, width, height'
 
