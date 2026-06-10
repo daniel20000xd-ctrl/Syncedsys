@@ -1177,6 +1177,38 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     { body: { domain } },
   )))
 
+  // Tradera — live listing search on the Swedish marketplace. Proxied through the
+  // i.syncedsys satellite (same bearer + base URL as research) which holds the
+  // Tradera API credentials and speaks SOAP. Every result carries its own
+  // tradera.com url so the assistant can hand listing links straight back.
+  server.registerTool('tradera_search', {
+    title: 'Search Tradera listings',
+    description: 'Search live listings on Tradera (the Swedish marketplace/auction site). Returns matching listings, each with a real tradera.com url plus current/buy-now price, next bid, bid count, end date, seller and thumbnail. Use this to find items for the user and give them the listing urls.',
+    inputSchema: {
+      q: z.string().describe('Search words, e.g. "iphone 13" or "rolex submariner"'),
+      categoryId: z.number().optional().describe('Tradera category id to restrict to (omit for all categories)'),
+      priceMin: z.number().optional().describe('Minimum price in SEK'),
+      priceMax: z.number().optional().describe('Maximum price in SEK'),
+      orderBy: z.string().optional().describe('Sort order: "Relevance", "PriceAscending", "PriceDescending", "EndDateAscending", "BidsDescending"'),
+      itemType: z.string().optional().describe('"All", "Auction", or "FixedPrice" (buy-now only)'),
+      itemStatus: z.string().optional().describe('"Active" (default) or "Ended"'),
+      itemCondition: z.string().optional().describe('"All", "OnlyNew", or "OnlySecondHand"'),
+      sellerType: z.string().optional().describe('"All", "OnlyPrivate", or "OnlyBusiness"'),
+      onlyAuctionsWithBuyNow: z.boolean().optional().describe('Only auctions that also offer a buy-now price'),
+      searchInDescription: z.boolean().optional().describe('Also match words in the description, not just the title'),
+      perPage: z.number().optional().describe('Results per page, 1–50 (default 25)'),
+      page: z.number().optional().describe('Page number, starting at 1'),
+    },
+  }, ({ q, ...rest }) => wrap(() => researchFetch('/api/tradera/search', { query: { q, ...rest } })))
+
+  server.registerTool('tradera_get_item', {
+    title: 'Get a Tradera listing',
+    description: 'Fetch full detail for one Tradera listing by its numeric item id (taken from a tradera_search result). Returns the listing\'s title, description, current/buy-now price, bids, end date, images and a tradera.com url.',
+    inputSchema: {
+      id: z.number().describe('Tradera item id from a tradera_search result'),
+    },
+  }, ({ id }) => wrap(() => researchFetch(`/api/tradera/item/${encodeURIComponent(String(id))}`)))
+
   const PHOTO_SELECT = 'id, filename, r2_key, mime_type, size_bytes, created_at, expires_at, is_saved, project_tag, description, width, height'
 
   server.registerTool('get_workspace_photos', {
