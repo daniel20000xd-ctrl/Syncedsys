@@ -1,0 +1,15 @@
+{
+  "legal_case": {
+    "rattsomrade": [
+      "arv", "testamente", "boutredning", "laglott", "arvskifte",
+      "testamentstolkning", "testamentets-giltighet", "samboarv",
+      "patentratt", "patentintrang", "ogiltighet-patent", "patentlicens",
+      "uppehallstillstand", "asyl", "utvisning", "familjeaterforening",
+      "arbetstillstand", "medborgarskap"
+    ],
+    "principer": [
+      "testamentstolkning", "analogisk-tillampning", "proportionalitet",
+      "bevisborda", "res-judicata", "ne-bis-in-idem", "likhetsprincipen"
+    ]
+  }
+}
