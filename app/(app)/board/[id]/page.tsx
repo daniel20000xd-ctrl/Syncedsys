@@ -2,6 +2,7 @@ import { notFound, redirect } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import type { Metadata } from 'next'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import type { Board, List, Card, BoardElement, BoardEdge } from '@/lib/types'
 import { resetDueRecurringCards } from '@/lib/recur'
 import { isClaudeEnabled } from '@/lib/mcp'
@@ -52,25 +53,27 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   const { id } = await params
   const supabase = await createClient()
 
-  // One round trip for the board + everything attached to it; sub-boards,
-  // the Claude gate, and the current user run in parallel.
-  // RLS scopes all queries to the owner.
-  const [boardRes, subRes, claudeEnabled, userRes] = await Promise.all([
-    supabase
+  // Resolve the current user first — needed to choose the query client.
+  const { data: { user } } = await supabase.auth.getUser()
+  const isAdmin = isAdminEmail(user?.email)
+
+  // Admins use the service-role client so they can view any user's boards.
+  // Regular users use their session client (RLS scopes queries to the owner).
+  const queryClient = isAdmin ? createAdminClient() : supabase
+
+  const [boardRes, subRes, claudeEnabled] = await Promise.all([
+    queryClient
       .from('boards')
       .select('*, lists(*, cards(*)), board_elements(*), board_edges(*)')
       .eq('id', id)
       .single(),
-    supabase
+    queryClient
       .from('boards')
       .select('*')
       .eq('parent_id', id)
       .order('tab_position', { ascending: true }),
     isClaudeEnabled(supabase),
-    supabase.auth.getUser(),
   ])
-
-  const isAdmin = isAdminEmail(userRes.data.user?.email)
 
   const board = boardRes.data
   if (!board) notFound()
@@ -81,6 +84,9 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
     redirect(first ? `/board/${first.id}` : '/boards')
   }
 
+  // Admin viewing someone else's board → read-only (no writes, no Claude).
+  const readOnly = isAdmin && board.user_id !== user?.id
+
   const lists = ((board.lists ?? []) as List[]).slice().sort((a, b) => a.position - b.position)
   const cards = lists.flatMap(l => ((l as unknown as { cards?: Card[] }).cards ?? [])).slice().sort((a, b) => a.position - b.position)
   const elements = (board.board_elements ?? []) as BoardElement[]
@@ -90,10 +96,13 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   // The Claude chat mounts when the user has their own key OR the workspace has a
   // platform key to fall back on (billed to the user). Keep this in sync with the
   // resolver in lib/claude/key.ts.
-  const showClaude = claudeEnabled || !!process.env.ANTHROPIC_API_KEY
+  const showClaude = !readOnly && (claudeEnabled || !!process.env.ANTHROPIC_API_KEY)
 
   // Recurring cards: reset any whose interval has elapsed since completion.
-  await resetDueRecurringCards(supabase, cards)
+  // Skip for read-only admin views — don't mutate another user's data.
+  if (!readOnly) {
+    await resetDueRecurringCards(supabase, cards)
+  }
 
   let view
   if (board.mode === 'classic' || (board.mode as string) === 'free') {
@@ -111,6 +120,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
             initialElements={elements}
             initialSubBoards={subBoards}
             isAdmin={isAdmin}
+            readOnly={readOnly}
           />
         </div>
       </div>
@@ -126,6 +136,19 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
       : <BoardDesktop board={board}><div className="flex-1 flex items-center justify-center text-sm text-gray-400">Not available</div></BoardDesktop>
   } else {
     view = <BoardDesktop board={board}><BoardView board={board} initialLists={lists} initialCards={cards} /></BoardDesktop>
+  }
+
+  if (readOnly) {
+    return (
+      <div className="relative h-full flex flex-col overflow-hidden">
+        <div className="flex-none flex items-center justify-center py-1 bg-amber-500 text-white text-xs font-semibold select-none">
+          Admin view — read only
+        </div>
+        <div className="flex-1 min-h-0">
+          {view}
+        </div>
+      </div>
+    )
   }
 
   return (

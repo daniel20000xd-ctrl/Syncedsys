@@ -1,9 +1,11 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
 import { getAdminClaudeBilling, getClaudeApiEnabled } from '@/app/actions'
 import { isAdminEmail } from '@/lib/admin'
 import ClaudeApiSwitch from '@/components/ClaudeApiSwitch'
+import GateRequests, { type GateRequest } from '@/components/GateRequests'
 
 function fmtUsd(n: number): string {
   if (n <= 0) return '$0.00'
@@ -20,12 +22,13 @@ export default async function AdminConsolePage() {
 
   const admin = createAdminClient()
 
-  // All users + all boards + Claude billing + kill-switch state in parallel.
-  const [users, { data: boards }, billing, claudeEnabled] = await Promise.all([
+  // All users + all boards + Claude billing + kill-switch state + gate requests in parallel.
+  const [users, { data: boards }, billing, claudeEnabled, { data: gateRequests }] = await Promise.all([
     listAllAuthUsers(admin),
     admin.from('boards').select('*').order('created_at', { ascending: true }),
     getAdminClaudeBilling(),
     getClaudeApiEnabled(),
+    admin.from('gate_requests').select('*').order('created_at', { ascending: false }),
   ])
 
   const totalOwed = billing.reduce((s, b) => s + b.owedUsd, 0)
@@ -103,6 +106,21 @@ export default async function AdminConsolePage() {
           )}
         </section>
 
+        {/* ── Access Requests ────────────────────────────────────────────── */}
+        <h2 className={sectionLabel}>Access Requests</h2>
+
+        <section className="bg-white rounded-xl shadow-sm mb-12 overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+            <h3 className="font-semibold text-gray-800">Gate requests</h3>
+            {(gateRequests ?? []).filter(r => r.status === 'pending').length > 0 && (
+              <span className="text-xs bg-amber-100 text-amber-700 font-medium px-2.5 py-1 rounded-full">
+                {(gateRequests ?? []).filter(r => r.status === 'pending').length} pending
+              </span>
+            )}
+          </div>
+          <GateRequests requests={(gateRequests ?? []) as GateRequest[]} />
+        </section>
+
         {/* ── Accounts & boards ──────────────────────────────────────────── */}
         <h2 className={sectionLabel}>Accounts &amp; boards</h2>
 
@@ -127,16 +145,18 @@ export default async function AdminConsolePage() {
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
                   {userBoards.map(board => (
-                    <div
+                    <Link
                       key={board.id}
-                      className="h-24 rounded-xl text-white text-sm font-semibold p-3 shadow-sm relative"
-                      style={{ backgroundColor: board.color }}
+                      href={`/board/${board.id}`}
+                      target="_blank"
+                      className="h-24 rounded-xl text-white text-sm font-semibold p-3 shadow-sm relative block hover:opacity-90 transition-opacity"
+                      style={{ backgroundColor: board.color ?? '#94a3b8' }}
                     >
                       {board.name}
                       <span className="absolute bottom-2 right-3 text-[10px] text-white/60 uppercase tracking-wider">
                         {board.mode ?? 'classic'}
                       </span>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               </section>

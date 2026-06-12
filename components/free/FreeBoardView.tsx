@@ -368,9 +368,10 @@ interface Props {
   onClose?: () => void
   initialInset?: { top: number; right: number; bottom: number; left: number }
   isAdmin?: boolean
+  readOnly?: boolean
 }
 
-function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [], onClose, initialInset, isAdmin = false }: Props) {
+function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialElements, initialSubBoards = [], onClose, initialInset, isAdmin = false, readOnly = false }: Props) {
   const router = useRouter()
   const { screenToFlowPosition, getViewport, setViewport, getIntersectingNodes, zoomIn, zoomOut, fitView } = useReactFlow()
   const nodesInitialized = useNodesInitialized()
@@ -2206,7 +2207,7 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         dragCountRef.current = Math.max(0, dragCountRef.current - 1)
         if (dragCountRef.current === 0) { setFileDragOver(false); setDropTarget(null) }
       }}
-      onDrop={onCanvasDrop}
+      onDrop={readOnly ? undefined : onCanvasDrop}
     >
       <ReactFlow
         nodes={nodes}
@@ -2240,8 +2241,8 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
         minZoom={0.05}
         maxZoom={4}
         deleteKeyCode="Delete"
-        nodesDraggable={tool === 'select' && !isLocked}
-        nodesConnectable={!isLocked}
+        nodesDraggable={!readOnly && tool === 'select' && !isLocked}
+        nodesConnectable={!readOnly && !isLocked}
         elementsSelectable={!isLocked}
         selectionOnDrag={allowMarqueeSelection && tool === 'select' && !isLocked}
         panOnDrag={
@@ -2413,17 +2414,21 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
 
       {/* Toolbar — rendered above the drawing overlay (z-20 > overlay z-10) so it stays clickable while drawing */}
       <div className="absolute top-3 right-3 z-20 bg-white rounded-lg shadow-md p-1 flex flex-col gap-0.5 items-center">
+        {!readOnly && (
+          <>
+            <div className="flex flex-col gap-0.5">
+              <button onClick={() => undo()} title="Undo (Ctrl+Z)" className="w-7 h-7 flex items-center justify-center rounded transition-colors text-gray-500 hover:bg-gray-100">
+                <Undo2 size={14} />
+              </button>
+              <button onClick={() => redo()} title="Redo (Ctrl+X)" className="w-7 h-7 flex items-center justify-center rounded transition-colors text-gray-500 hover:bg-gray-100">
+                <Redo2 size={14} />
+              </button>
+            </div>
+            <div className="w-full border-t border-gray-100 my-0.5" />
+          </>
+        )}
         <div className="flex flex-col gap-0.5">
-          <button onClick={() => undo()} title="Undo (Ctrl+Z)" className="w-7 h-7 flex items-center justify-center rounded transition-colors text-gray-500 hover:bg-gray-100">
-            <Undo2 size={14} />
-          </button>
-          <button onClick={() => redo()} title="Redo (Ctrl+X)" className="w-7 h-7 flex items-center justify-center rounded transition-colors text-gray-500 hover:bg-gray-100">
-            <Redo2 size={14} />
-          </button>
-        </div>
-        <div className="w-full border-t border-gray-100 my-0.5" />
-        <div className="flex flex-col gap-0.5">
-          {(['select', 'hand', 'draw', 'shape', 'text', 'portal', 'claude'] as Tool[]).map(t => {
+          {(readOnly ? (['select', 'hand'] as Tool[]) : (['select', 'hand', 'draw', 'shape', 'text', 'portal', 'claude'] as Tool[])).map(t => {
             const Icon = TOOL_ICONS[t]
             return (
               <button
