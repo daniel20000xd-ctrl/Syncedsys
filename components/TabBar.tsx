@@ -285,13 +285,17 @@ export default function TabBar({ boards: initialBoards, isAdmin = false }: { boa
           >
             <ChevronDown size={11} />
           </button>
-          <button
-            onClick={e => { e.preventDefault(); e.stopPropagation(); setPendingDelete(board) }}
-            className="p-0.5 rounded hover:bg-red-500/70 text-white/40 hover:text-white"
-            title="Delete tab"
-          >
-            <X size={11} />
-          </button>
+          {/* Database boards are deliberately harder to delete — no quick X.
+              Delete via the ⌄ menu → Board properties → Remove tab. */}
+          {board.mode !== 'database' && (
+            <button
+              onClick={e => { e.preventDefault(); e.stopPropagation(); setPendingDelete(board) }}
+              className="p-0.5 rounded hover:bg-red-500/70 text-white/40 hover:text-white"
+              title="Delete tab"
+            >
+              <X size={11} />
+            </button>
+          )}
         </div>
       </div>
     )
