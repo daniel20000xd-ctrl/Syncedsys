@@ -155,7 +155,9 @@ export default function BoardView({
         <h1 className="text-white font-bold text-lg">{board.name}</h1>
       </div>
 
-      <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} onDark />
+      {board.readme_enabled && (
+        <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} onDark />
+      )}
 
       {/* Lists */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden">

@@ -99,7 +99,9 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   if (board.mode === 'classic' || (board.mode as string) === 'free') {
     view = (
       <div className="flex flex-col h-full overflow-hidden">
-        <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} onDark />
+        {board.readme_enabled && (
+          <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} onDark />
+        )}
         <div className="flex-1 min-h-0">
           <FreeBoardView
             board={board}

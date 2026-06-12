@@ -3,9 +3,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone, Sparkles, Download, Database } from 'lucide-react'
+import { Check, Plus, Trash2, Lock, AlertTriangle, Smartphone, Sparkles, Download, Database, BookOpen } from 'lucide-react'
 import type { Board } from '@/lib/types'
-import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced } from '@/app/actions'
+import { updateBoard, createSubTab, layoutBoardGrid, setBoardSynced, setBoardReadmeEnabled } from '@/app/actions'
 import { boardExportFilename } from '@/lib/exportBoard'
 import { downloadBlob } from '@/lib/files'
 
@@ -35,6 +35,8 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
   const [saving, setSaving] = useState(false)
   // synced=true means included in iOS sync (default); false means excluded
   const [synced, setSynced] = useState(board.synced ?? true)
+  // README is opt-in (default off); not offered for database boards.
+  const [readmeEnabled, setReadmeEnabled] = useState(board.readme_enabled ?? false)
   const [meta, setMeta] = useState(board.meta ?? '')
   // Text and database tabs are mode-locked after creation.
   const currentMode = board.mode ?? 'classic'
@@ -73,11 +75,15 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
 
   async function handleSave() {
     const modeChanged = mode !== board.mode
+    const readmeChanged = readmeEnabled !== (board.readme_enabled ?? false)
     setSaving(true)
     try {
       // Save sync preference alongside other properties
       if (synced !== (board.synced ?? true)) {
         await setBoardSynced(board.id, synced)
+      }
+      if (readmeChanged) {
+        await setBoardReadmeEnabled(board.id, readmeEnabled)
       }
       const updated = await updateBoard(board.id, {
         name: name.trim() || board.name,
@@ -91,9 +97,9 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
         await layoutBoardGrid(board.id)
       }
       onUpdate(updated)
-      // A mode change swaps the whole board view (server component) — refresh to
-      // re-render with the right view and freshly-laid-out positions.
-      if (modeChanged) router.refresh()
+      // A mode change swaps the whole board view (server component); a README
+      // toggle adds/removes the strip — both need a refresh to re-render.
+      if (modeChanged || readmeChanged) router.refresh()
       onClose()
     } catch (err) {
       console.error('Failed to save board:', err)
@@ -267,6 +273,15 @@ export default function BoardPropertiesPanel({ board, anchorRect, onClose, onUpd
         className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm mb-1 focus:outline-none focus:border-blue-500"
       />
       <p className="text-[10px] text-gray-400 mb-3 text-right">{meta.length}/150</p>
+
+      {/* README opt-in — every mode except database */}
+      {currentMode !== 'database' && (
+        <label className="flex items-center gap-2 text-xs text-gray-600 mb-3 cursor-pointer select-none">
+          <input type="checkbox" checked={readmeEnabled} onChange={e => setReadmeEnabled(e.target.checked)} className="rounded" />
+          <BookOpen size={12} className="text-gray-400" />
+          Enable README
+        </label>
+      )}
 
       {/* iOS sync toggle */}
       <label className="flex items-center justify-between gap-2 mb-3 cursor-pointer select-none">

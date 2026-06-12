@@ -16,6 +16,7 @@ export type Board = {
   synced: boolean
   meta: string | null
   readme_md: string | null
+  readme_enabled: boolean
   created_at: string
 }
 

@@ -57,7 +57,9 @@ export default function TextBoardView({ board }: { board: Board }) {
           {saveStatus === 'saving' ? 'Saving…' : 'Saved'}
         </span>
       </div>
-      <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} />
+      {board.readme_enabled && (
+        <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} />
+      )}
       <textarea
         key={activeTab?.id}
         value={activeTab?.body ?? ''}

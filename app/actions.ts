@@ -282,6 +282,16 @@ export async function setBoardSynced(boardId: string, synced: boolean) {
   revalidatePath('/', 'layout')
 }
 
+// README is opt-in per board (off by default). Toggled from the board
+// properties panel; gates whether the BoardReadme strip renders.
+export async function setBoardReadmeEnabled(boardId: string, enabled: boolean) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+  await supabase.from('boards').update({ readme_enabled: enabled }).eq('id', boardId).eq('user_id', user.id)
+  revalidatePath('/', 'layout')
+}
+
 // Create a pending device link; returns the short pairing code to enter in the iOS app
 export async function createDeviceLink(name = 'iOS device') {
   const supabase = await createClient()

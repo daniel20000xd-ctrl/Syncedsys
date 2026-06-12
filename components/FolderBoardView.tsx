@@ -517,7 +517,9 @@ export default function FolderBoardView({
         />
       </div>
 
-      <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} />
+      {board.readme_enabled && (
+        <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} />
+      )}
 
       {/* Grid */}
       <div
