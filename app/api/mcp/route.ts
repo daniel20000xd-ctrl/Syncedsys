@@ -1071,6 +1071,138 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     return ok(data)
   })
 
+  server.registerTool('library_upsert_from_record', {
+    title: 'Promote research record to library',
+    description: 'Promote one enriched research-pipeline record (e.g. a Domstolsverket case from arv_testamente) into the personal legal library so it appears on the library board. Reads the record from the research satellite, maps it to a library_items legal_case, and upserts idempotently keyed on the case number (beteckning) — re-running never duplicates. Recommended: pass a holding-style Swedish summary ("Högsta domstolen fann att …") and the correct group; omit them to auto-derive. verified is false on insert and preserved on update.',
+    inputSchema: {
+      domain: z.string().describe('Research domain slug, e.g. "arv_testamente"'),
+      record_id: z.string().describe('Research record id (from research_search)'),
+      group: z.array(z.string()).optional().describe('Library group(s) / rättsområde — drives board grouping. Omit to auto-derive (boutredning/testamente/arvskifte/laglott/arv/arvskatt).'),
+      summary: z.string().optional().describe('Holding-style Swedish summary. Omit to reuse the research summary verbatim.'),
+      tags: z.array(z.string()).optional().describe('Flat library tags. Omit to derive from the structural tags + group.'),
+      verified: z.boolean().optional().describe('Mark verified. Default false on insert; preserved on update unless set.'),
+    },
+  }, async ({ domain, record_id, group, summary, tags, verified }) => {
+    if (!adminUserId) return fail('Library not configured (ADMIN_EMAIL missing or user not found)')
+
+    let record: Record<string, unknown>
+    try {
+      record = (await researchFetch(
+        `/api/research/${encodeURIComponent(domain)}/${encodeURIComponent(record_id)}`,
+      )) as Record<string, unknown>
+    } catch (e) {
+      return fail(e instanceof Error ? e.message : String(e))
+    }
+    if (!record || typeof record !== 'object') return fail('Research record not found')
+
+    const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+    const malnummer = str(record.malnummer)
+    const referat = str(record.referat)
+    const beteckning = malnummer || referat || str(record.external_id)
+    if (!beteckning) return fail('Record has no malnummer/referat/external_id to key on; cannot promote.')
+
+    const structuralTags = Array.isArray(record.structural_tags)
+      ? (record.structural_tags as Array<{ tag?: string; category?: string }>)
+      : []
+    const tagValues = structuralTags.map(t => str(t?.tag)).filter(Boolean)
+    const principer = structuralTags
+      .filter(t => t?.category === 'principle')
+      .map(t => str(t?.tag))
+      .filter(Boolean)
+    const lagrumRefs = Array.isArray(record.lagrum)
+      ? (record.lagrum as Array<{ referens?: string }>).map(l => str(l?.referens)).filter(Boolean)
+      : []
+
+    // Group is derived from the actual tag vocabulary + statute chapters, not the
+    // ÄB_* lagrum_area codes the original plan assumed (Phase 2 emits plain concept
+    // tags). Caller override via `group` is preferred when precision matters.
+    const deriveGroups = (): string[] => {
+      const hay = [...tagValues, ...lagrumRefs, str(record.title), str(record.summary)]
+        .join(' ')
+        .toLowerCase()
+      const hits = new Set<string>()
+      if (/boutredning|boutredningsman|bouppteckning|dödsbo|18 kap|19 kap/.test(hay)) hits.add('boutredning')
+      if (/testament|(?:9|10|11|12|13|14|15|16) kap[^.]*ärvdabalk/.test(hay)) hits.add('testamente')
+      if (/arvskifte|skiftesman|23 kap/.test(hay)) hits.add('arvskifte')
+      if (/laglott|bröstarvinge|7 kap/.test(hay)) hits.add('laglott')
+      if (/efterarv|3 kap/.test(hay)) hits.add('arv')
+      if (/arvsskatt|arvskatt|gåvoskatt|1941:416/.test(hay)) hits.add('arvskatt')
+      return hits.size ? [...hits] : ['(uncategorized)']
+    }
+
+    const groups = group?.length ? group : deriveGroups()
+    const finalTags = tags?.length
+      ? tags
+      : [...new Set([...groups.filter(g => g !== '(uncategorized)'), ...tagValues])]
+    const finalSummary = (summary && summary.trim()) || str(record.summary) || null
+    const title = str(record.title) || beteckning
+
+    const metadata = {
+      beteckning,
+      mal_nr: malnummer || null,
+      instans: str(record.domstol) || null,
+      datum: str(record.record_date) || null,
+      dokumenttyp: null as string | null,
+      lagrum: lagrumRefs,
+      principer,
+      rattsomrade: groups,
+      sokord: Array.isArray(record.sokord) ? record.sokord : [],
+      referat: referat || null,
+      source: 'research_pipeline',
+      research_domain: domain,
+      research_id: str(record.id),
+    }
+
+    // Idempotent upsert keyed on (user_id, beteckning) for non-deleted legal_cases,
+    // mirroring lib_beteckning_unique and the /api/library/ingest path.
+    const { data: existingRows } = await adminSupabase
+      .from('library_items')
+      .select('id, version, verified')
+      .eq('user_id', adminUserId)
+      .eq('type', 'legal_case')
+      .eq('deleted', false)
+      .filter('metadata->>beteckning', 'eq', beteckning)
+      .limit(1)
+    const existing = existingRows?.[0] as { id: string; version: number | null; verified: boolean } | undefined
+    const now = new Date().toISOString()
+
+    if (existing) {
+      const { error } = await adminSupabase
+        .from('library_items')
+        .update({
+          title,
+          summary: finalSummary,
+          tags: finalTags,
+          source_url: str(record.source_url) || null,
+          metadata,
+          verified: verified ?? existing.verified ?? false,
+          version: (existing.version ?? 1) + 1,
+          updated_at: now,
+        })
+        .eq('id', existing.id)
+      if (error) return fail(error.message)
+      return ok({ action: 'updated', id: existing.id, beteckning, title, group: groups, tags: finalTags })
+    }
+
+    const { data: insertedRow, error } = await adminSupabase
+      .from('library_items')
+      .insert({
+        user_id: adminUserId,
+        type: 'legal_case',
+        title,
+        summary: finalSummary,
+        tags: finalTags,
+        source_url: str(record.source_url) || null,
+        full_text: null,
+        metadata,
+        verified: verified ?? false,
+      })
+      .select('id')
+      .single()
+    if (error) return fail(error.message)
+    return ok({ action: 'inserted', id: insertedRow?.id, beteckning, title, group: groups, tags: finalTags })
+  })
+
   // ── Research satellite tools (i.syncedsys, over HTTP via researchFetch) ───────
   // These drive the two-phase research workflow against the i.syncedsys API:
   //   Phase 2 (enrich):  research_list_domains → research_search(phase2_status=pending)
