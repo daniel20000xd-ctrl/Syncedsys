@@ -14,6 +14,7 @@ import { collectEntries, readDroppedEntries, readPickedFolder, downloadTextFile,
 import { uploadPdf, uploadFile, extractPdfText, buildUploadTree } from '@/lib/pdf'
 import { folderUnitsStore } from '@/lib/folderUnitsStore'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
+import BoardReadme from './BoardReadme'
 
 const MODE_EMOJI: Record<string, string> = { classic: '🎨', trello: '🗂', text: '📝', folder: '📁' }
 const FILE_MIME = 'application/x-syncedsys-fileid'
@@ -515,6 +516,8 @@ export default function FolderBoardView({
           onChange={onFolderPicked}
         />
       </div>
+
+      <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} />
 
       {/* Grid */}
       <div

@@ -18,6 +18,7 @@ import { createList, reorderCards } from '@/app/actions'
 import KanbanList from './KanbanList'
 import CardItem from './CardItem'
 import { Plus } from 'lucide-react'
+import BoardReadme from './BoardReadme'
 
 export default function BoardView({
   board,
@@ -153,6 +154,8 @@ export default function BoardView({
       <div className="px-4 pt-3 pb-1 bg-black/10">
         <h1 className="text-white font-bold text-lg">{board.name}</h1>
       </div>
+
+      <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} onDark />
 
       {/* Lists */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden">

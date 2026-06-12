@@ -46,6 +46,7 @@ const TextBoardView = dynamic(() => import('@/components/TextBoardView'))
 const FolderBoardView = dynamic(() => import('@/components/FolderBoardView'))
 const DatabaseBoardViewWrapper = dynamic(() => import('@/components/DatabaseBoardViewWrapper'))
 const ClaudeAgent = dynamic(() => import('@/components/claude/ClaudeAgent'))
+const BoardReadme = dynamic(() => import('@/components/BoardReadme'))
 
 export default async function BoardPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -97,15 +98,20 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   let view
   if (board.mode === 'classic' || (board.mode as string) === 'free') {
     view = (
-      <FreeBoardView
-        board={board}
-        initialLists={lists}
-        initialCards={cards}
-        initialEdges={edges}
-        initialElements={elements}
-        initialSubBoards={subBoards}
-        isAdmin={isAdmin}
-      />
+      <div className="flex flex-col h-full overflow-hidden">
+        <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} onDark />
+        <div className="flex-1 min-h-0">
+          <FreeBoardView
+            board={board}
+            initialLists={lists}
+            initialCards={cards}
+            initialEdges={edges}
+            initialElements={elements}
+            initialSubBoards={subBoards}
+            isAdmin={isAdmin}
+          />
+        </div>
+      </div>
     )
   } else if (board.mode === 'text') {
     view = <BoardDesktop board={board}><TextBoardView board={board} /></BoardDesktop>

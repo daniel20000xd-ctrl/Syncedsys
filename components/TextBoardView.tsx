@@ -4,6 +4,7 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import type { Board } from '@/lib/types'
 import { updateBoardContent } from '@/app/actions'
 import { parseDocTabs, serializeDocTabs, newDocTab, type DocTabs } from '@/lib/doctabs'
+import BoardReadme from './BoardReadme'
 import { docTabsStore } from '@/lib/docTabsStore'
 
 export default function TextBoardView({ board }: { board: Board }) {
@@ -56,6 +57,7 @@ export default function TextBoardView({ board }: { board: Board }) {
           {saveStatus === 'saving' ? 'Saving…' : 'Saved'}
         </span>
       </div>
+      <BoardReadme boardId={board.id} initialReadme={board.readme_md ?? null} />
       <textarea
         key={activeTab?.id}
         value={activeTab?.body ?? ''}

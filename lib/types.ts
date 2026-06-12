@@ -15,6 +15,7 @@ export type Board = {
   free_y: number
   synced: boolean
   meta: string | null
+  readme_md: string | null
   created_at: string
 }
 
