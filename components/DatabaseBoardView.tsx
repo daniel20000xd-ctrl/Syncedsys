@@ -7,6 +7,7 @@ import {
   Search, ChevronDown, X, Plus, ChevronRight, Loader2,
 } from 'lucide-react'
 import { updateLibraryItem } from '@/app/actions'
+import BoardReadme from './BoardReadme'
 
 type LibraryItemType = 'legal_case' | 'paper'
 
@@ -339,7 +340,7 @@ function TagDropdown({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function DatabaseBoardView({ boardId: _boardId, config }: { boardId: string; config: string }) {
+export default function DatabaseBoardView({ boardId, config, initialReadme }: { boardId: string; config: string; initialReadme: string | null }) {
   // Parse config — only 'library_items' is a valid source for now.
   const _source = (() => {
     try { return (JSON.parse(config || '{}') as { source?: string }).source || 'library_items' } catch { return 'library_items' }
@@ -503,6 +504,9 @@ export default function DatabaseBoardView({ boardId: _boardId, config }: { board
           {loading ? '…' : hasFilters ? `${items.length} matching` : `${items.length} items`}
         </span>
       </div>
+
+      {/* README — standard on database boards (not opt-in like other modes) */}
+      <BoardReadme boardId={boardId} initialReadme={initialReadme} onDark />
 
       {/* Table */}
       <div className="flex-1 overflow-auto">

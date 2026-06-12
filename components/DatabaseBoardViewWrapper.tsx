@@ -7,6 +7,6 @@ const DatabaseBoardView = dynamic(
   { ssr: false },
 )
 
-export default function DatabaseBoardViewWrapper(props: { boardId: string; config: string }) {
+export default function DatabaseBoardViewWrapper(props: { boardId: string; config: string; initialReadme: string | null }) {
   return <DatabaseBoardView {...props} />
 }

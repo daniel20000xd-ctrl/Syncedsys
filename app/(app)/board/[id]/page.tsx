@@ -132,7 +132,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
     view = <BoardDesktop board={board}><FolderBoardView board={board} initialFolders={subBoards} initialFiles={fileElements} /></BoardDesktop>
   } else if (board.mode === 'database') {
     view = isAdmin
-      ? <BoardDesktop board={board}><DatabaseBoardViewWrapper boardId={board.id} config={board.content ?? ''} /></BoardDesktop>
+      ? <BoardDesktop board={board}><DatabaseBoardViewWrapper boardId={board.id} config={board.content ?? ''} initialReadme={board.readme_md ?? null} /></BoardDesktop>
       : <BoardDesktop board={board}><div className="flex-1 flex items-center justify-center text-sm text-gray-400">Not available</div></BoardDesktop>
   } else {
     view = <BoardDesktop board={board}><BoardView board={board} initialLists={lists} initialCards={cards} /></BoardDesktop>
