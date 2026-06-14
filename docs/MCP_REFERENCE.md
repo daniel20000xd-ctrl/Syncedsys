@@ -601,23 +601,23 @@ These 15 MCP tools manage the `boards` table and its descendant entities for the
 
 ### update_board_readme
 
-**Purpose:** Set/overwrite a board's README / operating instructions — the `readme_md` field surfaced by the in-app README box and read back by `get_board_readme`. Distinct from `update_board_content`, which writes the board **body** (`content`: text/canvas bodies, database config).
+**Purpose:** Write/replace a board's README / operating instructions — the `readme_md` field surfaced by the in-app README box and read back by `get_board_readme` (write/read are symmetric). Distinct from `update_board_content`, which writes the board **body** (`content`: text/canvas bodies, database config). Whole-document overwrite; editing is read-modify-write by the caller.
 
 **Parameters**
 
 | name | type | required | default | meaning |
 |------|------|----------|---------|---------|
-| `boardId` | string | yes | — | Board to update. |
-| `readme` | string | yes | — | New full README markdown (overwrites, not appends). |
+| `board_id` | string | yes | — | Board to update (`.describe('Board ID')`; snake_case to match `get_board_readme`). |
+| `readme` | string | yes | — | Full README markdown; overwrites the whole readme (empty string clears it). |
 
 **Underlying action** `updateBoardReadme(boardId, readme)` (actions.ts):
 1. Requires auth.
-2. Updates `boards` → `{ readme_md: readme }`, scoped by `id`+`user_id`.
+2. Updates `boards` → `{ readme_md: readme }`, scoped by `id`+`user_id`, with `.select('id,name').single()`. Zero rows (missing/unowned board) → throws `Board not found or access denied.`
 3. **No `revalidatePath`** (mirrors `updateBoardContent`).
 
-**Returns:** void → `{ success: true }`.
-**Side effects:** overwrites `readme_md` on one `boards` row; no revalidation. Snapshots the board; `affectedIds=[boardId]`.
-**Logging gotcha:** `route.ts` logs only `{ boardId }` to `claude_actions` — the actual `readme` text is intentionally **not** recorded in the action log.
+**Returns:** `ok` of `{ boardId, boardName, updated: true, readme }` (output keys camelCase, mirroring `get_board_readme`).
+**Side effects:** overwrites `readme_md` on one `boards` row (**never** `content`); no revalidation. Snapshots the board; `affectedIds=[board_id]`.
+**Logging gotcha:** `route.ts` logs only `{ board_id }` to `claude_actions` — the actual `readme` text is intentionally **not** recorded in the action log.
 
 ---
 

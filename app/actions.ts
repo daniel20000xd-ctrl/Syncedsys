@@ -467,13 +467,17 @@ export async function updateBoardContent(boardId: string, content: string) {
   await supabase.from('boards').update({ content }).eq('id', boardId).eq('user_id', user.id)
 }
 
-// Writes the board's README (readme_md) — the same field the UI README box uses.
-// Distinct from updateBoardContent, which writes the board body (text/canvas/db config).
+// Writes the board's README (readme_md) — the same field the UI README box uses and
+// get_board_readme reads. Distinct from updateBoardContent (board body: text/canvas/db config).
 export async function updateBoardReadme(boardId: string, readme: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
-  await supabase.from('boards').update({ readme_md: readme }).eq('id', boardId).eq('user_id', user.id)
+  const { data, error } = await supabase.from('boards')
+    .update({ readme_md: readme }).eq('id', boardId).eq('user_id', user.id)
+    .select('id,name').single()
+  if (error || !data) throw new Error('Board not found or access denied.')
+  return { boardId: data.id, boardName: data.name, updated: true as const, readme }
 }
 
 export async function createSubTab(parentBoardId: string, name: string, color: string, mode: 'classic' | 'trello' | 'text' | 'folder' | 'database' = 'classic') {

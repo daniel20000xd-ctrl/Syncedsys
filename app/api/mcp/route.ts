@@ -339,12 +339,12 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 
   server.registerTool('update_board_readme', {
     title: 'Update board README',
-    description: 'Set/overwrite a board\'s README / operating instructions (writes the readme_md field the UI README box uses — NOT the board body). Use this to give a board operating instructions an agent should read first via get_board_readme. Keywords: readme, instructions, set readme, board context, operating instructions, guide, policy.',
-    inputSchema: { boardId: z.string(), readme: z.string() },
-  }, ({ boardId, readme }) => wrapWrite(
-    'update_board_readme', { boardId },
-    () => updateBoardReadme(boardId, readme),
-    { entityType: 'board', entityId: boardId },
+    description: 'Write or replace a board\'s README / operating instructions (the readme_md field — the same one get_board_readme reads and the UI README box shows). Overwrites the whole readme. To edit: read with get_board_readme, modify, then write the full text back. Keywords: write readme, edit readme, update readme, set board instructions, update operating instructions.',
+    inputSchema: { board_id: z.string().describe('Board ID'), readme: z.string().describe('Full README markdown; overwrites the whole readme (empty string clears it)') },
+  }, ({ board_id, readme }) => wrapWrite(
+    'update_board_readme', { board_id },
+    () => updateBoardReadme(board_id, readme),
+    { entityType: 'board', entityId: board_id },
   ))
 
   server.registerTool('create_sub_tab', {
