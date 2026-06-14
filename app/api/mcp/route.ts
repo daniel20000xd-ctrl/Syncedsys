@@ -17,7 +17,7 @@ import { tryResolveAnthropicKey } from '@/lib/claude/key'
 import { recordClaudeUsage } from '@/lib/claude/usage'
 import { claudeGate } from '@/lib/claude/gate'
 import {
-  createBoard, createGroup, moveTab, updateBoardFreePosition, updateBoardContent,
+  createBoard, createGroup, moveTab, updateBoardFreePosition, updateBoardContent, updateBoardReadme,
   createSubTab, deleteBoard, renameBoard, updateBoard, layoutBoardGrid, setBoardSynced,
   moveBoardToParent, copyBoardInto, ensureMirrorPortal, importFolderTree,
   createList, deleteList, renameList, setListWidget, setListDeadline, setListHidden, updateListPosition,
@@ -173,7 +173,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     inputSchema: { board_id: z.string().describe('Board ID') },
   }, async ({ board_id }) => {
     const { data: board } = await supabase.from('boards')
-      .select('id,name,mode,meta,content,deadline').eq('id', board_id).eq('user_id', userId).maybeSingle()
+      .select('id,name,mode,meta,content,deadline,readme_md').eq('id', board_id).eq('user_id', userId).maybeSingle()
     if (!board) return fail('Board not found or access denied.')
     const { data: lists } = await supabase.from('lists')
       .select('id,name,position,deadline,hidden').eq('board_id', board_id).order('position')
@@ -193,6 +193,14 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     lines.push(`Board: "${board.name}" [mode=${board.mode}, id=${board.id}]`)
     if (board.meta) lines.push(`Description: ${board.meta}`)
     if (board.deadline) lines.push(`Deadline: ${board.deadline}`)
+    // README pointer — surfaced up front (full text lives in get_board_readme to keep this cheap).
+    const readme = (board.readme_md ?? '').trim()
+    lines.push(`README: ${readme ? 'yes' : 'none'}`)
+    if (readme) {
+      const firstLine = readme.split('\n')[0].replace(/^#+\s*/, '')
+      lines.push(`README preview: ${firstLine.length > 120 ? firstLine.slice(0, 120) + '…' : firstLine}`)
+      lines.push('This board has operating instructions. Call get_board_readme(board_id) and follow them before acting on this board.')
+    }
     lines.push('')
     if (listRows.length) {
       lines.push('## Lists')
@@ -234,6 +242,18 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
       }
     }
     return ok(lines.join('\n'))
+  })
+
+  server.registerTool('get_board_readme', {
+    title: 'Get board README',
+    description: 'Read a board\'s README / operating instructions WITHOUT loading the whole board. Returns only the board\'s readme text. Call this before acting on a board that has operating instructions. Cheaper than get_board_content. Keywords: readme, instructions, board context, operating instructions, how to operate, guide, policy.',
+    inputSchema: { board_id: z.string().describe('Board ID') },
+  }, async ({ board_id }) => {
+    const { data: board } = await supabase.from('boards')
+      .select('id,name,readme_md').eq('id', board_id).eq('user_id', userId).maybeSingle()
+    if (!board) return fail('Board not found or access denied.')
+    const readme = (board.readme_md ?? '').trim()
+    return ok({ boardId: board.id, boardName: board.name, hasReadme: readme.length > 0, readme })
   })
 
   server.registerTool('suggest_board_meta', {
@@ -314,6 +334,16 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
   }, ({ boardId, content }) => wrapWrite(
     'update_board_content', { boardId },
     () => updateBoardContent(boardId, content),
+    { entityType: 'board', entityId: boardId },
+  ))
+
+  server.registerTool('update_board_readme', {
+    title: 'Update board README',
+    description: 'Set/overwrite a board\'s README / operating instructions (writes the readme_md field the UI README box uses — NOT the board body). Use this to give a board operating instructions an agent should read first via get_board_readme. Keywords: readme, instructions, set readme, board context, operating instructions, guide, policy.',
+    inputSchema: { boardId: z.string(), readme: z.string() },
+  }, ({ boardId, readme }) => wrapWrite(
+    'update_board_readme', { boardId },
+    () => updateBoardReadme(boardId, readme),
     { entityType: 'board', entityId: boardId },
   ))
 

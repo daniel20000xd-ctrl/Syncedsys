@@ -250,7 +250,7 @@ Notably the snapshot and log run **before** the mutation, and both are best-effo
 - Wrapped in `try/catch` — non-fatal. Also runs on the token-scoped client, so the row is owned by and visible only to the user under RLS.
 - Purpose: an append-only audit trail of every write the MCP/Claude performed on the user's behalf.
 
-**Read-only tools** (`get_boards_context`, `find_relevant_boards`, `get_board_content`, `suggest_board_meta`, `get_pdf_url`, `get_claude_status`, `get_stocks_enabled`) bypass `wrapWrite` entirely — they neither snapshot nor log.
+**Read-only tools** (`get_boards_context`, `find_relevant_boards`, `get_board_content`, `get_board_readme`, `suggest_board_meta`, `get_pdf_url`, `get_claude_status`, `get_stocks_enabled`) bypass `wrapWrite` entirely — they neither snapshot nor log.
 
 ---
 
@@ -293,7 +293,7 @@ Reference for the read-only / AI tools of the Syncedsys MCP server. Tool registr
 ## Shared context (applies to all tools below)
 
 - **Auth / user scoping.** The route handler (`handle`, route.ts:953) calls `resolveMcpAuth(req)` (`lib/mcpAuth.ts`). Two auth paths: a `Bearer sk_ssys_…` personal access token (looked up via the service role in `mcp_tokens` by `sha256Hex(token)`, rate-limited to 120 req/60s per token, then a short-lived user JWT is minted via `mintSupabaseUserJwt`), or a same-origin Supabase cookie session. Either way it yields `{ userId, accessToken }`. The whole MCP exchange then runs inside `supabaseAuthContext.run({ accessToken }, …)`, so every `createClient()` inside a server action is scoped to that user and **RLS applies**. `userId` passed into `buildServer` is the server-derived owner — never client input.
-- **RLS is the real guard.** These read tools do their own `.eq('user_id', userId)` / `.eq('user_id', user.id)` filtering on top of RLS. `get_board_content` and `get_pdf_url` additionally do explicit ownership checks.
+- **RLS is the real guard.** These read tools do their own `.eq('user_id', userId)` / `.eq('user_id', user.id)` filtering on top of RLS. `get_board_content`, `get_board_readme`, and `get_pdf_url` additionally do explicit ownership checks.
 - **No `wrapWrite`.** None of these tools are write tools, so none call `snapshotBefore` / `logAction`, and none write to `mcp_action_log` / `mcp_snapshots`. The only DB writes any of them cause are append-only rows in the `claude_usage` ledger (the two Haiku-backed tools), written via the **service-role admin client** (see usage note below).
 - **Return wrapping.** `ok(data)` wraps a result as MCP text content (`JSON.stringify` with 2-space indent unless already a string); `fail(msg)` returns `{ isError: true }` text; `wrap(fn)` runs `fn`, returns `ok(result ?? { success: true })`, and converts thrown errors to `fail(error.message)`.
 
@@ -350,7 +350,7 @@ Reference for the read-only / AI tools of the Syncedsys MCP server. Tool registr
 
 ### `get_board_content`
 
-**Purpose:** Returns the full content of one board — lists, cards, text content, and canvas elements — as a formatted text dump.
+**Purpose:** Returns the full content of one board — a README pointer, lists, cards, text content, and canvas elements — as a formatted text dump.
 
 **Parameters:**
 | name | type | required | default | meaning |
@@ -358,11 +358,12 @@ Reference for the read-only / AI tools of the Syncedsys MCP server. Tool registr
 | `board_id` | string | yes | — | Board ID (`.describe('Board ID')`). |
 
 **What it does (route.ts:148–206):**
-1. Loads the board: `boards` select `id,name,mode,meta,content,deadline`, filtered `.eq('id', board_id).eq('user_id', userId).maybeSingle()`. If not found / not owned → `fail('Board not found or access denied.')` (explicit ownership check, redundant with RLS).
+1. Loads the board: `boards` select `id,name,mode,meta,content,deadline,readme_md`, filtered `.eq('id', board_id).eq('user_id', userId).maybeSingle()`. If not found / not owned → `fail('Board not found or access denied.')` (explicit ownership check, redundant with RLS).
 2. Loads `lists` (`id,name,position,deadline,hidden`) for the board, ordered by `position`.
 3. In parallel: loads `cards` (`id,list_id,title,description,done,done_at,deadline,position`) for those list IDs ordered by `position` (skipped with empty data when there are no lists), and `board_elements` (`id,type,data,deadline`) for the board.
 4. Groups cards by `list_id` and renders a Markdown-ish text report:
    - Header line: `Board: "<name>" [mode=<mode>, id=<id>]`; optional `Description:` (meta) and `Deadline:` lines.
+   - README pointer (rendered before `## Lists`): a `README: yes|none` line; when present, a `README preview:` line (first line of `readme_md`, stripped of leading `#`, capped ~120 chars) and the notice `This board has operating instructions. Call get_board_readme(board_id) and follow them before acting on this board.`. The **full** readme text is not included here — fetch it via `get_board_readme`.
    - `## Lists` section: each list as `### <name> (due …)` plus `[hidden]` flag; each card prefixed `✓`/`·` with title, optional `[due YYYY-MM-DD]`, and `(done YYYY-MM-DD)`; card description indented on the next line; empty lists show `(empty)`.
    - If `mode === 'text'` and `content` is non-empty: a `## Content` section with `board.content` **truncated to 3000 chars**.
    - `## Canvas elements` section: one line per `board_elements` row, `[<id>] <label>`, with a type-specific label. Notably `text` is sliced to 200 chars, `pdf` includes name, page count, and inline extracted text **sliced to 2000 chars**, `portal` shows `viewerKind` or `targetBoardId`, `folderlink` shows name + target. Optional `[due …]`.
@@ -372,6 +373,27 @@ Reference for the read-only / AI tools of the Syncedsys MCP server. Tool registr
 **Side effects:** None — read-only `SELECT`s on `boards`, `lists`, `cards`, `board_elements`. No `revalidatePath`. No Anthropic key required.
 
 **Gotchas / caveats:** Output is lossy by design — board `content` capped at 3000 chars, element `text` at 200, PDF inline text at 2000. PDF *binary* is not returned here (use `get_pdf_url` for the file). Truncation means very long boards won't round-trip fully through this tool.
+
+---
+
+### `get_board_readme`
+
+**Purpose:** Read **only** a board's README / operating instructions (the `readme_md` field) — no lists, cards, or canvas elements. A cheap alternative to `get_board_content` for boards that carry their own operating instructions an agent should read first.
+
+**Parameters:**
+| name | type | required | default | meaning |
+|------|------|----------|---------|---------|
+| `board_id` | string | yes | — | Board ID (`.describe('Board ID')`). |
+
+**What it does:**
+1. Loads the board: `boards` select `id,name,readme_md`, filtered `.eq('id', board_id).eq('user_id', userId).maybeSingle()`. If not found / not owned → `fail('Board not found or access denied.')` (same ownership check as `get_board_content`).
+2. Computes `readme = (readme_md ?? '').trim()`.
+
+**Returns:** `ok` of a JSON object `{ boardId, boardName, hasReadme, readme }`. Empty/missing readme → `hasReadme: false`, `readme: ""`.
+
+**Side effects:** None — a single read-only `SELECT` on `boards` (no lists/cards/elements). No `revalidatePath`. No Anthropic key required.
+
+**Note:** `readme_md` is the same field the in-app README box and `update_board_readme` write — distinct from `content` (board body / database config), which `update_board_content` writes.
 
 ---
 
@@ -432,6 +454,7 @@ Reference for the read-only / AI tools of the Syncedsys MCP server. Tool registr
 | `get_boards_context` | No | No |
 | `find_relevant_boards` | **Yes** (Haiku) | **Yes** (platform key only) |
 | `get_board_content` | No | No |
+| `get_board_readme` | No | No |
 | `suggest_board_meta` | **Yes** (Haiku) | **Yes** (platform key only) |
 | `get_pdf_url` | No | No |
 
@@ -573,6 +596,28 @@ These 15 MCP tools manage the `boards` table and its descendant entities for the
 **Returns:** void → `{ success: true }`.
 **Side effects:** overwrites `content` on one `boards` row; no revalidation. Snapshots the board; `affectedIds=[boardId]`.
 **Logging gotcha:** `route.ts` logs only `{ boardId }` to `claude_actions` — the actual `content` is intentionally **not** recorded in the action log.
+
+---
+
+### update_board_readme
+
+**Purpose:** Set/overwrite a board's README / operating instructions — the `readme_md` field surfaced by the in-app README box and read back by `get_board_readme`. Distinct from `update_board_content`, which writes the board **body** (`content`: text/canvas bodies, database config).
+
+**Parameters**
+
+| name | type | required | default | meaning |
+|------|------|----------|---------|---------|
+| `boardId` | string | yes | — | Board to update. |
+| `readme` | string | yes | — | New full README markdown (overwrites, not appends). |
+
+**Underlying action** `updateBoardReadme(boardId, readme)` (actions.ts):
+1. Requires auth.
+2. Updates `boards` → `{ readme_md: readme }`, scoped by `id`+`user_id`.
+3. **No `revalidatePath`** (mirrors `updateBoardContent`).
+
+**Returns:** void → `{ success: true }`.
+**Side effects:** overwrites `readme_md` on one `boards` row; no revalidation. Snapshots the board; `affectedIds=[boardId]`.
+**Logging gotcha:** `route.ts` logs only `{ boardId }` to `claude_actions` — the actual `readme` text is intentionally **not** recorded in the action log.
 
 ---
 
