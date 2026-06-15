@@ -11,7 +11,7 @@ import { claudeGate } from '@/lib/claude/gate'
 const MODEL = 'claude-sonnet-4-5-20250929'
 const MAX_TURNS = 8 // safety bound on the agentic tool loop
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string }
+type ChatMessage = { role: 'user' | 'assistant'; content: string | Anthropic.ContentBlockParam[] }
 
 function sse(obj: unknown) {
   return new TextEncoder().encode(JSON.stringify(obj) + '\n')
@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
   let body: { boardId?: string; messages?: ChatMessage[] }
   try { body = await req.json() } catch { return new Response(JSON.stringify({ error: 'Bad request' }), { status: 400 }) }
   const boardId = body.boardId
-  const messages = (body.messages ?? []).filter(m => m.role && typeof m.content === 'string')
+  const messages = (body.messages ?? []).filter(m => m.role && (typeof m.content === 'string' || Array.isArray(m.content)))
   if (!boardId || messages.length === 0) return new Response(JSON.stringify({ error: 'boardId and messages required' }), { status: 400 })
 
   // Resolve which key this request runs on: the user's own key if they've saved

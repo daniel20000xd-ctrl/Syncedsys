@@ -20,6 +20,28 @@ const TOOL_LABEL: Record<string, string> = {
   rename_board: 'Renaming…',
 }
 
+type ApiPart = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'; data: string } }
+type ApiMsg  = { role: 'user' | 'assistant'; content: string | ApiPart[] }
+
+async function compressImage(blob: Blob, maxPx = 1024, quality = 0.85): Promise<Blob> {
+  return new Promise(resolve => {
+    const objectUrl = URL.createObjectURL(blob)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+      let { width, height } = img
+      if (width <= maxPx && height <= maxPx && blob.size <= 1 * 1024 * 1024) { resolve(blob); return }
+      const scale = Math.min(maxPx / width, maxPx / height, 1)
+      width = Math.round(width * scale); height = Math.round(height * scale)
+      const cvs = document.createElement('canvas')
+      cvs.width = width; cvs.height = height
+      cvs.getContext('2d')!.drawImage(img, 0, 0, width, height)
+      cvs.toBlob(r => resolve(r ?? blob), 'image/jpeg', quality)
+    }
+    img.src = objectUrl
+  })
+}
+
 // ── Attachment chip ────────────────────────────────────────────────────────────
 function AttachmentChip({ a, onRemove }: { a: ChatAttachment; onRemove: () => void }) {
   return (
@@ -38,7 +60,7 @@ function AttachmentChip({ a, onRemove }: { a: ChatAttachment; onRemove: () => vo
       <div className="flex flex-col min-w-0 py-1">
         <span className="text-[12px] font-medium text-[#e8e3db] truncate leading-tight">{a.name}</span>
         <span className="text-[10px] text-[#7a7570] uppercase tracking-wide leading-tight">
-          {a.kind === 'pdf' ? 'PDF' : 'Text file'}
+          {a.kind === 'pdf' ? 'PDF' : a.kind === 'image' ? 'Image' : 'Text file'}
         </span>
       </div>
       {/* Remove button */}
@@ -94,23 +116,32 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
     setError(null)
     setInput('')
 
-    // Build the full message content: attachment blocks first, then user text.
-    const attachmentBlocks = attachments.map(a =>
-      `[Attached file: ${a.name}]\n${a.content || '(no extractable text)'}`
-    ).join('\n\n---\n\n')
-    const fullContent = attachmentBlocks
-      ? (text ? `${attachmentBlocks}\n\n---\n\n${text}` : attachmentBlocks)
-      : text
+    // Build the full message content for the API — images as vision blocks, text/pdf as text blocks.
+    const parts: ApiPart[] = []
+    for (const a of attachments) {
+      if (a.kind === 'image' && a.dataUrl) {
+        const base64 = a.dataUrl.split(',')[1] ?? ''
+        const mt = (a.mediaType ?? 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+        parts.push({ type: 'image', source: { type: 'base64', media_type: mt, data: base64 } })
+      } else {
+        parts.push({ type: 'text', text: `[Attached file: ${a.name}]\n${a.content || '(no extractable text)'}` })
+      }
+    }
+    if (text) parts.push({ type: 'text', text })
+    const fullContent: string | ApiPart[] =
+      parts.length === 0 ? text :
+      parts.length === 1 && parts[0].type === 'text' ? (parts[0] as { type: 'text'; text: string }).text :
+      parts
     setAttachments([])
 
     // The bubble shown to the user only shows the typed text (+ chip count for attachments).
     const userBubbleText = attachments.length > 0
       ? (text
-          ? `📎 ${attachments.length} file${attachments.length > 1 ? 's' : ''} attached\n\n${text}`
-          : `📎 ${attachments.length} file${attachments.length > 1 ? 's' : ''} attached`)
+          ? `📎 ${attachments.length} item${attachments.length > 1 ? 's' : ''} attached\n\n${text}`
+          : `📎 ${attachments.length} item${attachments.length > 1 ? 's' : ''} attached`)
       : text
 
-    const next: Msg[] = [...messages, { role: 'user', content: fullContent }]
+    const next: ApiMsg[] = [...(messages as ApiMsg[]), { role: 'user', content: fullContent }]
     // Show friendly version in the UI but send full content to the API
     setMessages(prev => [...prev, { role: 'user', content: userBubbleText }])
     setMessages(m => [...m, { role: 'assistant', content: '' }])
@@ -232,6 +263,22 @@ export default function ClaudeChat({ boardId, nodeId }: { boardId: string; nodeI
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
             onPointerDown={e => e.stopPropagation()}
+            onPaste={async e => {
+              let raw: File | null = null
+              const imageItem = Array.from(e.clipboardData?.items ?? []).find(i => i.type.startsWith('image/'))
+              if (imageItem) raw = imageItem.getAsFile()
+              if (!raw) raw = Array.from(e.clipboardData?.files ?? []).find(f => f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(f.name)) ?? null
+              if (!raw) return
+              e.preventDefault()
+              const file = raw
+              const blob = await compressImage(file)
+              const reader = new FileReader()
+              reader.onload = () => {
+                const dataUrl = reader.result as string
+                setAttachments(prev => [...prev, { id: crypto.randomUUID(), name: file.name || 'pasted-image.jpg', content: '', kind: 'image', thumbnail: dataUrl, dataUrl, mediaType: blob.type || 'image/jpeg' }])
+              }
+              reader.readAsDataURL(blob)
+            }}
             placeholder={attachments.length > 0 ? 'Add a message, or just send…' : 'Ask or instruct…'}
             rows={1}
             className="nodrag flex-1 resize-none bg-[#3d3d3a] text-[#F0EEE6] text-[15px] rounded-xl px-3.5 py-2.5 focus:outline-none focus:ring-1 focus:ring-[#D97757]/60 placeholder:text-[#F0EEE6]/35 max-h-28"

@@ -128,7 +128,7 @@ export default async function BoardPage({ params }: { params: Promise<{ id: stri
   } else if (board.mode === 'text') {
     view = <BoardDesktop board={board}><TextBoardView board={board} /></BoardDesktop>
   } else if (board.mode === 'folder') {
-    const fileElements = elements.filter(e => e.type === 'textfile' || e.type === 'pdf' || e.type === 'file')
+    const fileElements = elements.filter(e => e.type === 'textfile' || e.type === 'pdf' || e.type === 'file' || e.type === 'image')
     view = <BoardDesktop board={board}><FolderBoardView board={board} initialFolders={subBoards} initialFiles={fileElements} /></BoardDesktop>
   } else if (board.mode === 'database') {
     view = isAdmin

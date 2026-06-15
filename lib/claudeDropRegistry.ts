@@ -4,9 +4,11 @@
 export type ChatAttachment = {
   id: string
   name: string
-  content: string          // extracted text (PDF) or raw content (text file)
-  kind: 'pdf' | 'text'
-  thumbnail?: string       // base-64 JPEG data-URL of page 1 (PDFs only)
+  content: string          // extracted text (PDF/text) or '' for images
+  kind: 'pdf' | 'text' | 'image'
+  thumbnail?: string       // base-64 JPEG data-URL (PDFs page 1; full image for image kind)
+  dataUrl?: string         // full base-64 data-URL (image kind only)
+  mediaType?: string       // MIME type for images, e.g. 'image/jpeg'
 }
 
 type InjectFn = (attachment: ChatAttachment) => void
