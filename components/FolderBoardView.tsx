@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createPortal } from 'react-dom'
-import { Folder, FolderPlus, FileText, FileType, File as FileIcon, ArrowLeft, Trash2, X, Save, Download, ChevronDown, Upload } from 'lucide-react'
+import { Folder, FolderPlus, FileText, FileType, File as FileIcon, Image as ImageIcon, ArrowLeft, Trash2, X, Save, Download, ChevronDown, Upload } from 'lucide-react'
 import type { Board, BoardElement } from '@/lib/types'
 import {
   createSubTab, deleteBoard, createTextFile, updateTextFile, deleteElement,
@@ -295,6 +295,58 @@ export default function FolderBoardView({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [selected, editing, folders, files])
+
+  // ── Paste image from clipboard (Ctrl+V / Cmd+V) ──────────────────────────────
+
+  useEffect(() => {
+    async function compressBlob(blob: Blob, maxPx = 2000, quality = 0.85): Promise<Blob> {
+      return new Promise(resolve => {
+        const objectUrl = URL.createObjectURL(blob)
+        const img = new Image()
+        img.onload = () => {
+          URL.revokeObjectURL(objectUrl)
+          let { width, height } = img
+          if (width <= maxPx && height <= maxPx && blob.size <= 2 * 1024 * 1024) { resolve(blob); return }
+          const scale = Math.min(maxPx / width, maxPx / height, 1)
+          width = Math.round(width * scale); height = Math.round(height * scale)
+          const cvs = document.createElement('canvas')
+          cvs.width = width; cvs.height = height
+          cvs.getContext('2d')!.drawImage(img, 0, 0, width, height)
+          cvs.toBlob(result => resolve(result ?? blob), 'image/jpeg', quality)
+        }
+        img.src = objectUrl
+      })
+    }
+
+    async function onPaste(e: ClipboardEvent) {
+      const target = e.target as HTMLElement | null
+      const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      if (typing) return
+      let raw: File | null = null
+      const imageItem = Array.from(e.clipboardData?.items ?? []).find(i => i.type.startsWith('image/'))
+      if (imageItem) raw = imageItem.getAsFile()
+      if (!raw) {
+        raw = Array.from(e.clipboardData?.files ?? []).find(f =>
+          f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(f.name)
+        ) ?? null
+      }
+      if (!raw) return
+      e.preventDefault()
+      try {
+        const blob = raw.size > 2 * 1024 * 1024 ? await compressBlob(raw) : raw
+        const name = raw.name || `pasted-${crypto.randomUUID()}.jpg`
+        const imageFile = new File([blob], name, { type: blob.type || 'image/jpeg' })
+        const { key: storagePath, sizeBytes } = await uploadFile(imageFile, board.id, 'images')
+        const newEl = await createElement(board.id, 'image', 0, 0, { name, storagePath, sizeBytes })
+        setFiles(prev => [...prev, newEl as BoardElement])
+      } catch (err) {
+        console.error('Paste image error:', err)
+      }
+    }
+
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [board.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Publish contents to the sidebar dashboard ────────────────────────────────
 
@@ -606,7 +658,7 @@ export default function FolderBoardView({
                 onClick={e => { e.stopPropagation(); toggleSelect(file.id, e.ctrlKey || e.metaKey || e.shiftKey) }}
                 onDoubleClick={async () => {
                   if (file.type === 'pdf') { openPdf(file.data.storagePath as string); return }
-                  if (file.type === 'file') { openStored(file.data.storagePath as string); return }
+                  if (file.type === 'file' || file.type === 'image') { openStored(file.data.storagePath as string); return }
                   if (file.data.storagePath && !file.data.content) {
                     try {
                       const r = await getPresignedReadUrl(file.data.storagePath as string)
@@ -619,15 +671,17 @@ export default function FolderBoardView({
                   }
                 }}
                 className={fileTileClass(file)}
-                title={file.type === 'pdf' ? 'Double-click to open the PDF in a new tab' : file.type === 'file' ? 'Stored file — double-click to open/download' : 'Double-click to open · drag to reorder · click ⌄ for settings'}
+                title={file.type === 'pdf' ? 'Double-click to open the PDF in a new tab' : file.type === 'file' ? 'Stored file — double-click to open/download' : file.type === 'image' ? 'Image — double-click to open' : 'Double-click to open · drag to reorder · click ⌄ for settings'}
               >
                 {file.type === 'pdf'
                   ? <FileType size={42} className="text-red-400" />
                   : file.type === 'file'
                   ? <FileIcon size={42} className="text-gray-400" />
+                  : file.type === 'image'
+                  ? <ImageIcon size={42} className="text-purple-400" />
                   : <FileText size={42} className="text-indigo-400" />}
                 <span className="text-[11px] text-gray-700 text-center break-words line-clamp-2 leading-tight">
-                  {(file.data.name as string) || (file.type === 'pdf' ? 'Document.pdf' : file.type === 'file' ? 'File' : 'Untitled.txt')}
+                  {(file.data.name as string) || (file.type === 'pdf' ? 'Document.pdf' : file.type === 'file' ? 'File' : file.type === 'image' ? 'Image' : 'Untitled.txt')}
                 </span>
                 <button
                   onClick={e => {

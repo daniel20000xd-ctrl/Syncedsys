@@ -1880,11 +1880,16 @@ function FlowCanvas({ board, initialLists, initialCards, initialEdges, initialEl
       const el = e.target as HTMLElement | null
       const typing = !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)
       if (typing) return
+      let raw: File | null = null
       const imageItem = Array.from(e.clipboardData?.items ?? []).find(i => i.type.startsWith('image/'))
-      if (!imageItem) return
-      e.preventDefault()
-      const raw = imageItem.getAsFile()
+      if (imageItem) raw = imageItem.getAsFile()
+      if (!raw) {
+        raw = Array.from(e.clipboardData?.files ?? []).find(f =>
+          f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(f.name)
+        ) ?? null
+      }
       if (!raw) return
+      e.preventDefault()
       const blob = raw.size > 2 * 1024 * 1024 ? await compressBlob(raw) : raw
       const filename = `pasted-${crypto.randomUUID()}.jpg`
       const form = new FormData()
