@@ -10,7 +10,7 @@ import {
   moveElementToBoard, importFolderTree, moveBoardToParent, reorderFolderItems,
   createElement, getPdfUrl, getPresignedReadUrl, deleteStorageObjects,
 } from '@/app/actions'
-import { collectEntries, readDroppedEntries, readPickedFolder, downloadTextFile, type PickedFolder } from '@/lib/files'
+import { collectEntries, readDroppedEntries, readPickedFolder, readDroppedTextFiles, downloadTextFile, type PickedFolder } from '@/lib/files'
 import { uploadPdf, uploadFile, extractPdfText, buildUploadTree } from '@/lib/pdf'
 import { folderUnitsStore } from '@/lib/folderUnitsStore'
 import BoardPropertiesPanel from './BoardPropertiesPanel'
@@ -73,6 +73,7 @@ export default function FolderBoardView({
   const dragDepth = useRef(0)
   const marqueeStart = useRef<{ x: number; y: number; moved: boolean } | null>(null)
   const folderInputRef = useRef<HTMLInputElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploading, setUploading] = useState<string | null>(null)
 
   // ── Reorder helpers ──────────────────────────────────────────────────────────
@@ -459,6 +460,33 @@ export default function FolderBoardView({
     }
   }
 
+  async function onFilesPicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const list = e.target.files
+    if (!list || list.length === 0) return
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    const { accepted, pdfs, binaries } = await readDroppedTextFiles(list)
+    for (const f of accepted) {
+      const el = await createTextFile(board.id, f.name, f.content)
+      setFiles(prev => [...prev, el as BoardElement])
+    }
+    for (const pdf of pdfs) {
+      try {
+        const { key: storagePath, sizeBytes } = await uploadPdf(pdf, board.id)
+        let text = '', pageCount = 0
+        try { ;({ text, pageCount } = await extractPdfText(pdf)) } catch { /* keep without text */ }
+        const el = await createElement(board.id, 'pdf', 0, 0, { name: pdf.name, storagePath, sizeBytes, text, pageCount })
+        setFiles(prev => [...prev, el as BoardElement])
+      } catch (err) { console.error('Failed to add PDF:', err) }
+    }
+    for (const file of binaries) {
+      try {
+        const { key: storagePath, sizeBytes } = await uploadFile(file, board.id)
+        const el = await createElement(board.id, 'file', 0, 0, { name: file.name, storagePath, sizeBytes })
+        setFiles(prev => [...prev, el as BoardElement])
+      } catch (err) { console.error('Failed to add file:', err) }
+    }
+  }
+
   async function openPdf(path: string) {
     const w = window.open('', '_blank')
     try {
@@ -545,6 +573,13 @@ export default function FolderBoardView({
         <span className="text-xs text-gray-400">· {folders.length + files.length} items</span>
         <div className="flex-1" />
         <button
+          onClick={() => fileInputRef.current?.click()}
+          className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800"
+          title="Upload files — text, markdown, PDF, images, and more"
+        >
+          <Upload size={14} /> Upload files
+        </button>
+        <button
           onClick={() => folderInputRef.current?.click()}
           disabled={!!uploading}
           className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -555,6 +590,7 @@ export default function FolderBoardView({
         <button onClick={handleNewFolder} className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800">
           <FolderPlus size={14} /> New folder
         </button>
+        <input ref={fileInputRef} type="file" multiple className="hidden" onChange={onFilesPicked} />
         {/* Hidden folder picker. webkitdirectory/directory are set imperatively
             since React has no typed props for them. */}
         <input
