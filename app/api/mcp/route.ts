@@ -1058,16 +1058,16 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 
   server.registerTool('search_library', {
     title: 'Search library',
-    description: 'Search the personal legal case and research paper library. Returns compact results — title, summary, key metadata — WITHOUT full text. Use this to identify 1-2 relevant items, then call get_library_item for the full text of finalists only. Never call get_library_item on more than 2 items per query.',
+    description: 'Search the personal legal case and research paper library. Returns compact results — title, summary, key metadata — WITHOUT full text. To filter by legal area (rättsområde), ALWAYS use the `tags` filter (e.g. tags=["patenträtt"] for patents, ["immaterialrätt"] for all IP) — do NOT keyword-search the area name in `query`: a query like "patent" matches every "Patent- och marknadsöverdomstolen" case (trademark, copyright, marketing, competition included) and returns a misleading mix. Use `query` only for free-text concepts/statutes. To enumerate a whole area, pass `tags` plus a higher `limit`. After narrowing, call get_library_item for the full text of finalists only (never more than 2 per query).',
     inputSchema: {
-      query: z.string().optional().describe('Full-text search — keywords, legal concepts, statute citations'),
+      query: z.string().optional().describe('Free-text search over title/summary — concepts, statute citations. NOT for filtering by rättsområde (use tags); an area name as a keyword over-matches, e.g. "patent" hits every Patent- och marknadsöverdomstolen case.'),
       type: z.enum(['legal_case', 'paper']).optional().describe('Optional: filter to one item type'),
-      tags: z.array(z.string()).optional().describe('Optional: filter by tags (rättsområde, principer, or custom)'),
-      limit: z.number().optional().describe('Max results to return (default 8, max 20)'),
+      tags: z.array(z.string()).optional().describe('Filter by tags — the correct way to filter by rättsområde (e.g. patenträtt, immaterialrätt, straffrätt, skatterätt), plus principer or custom tags. Multiple tags = AND.'),
+      limit: z.number().optional().describe('Max results to return (default 8, max 100). Raise it (together with a tags filter) to enumerate a whole area.'),
     },
   }, async ({ query, type: itemType, tags, limit: rawLimit }) => {
     if (!adminUserId) return fail('Library not configured (ADMIN_EMAIL missing or user not found)')
-    const limit = Math.min(20, Math.max(1, rawLimit ?? 8))
+    const limit = Math.min(100, Math.max(1, rawLimit ?? 8))
     let q = adminSupabase
       .from('library_items')
       .select('id, type, title, summary, tags, source_url, metadata, updated_at, verified')
