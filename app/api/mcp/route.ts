@@ -277,7 +277,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 
   server.registerTool('create_board', {
     title: 'Create board',
-    description: 'Creates a new top-level board tab.',
+    description: 'Creates a new board tab under the user\'s first persona.',
     inputSchema: {
       name:  z.string().describe('Board name'),
       color: z.string().describe('Hex color, e.g. #0079bf'),
@@ -285,7 +285,16 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     },
   }, ({ name, color, mode }) => wrapWrite(
     'create_board', { name, color, mode },
-    () => createBoard(name, color, mode),
+    async () => {
+      // MCP has no active-persona context, so default to the first persona —
+      // otherwise the board lands at parent_id=null and is filtered out of every
+      // persona's tab strip (invisible). null only when the user has no personas.
+      const { data: persona } = await supabase
+        .from('boards').select('id')
+        .eq('user_id', userId).eq('is_persona', true)
+        .order('tab_position', { ascending: true }).limit(1).maybeSingle()
+      return createBoard(name, color, mode, persona?.id ?? null)
+    },
   ))
 
   server.registerTool('create_group', {
