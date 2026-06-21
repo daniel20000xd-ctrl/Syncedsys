@@ -1565,6 +1565,234 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     return ok({ pause_deletion })
   })
 
+  // ── Calendar tools ────────────────────────────────────────────────────────
+
+  function effectiveEnd(startAt: string, endAt: string | null): Date {
+    if (endAt) return new Date(endAt)
+    return new Date(new Date(startAt).getTime() + 3600000)
+  }
+
+  async function detectConflicts(
+    startAt: string,
+    endAt: string | null,
+    excludeId?: string,
+  ): Promise<Array<{ id: string; title: string; start_at: string; end_at: string | null }>> {
+    if (!userId) return []
+    const newStart = new Date(startAt)
+    const newEnd = effectiveEnd(startAt, endAt)
+
+    let query = supabase
+      .from('calendar_events')
+      .select('id, title, start_at, end_at')
+      .eq('user_id', userId)
+      .lt('start_at', newEnd.toISOString())
+
+    if (excludeId) query = query.neq('id', excludeId)
+
+    const { data } = await query
+    if (!data) return []
+
+    return data.filter(ev => {
+      const evEnd = effectiveEnd(ev.start_at, ev.end_at)
+      return newStart < evEnd
+    })
+  }
+
+  async function getUserEmail(): Promise<string | null> {
+    if (!userId) return null
+    const admin = createAdminClient()
+    const { data } = await admin.auth.admin.getUserById(userId)
+    return data?.user?.email ?? null
+  }
+
+  server.registerTool('create_calendar_event', {
+    title: 'Create calendar event',
+    description: 'Creates a new calendar event. Runs conflict detection and warns if the new event overlaps with existing ones. Optionally sets reminders.',
+    inputSchema: {
+      title:       z.string().describe('Event title'),
+      start_at:    z.string().describe('Start time (ISO 8601)'),
+      end_at:      z.string().optional().describe('End time (ISO 8601). If omitted, treated as 1-hour duration for conflict checks only.'),
+      description: z.string().optional().describe('Optional description'),
+      reminders:   z.array(z.number().int().positive()).optional().describe('Minutes before start to send reminders, e.g. [1440, 60, 10]'),
+    },
+  }, async ({ title, start_at, end_at, description, reminders }) => {
+    return wrapWrite('create_calendar_event', { title, start_at, end_at, description }, async () => {
+      if (!userId) throw new Error('Not authenticated')
+
+      const conflicts = await detectConflicts(start_at, end_at ?? null)
+
+      const { data: event, error } = await supabase
+        .from('calendar_events')
+        .insert({ user_id: userId, title, start_at, end_at: end_at ?? null, description: description ?? null })
+        .select()
+        .single()
+
+      if (error) throw new Error(error.message)
+
+      if (reminders?.length) {
+        await supabase.from('calendar_reminders').insert(
+          reminders.map(m => ({ event_id: event.id, user_id: userId, minutes_before: m }))
+        )
+      }
+
+      if (conflicts.length) {
+        const email = await getUserEmail()
+        if (email) {
+          const { sendConflictEmail } = await import('@/lib/email')
+          sendConflictEmail(email, { title, start_at, end_at: end_at ?? null }, conflicts).catch(() => {})
+        }
+      }
+
+      return {
+        event,
+        conflicts: conflicts.length
+          ? { warning: `This event overlaps with ${conflicts.length} existing event(s).`, conflicts }
+          : undefined,
+      }
+    })
+  })
+
+  server.registerTool('list_calendar_events', {
+    title: 'List calendar events',
+    description: 'Returns all calendar events in a date range with their reminders. If no range given, returns all upcoming events from now.',
+    inputSchema: {
+      start_date: z.string().optional().describe('Start of range (ISO 8601 date or datetime)'),
+      end_date:   z.string().optional().describe('End of range (ISO 8601 date or datetime)'),
+    },
+  }, async ({ start_date, end_date }) => {
+    if (!userId) return fail('Not authenticated')
+
+    let query = supabase
+      .from('calendar_events')
+      .select('*, calendar_reminders(id, minutes_before, sent_at)')
+      .eq('user_id', userId)
+      .order('start_at')
+
+    if (start_date) query = query.gte('start_at', start_date)
+    else query = query.gte('start_at', new Date().toISOString())
+
+    if (end_date) query = query.lte('start_at', end_date)
+
+    const { data, error } = await query
+    if (error) return fail(error.message)
+    return ok(data ?? [])
+  })
+
+  server.registerTool('get_calendar_event', {
+    title: 'Get calendar event',
+    description: 'Returns a single calendar event by id, including its reminders.',
+    inputSchema: {
+      id: z.string().uuid().describe('Event UUID'),
+    },
+  }, async ({ id }) => {
+    if (!userId) return fail('Not authenticated')
+
+    const { data, error } = await supabase
+      .from('calendar_events')
+      .select('*, calendar_reminders(id, minutes_before, sent_at)')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single()
+
+    if (error) return fail(error.message)
+    if (!data) return fail('Event not found')
+    return ok(data)
+  })
+
+  server.registerTool('update_calendar_event', {
+    title: 'Update calendar event',
+    description: 'Updates a calendar event. If reminders are provided they fully replace existing ones. Runs conflict detection after update.',
+    inputSchema: {
+      id:          z.string().uuid().describe('Event UUID'),
+      title:       z.string().optional(),
+      start_at:    z.string().optional().describe('New start time (ISO 8601)'),
+      end_at:      z.string().nullable().optional().describe('New end time (ISO 8601), or null to clear'),
+      description: z.string().nullable().optional(),
+      reminders:   z.array(z.number().int().positive()).optional().describe('Replaces all existing reminders if provided'),
+    },
+  }, async ({ id, title, start_at, end_at, description, reminders }) => {
+    return wrapWrite('update_calendar_event', { id, title, start_at, end_at, description },
+      async () => {
+        if (!userId) throw new Error('Not authenticated')
+
+        const { data: existing } = await supabase
+          .from('calendar_events')
+          .select('start_at, end_at')
+          .eq('id', id)
+          .eq('user_id', userId)
+          .single()
+
+        if (!existing) throw new Error('Event not found')
+
+        const update: Record<string, unknown> = {}
+        if (title !== undefined) update.title = title
+        if (start_at !== undefined) update.start_at = start_at
+        if (end_at !== undefined) update.end_at = end_at
+        if (description !== undefined) update.description = description
+
+        const { data: event, error } = await supabase
+          .from('calendar_events')
+          .update(update)
+          .eq('id', id)
+          .eq('user_id', userId)
+          .select()
+          .single()
+
+        if (error) throw new Error(error.message)
+
+        if (reminders !== undefined) {
+          await supabase.from('calendar_reminders').delete().eq('event_id', id)
+          if (reminders.length) {
+            await supabase.from('calendar_reminders').insert(
+              reminders.map(m => ({ event_id: id, user_id: userId, minutes_before: m }))
+            )
+          }
+        }
+
+        const newStart = start_at ?? existing.start_at
+        const newEnd = end_at !== undefined ? end_at : existing.end_at
+        const conflicts = await detectConflicts(newStart, newEnd, id)
+
+        if (conflicts.length) {
+          const email = await getUserEmail()
+          if (email) {
+            const { sendConflictEmail } = await import('@/lib/email')
+            sendConflictEmail(email, { title: event.title, start_at: event.start_at, end_at: event.end_at }, conflicts).catch(() => {})
+          }
+        }
+
+        return {
+          event,
+          conflicts: conflicts.length
+            ? { warning: `This event overlaps with ${conflicts.length} existing event(s).`, conflicts }
+            : undefined,
+        }
+      },
+      { entityType: 'calendar_event', entityId: id },
+    )
+  })
+
+  server.registerTool('delete_calendar_event', {
+    title: 'Delete calendar event',
+    description: 'Deletes a calendar event and all its reminders.',
+    inputSchema: {
+      id: z.string().uuid().describe('Event UUID'),
+    },
+  }, async ({ id }) => {
+    return wrapWrite('delete_calendar_event', { id }, async () => {
+      if (!userId) throw new Error('Not authenticated')
+
+      const { error } = await supabase
+        .from('calendar_events')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', userId)
+
+      if (error) throw new Error(error.message)
+      return { deleted: id }
+    }, { entityType: 'calendar_event', entityId: id })
+  })
+
   return server
 }
 
