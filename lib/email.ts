@@ -15,6 +15,7 @@ export async function sendReminderEmail(
   to: string,
   event: { title: string; start_at: string; end_at: string | null; description: string | null },
   minutesBefore: number,
+  customMessage?: string,
 ) {
   const when = minutesBefore >= 1440
     ? 'tomorrow'
@@ -24,14 +25,16 @@ export async function sendReminderEmail(
 
   const subject = `Reminder: ${event.title} ${when}`
 
-  const lines = [
-    `<b>${event.title}</b>`,
-    `<br>Start: ${fmtTime(event.start_at)}`,
-    event.end_at ? `<br>End: ${fmtTime(event.end_at)}` : '',
-    event.description ? `<br><br>${event.description}` : '',
-  ].filter(Boolean).join('')
+  const html = customMessage
+    ? `<p>${customMessage}</p>`
+    : `<p>${[
+        `<b>${event.title}</b>`,
+        `<br>Start: ${fmtTime(event.start_at)}`,
+        event.end_at ? `<br>End: ${fmtTime(event.end_at)}` : '',
+        event.description ? `<br><br>${event.description}` : '',
+      ].filter(Boolean).join('')}</p>`
 
-  await resend.emails.send({ from: FROM, to, subject, html: `<p>${lines}</p>` })
+  await resend.emails.send({ from: FROM, to, subject, html })
 }
 
 export async function sendConflictEmail(

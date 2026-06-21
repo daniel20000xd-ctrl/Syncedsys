@@ -19,6 +19,7 @@ export async function GET(req: NextRequest) {
     .select(`
       id,
       minutes_before,
+      custom_message,
       user_id,
       calendar_events (
         title,
@@ -55,7 +56,7 @@ export async function GET(req: NextRequest) {
     if (!email) continue
 
     try {
-      await sendReminderEmail(email, event, r.minutes_before)
+      await sendReminderEmail(email, event, r.minutes_before, r.custom_message ?? undefined)
       ids.push(r.id)
       sent++
     } catch {

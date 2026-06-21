@@ -1605,6 +1605,16 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
     return data?.user?.email ?? null
   }
 
+  const reminderInput = z.union([
+    z.number().int().positive(),
+    z.object({ minutes_before: z.number().int().positive(), message: z.string().optional() }),
+  ])
+  type ReminderInput = z.infer<typeof reminderInput>
+  function normalizeReminder(r: ReminderInput): { minutes_before: number; custom_message: string | null } {
+    if (typeof r === 'number') return { minutes_before: r, custom_message: null }
+    return { minutes_before: r.minutes_before, custom_message: r.message ?? null }
+  }
+
   server.registerTool('create_calendar_event', {
     title: 'Create calendar event',
     description: 'Creates a new calendar event. Runs conflict detection and warns if the new event overlaps with existing ones. Optionally sets reminders.',
@@ -1613,7 +1623,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
       start_at:    z.string().describe('Start time (ISO 8601)'),
       end_at:      z.string().optional().describe('End time (ISO 8601). If omitted, treated as 1-hour duration for conflict checks only.'),
       description: z.string().optional().describe('Optional description'),
-      reminders:   z.array(z.number().int().positive()).optional().describe('Minutes before start to send reminders, e.g. [1440, 60, 10]'),
+      reminders:   z.array(reminderInput).optional().describe('Reminders: each is either a number (minutes before) or {minutes_before, message?}'),
     },
   }, async ({ title, start_at, end_at, description, reminders }) => {
     return wrapWrite('create_calendar_event', { title, start_at, end_at, description }, async () => {
@@ -1631,7 +1641,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 
       if (reminders?.length) {
         await supabase.from('calendar_reminders').insert(
-          reminders.map(m => ({ event_id: event.id, user_id: userId, minutes_before: m }))
+          reminders.map(r => ({ event_id: event.id, user_id: userId, ...normalizeReminder(r) }))
         )
       }
 
@@ -1664,7 +1674,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 
     let query = supabase
       .from('calendar_events')
-      .select('*, calendar_reminders(id, minutes_before, sent_at)')
+      .select('*, calendar_reminders(id, minutes_before, custom_message, sent_at)')
       .eq('user_id', userId)
       .order('start_at')
 
@@ -1689,7 +1699,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
 
     const { data, error } = await supabase
       .from('calendar_events')
-      .select('*, calendar_reminders(id, minutes_before, sent_at)')
+      .select('*, calendar_reminders(id, minutes_before, custom_message, sent_at)')
       .eq('id', id)
       .eq('user_id', userId)
       .single()
@@ -1708,7 +1718,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
       start_at:    z.string().optional().describe('New start time (ISO 8601)'),
       end_at:      z.string().nullable().optional().describe('New end time (ISO 8601), or null to clear'),
       description: z.string().nullable().optional(),
-      reminders:   z.array(z.number().int().positive()).optional().describe('Replaces all existing reminders if provided'),
+      reminders:   z.array(reminderInput).optional().describe('Replaces all existing reminders if provided. Each is a number (minutes before) or {minutes_before, message?}'),
     },
   }, async ({ id, title, start_at, end_at, description, reminders }) => {
     return wrapWrite('update_calendar_event', { id, title, start_at, end_at, description },
@@ -1744,7 +1754,7 @@ function buildServer(supabase: SupabaseClient, userId: string, adminUserId: stri
           await supabase.from('calendar_reminders').delete().eq('event_id', id)
           if (reminders.length) {
             await supabase.from('calendar_reminders').insert(
-              reminders.map(m => ({ event_id: id, user_id: userId, minutes_before: m }))
+              reminders.map(r => ({ event_id: id, user_id: userId, ...normalizeReminder(r) }))
             )
           }
         }
