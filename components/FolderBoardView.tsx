@@ -137,6 +137,12 @@ export default function FolderBoardView({
   }
 
   function handleTileDrop(e: React.DragEvent, tileId: string) {
+    // OS file/folder dropped onto an existing tile: let it bubble to the
+    // container's onDrop, which imports it. Without this early return the
+    // stopPropagation below swallows the drop and nothing appears.
+    const types = Array.from(e.dataTransfer.types)
+    if (types.includes('Files') && !types.includes(FILE_MIME) && !types.includes(FOLDER_MIME)) return
+
     e.preventDefault()
     e.stopPropagation()
 
@@ -396,14 +402,14 @@ export default function FolderBoardView({
         try { ;({ text, pageCount } = await extractPdfText(pdf)) } catch { /* keep PDF without text */ }
         const el = await createElement(board.id, 'pdf', 0, 0, { name: pdf.name, storagePath, sizeBytes, text, pageCount })
         setFiles(prev => [...prev, el as BoardElement])
-      } catch (err) { console.error('Failed to add PDF:', err) }
+      } catch (err) { console.error('Failed to add PDF:', err); alert(`Could not add "${pdf.name}". ${err instanceof Error ? err.message : ''}`) }
     }
     for (const file of binaries) {
       try {
         const { key: storagePath, sizeBytes } = await uploadFile(file, board.id)
         const el = await createElement(board.id, 'file', 0, 0, { name: file.name, storagePath, sizeBytes })
         setFiles(prev => [...prev, el as BoardElement])
-      } catch (err) { console.error('Failed to add file:', err) }
+      } catch (err) { console.error('Failed to add file:', err); alert(`Could not add "${file.name}". ${err instanceof Error ? err.message : ''}`) }
     }
     for (const tree of trees) {
       const uploadedKeys: string[] = []
@@ -476,14 +482,14 @@ export default function FolderBoardView({
         try { ;({ text, pageCount } = await extractPdfText(pdf)) } catch { /* keep without text */ }
         const el = await createElement(board.id, 'pdf', 0, 0, { name: pdf.name, storagePath, sizeBytes, text, pageCount })
         setFiles(prev => [...prev, el as BoardElement])
-      } catch (err) { console.error('Failed to add PDF:', err) }
+      } catch (err) { console.error('Failed to add PDF:', err); alert(`Could not add "${pdf.name}". ${err instanceof Error ? err.message : ''}`) }
     }
     for (const file of binaries) {
       try {
         const { key: storagePath, sizeBytes } = await uploadFile(file, board.id)
         const el = await createElement(board.id, 'file', 0, 0, { name: file.name, storagePath, sizeBytes })
         setFiles(prev => [...prev, el as BoardElement])
-      } catch (err) { console.error('Failed to add file:', err) }
+      } catch (err) { console.error('Failed to add file:', err); alert(`Could not add "${file.name}". ${err instanceof Error ? err.message : ''}`) }
     }
   }
 
