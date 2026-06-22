@@ -7,10 +7,6 @@
     {
       "path": "/api/cron/cleanup-photos",
       "schedule": "0 3 * * *"
-    },
-    {
-      "path": "/api/cron/calendar-reminders",
-      "schedule": "*/5 * * * *"
     }
   ]
 }
