@@ -1,18 +1,18 @@
-import type { Metadata } from 'next'
-import './globals.css'
+import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: {
-    default: 'Syncedsys',
-    template: 'Syncedsys - %s',
-  },
-  description: 'Trello-style kanban board',
-}
+  title: "Syncedsys",
+  description: "Syncedsys",
+};
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
   return (
-    <html lang="en" className="h-full">
-      <body className="h-full antialiased">{children}</body>
+    <html lang="en">
+      <body>{children}</body>
     </html>
-  )
+  );
 }

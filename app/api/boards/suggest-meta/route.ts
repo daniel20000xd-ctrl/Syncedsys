@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { suggestBoardMeta } from '@/app/api/mcp/route'
+import { suggestBoardMeta } from '@/lib/claude/suggestBoardMeta'
 import { tryResolveAnthropicKey } from '@/lib/claude/key'
 import { recordClaudeUsage } from '@/lib/claude/usage'
 import { claudeGate } from '@/lib/claude/gate'
