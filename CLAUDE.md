@@ -48,7 +48,8 @@ auto-deploys to Vercel).
 - **`supabase/personas.sql`**: adds `boards.is_persona`, a `persona_is_root` CHECK, a trigger blocking deletion of non-empty personas, and a one-time backfill that wraps orphaned top-level boards in a "Personal" persona. Idempotent.
 
 ## Board modes (`boards.mode`, default `'classic'`) — data model only, no renderers exist yet
-- Values seen in the DB: `'classic'`/`'free'` (freeform canvas), `'trello'` (kanban), `'text'` (DocTabs document, autosaves to `boards.content`), `'folder'` (file explorer), `'database'` (admin-only reference library). All the renderers for these were deleted with the frontend; the mode value itself and its server actions in `app/actions.ts` still work.
+- Values seen in the DB: `'classic'`/`'free'` (freeform canvas), `'trello'` (kanban), `'folder'` (file explorer), `'database'` (admin-only reference library). All the renderers for these were deleted with the frontend; the mode value itself and its server actions in `app/actions.ts` still work.
+- **`'text'` mode (DocTabs notetaking) was removed entirely on 2026-08-28** — not just the renderer. `lib/doctabs.ts` and `lib/docTabsStore.ts` are deleted, the mode value is stripped from every type union/tool schema/context renderer, and all 10 existing `mode='text'` boards + their content were hard-deleted from the DB (user-confirmed, no export). Canvas `type='text'` elements (free-floating text notes) were removed the same way — the `create_text` Claude tool is gone and the 26 existing rows were deleted (plus 5 board_edges that referenced them). Do not reintroduce either without being asked.
 - Boards self-reference via `parent_id` + `tab_position` (infinite nesting; sub-tabs are just child boards). Soft groupings via `group_id` + `is_group` (max 2 levels; deleting a group nulls members' `group_id`, never deletes children).
 
 ## Claude backend (billing/context/tools) — `app/api/claude/route.ts`, `lib/claude/*`
@@ -90,7 +91,7 @@ until MCP is rebuilt).
 - `POST /api/units/url-preview` validates (SSRF-safe) → inserts a `pending` row → `enrichUrl` (`lib/urlPreview.ts`) fetches HTML (8s/3MB caps, redirect-validated), scrapes OG tags via `open-graph-scraper`, **re-hosts og:image to R2**, updates the element. `/api/units/url-preview/enrich` self-heals stuck `pending` units. Client-safe helpers in `lib/urlPreviewShared.ts`. Action: `createUrlPreview`.
 
 ## Export
-- **Markdown** (`lib/exportBoard.ts`): render a board's soft units (DocTabs/text/lists+cards/url-previews) to `.md` with sanitized filenames. **ZIP** (`lib/exportZip.ts` via `fflate`): whole subtree as a folder tree — batched level-order BFS (no N+1), R2 blobs resolved through a 6-worker pool with size guards (50 MB/object, 150 MB total, 5000 entries). Served by `POST /api/boards/download`.
+- **Markdown** (`lib/exportBoard.ts`): render a board's soft units (lists+cards/url-previews) to `.md` with sanitized filenames. **ZIP** (`lib/exportZip.ts` via `fflate`): whole subtree as a folder tree — batched level-order BFS (no N+1), R2 blobs resolved through a 6-worker pool with size guards (50 MB/object, 150 MB total, 5000 entries). Served by `POST /api/boards/download`.
 - `/api/boards/meta` lists boards; `/api/boards/suggest-meta` AI-suggests a board description (Haiku, gated + metered).
 
 ## Stock Viewer (satellite)

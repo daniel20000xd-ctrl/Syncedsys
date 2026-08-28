@@ -195,7 +195,7 @@ async function renderContext(
     lines.push(`${indent}- "${b.name}" [mode=${b.mode}, id=${b.id}]${tag}`)
 
     // Contents summary by mode.
-    if (b.mode === 'text' || b.mode === 'spreadsheet') {
+    if (b.mode === 'spreadsheet') {
       const body = (b.content ?? '').slice(0, 1500)
       if (body.trim()) lines.push(`${indent}    content: ${JSON.stringify(body)}`)
     }
@@ -209,8 +209,7 @@ async function renderContext(
     for (const e of bels) {
       const d = e.data ?? {}
       let label = e.type
-      if (e.type === 'text') label = `text: ${JSON.stringify(String(d.text ?? '').slice(0, 120))}`
-      else if (e.type === 'shape') label = `shape(${d.shape ?? 'rect'}) "${d.label ?? ''}"`
+      if (e.type === 'shape') label = `shape(${d.shape ?? 'rect'}) "${d.label ?? ''}"`
       else if (e.type === 'textfile') label = `file "${d.name ?? 'untitled'}"`
       else if (e.type === 'pdf') {
         const excerpt = String(d.text ?? '').slice(0, 6000)

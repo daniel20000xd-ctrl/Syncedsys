@@ -79,7 +79,7 @@ export const WRITE_TOOLS: Anthropic.Tool[] = [
       properties: {
         parentId: { type: 'string', description: 'Parent board id (must be in scope).' },
         name: { type: 'string' },
-        mode: { type: 'string', enum: ['classic', 'trello', 'text', 'folder', 'spreadsheet'], description: 'Board type. Default classic (freeform canvas).' },
+        mode: { type: 'string', enum: ['classic', 'trello', 'folder', 'spreadsheet'], description: 'Board type. Default classic (freeform canvas).' },
         color: { type: 'string', description: 'Hex colour, e.g. #0079bf. Optional.' },
       },
       required: ['parentId', 'name'],
@@ -107,19 +107,6 @@ export const WRITE_TOOLS: Anthropic.Tool[] = [
         title: { type: 'string' },
       },
       required: ['listId', 'title'],
-    },
-  },
-  {
-    name: 'create_text',
-    description: 'Place a free-floating text note on a board (canvas/classic boards).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        boardId: { type: 'string' },
-        text: { type: 'string' },
-        x: { type: 'number' }, y: { type: 'number' },
-      },
-      required: ['boardId', 'text'],
     },
   },
   {
@@ -602,17 +589,6 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       const { data, error } = await s.from('cards').insert({ list_id: listId, title: String(input.title), position }).select('id,title').single()
       if (error) throw new Error(error.message)
       return `Created card "${data.title}" (id ${data.id}).`
-    }
-
-    case 'create_text': {
-      const boardId = String(input.boardId)
-      ensureBoard(ctx, boardId)
-      const { data, error } = await s.from('board_elements').insert({
-        board_id: boardId, type: 'text', x: (input.x as number) ?? 80, y: (input.y as number) ?? 80,
-        data: { text: String(input.text), color: '#1f2937', fontSize: 18 },
-      }).select('id').single()
-      if (error) throw new Error(error.message)
-      return `Added a text note (id ${data.id}).`
     }
 
     case 'create_shape': {

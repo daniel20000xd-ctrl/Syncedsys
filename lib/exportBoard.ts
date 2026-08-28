@@ -2,12 +2,10 @@
 // and filename/path sanitizers. NO server-only imports (so it can be imported
 // from both client components and the server-side ZIP builder in lib/exportZip.ts).
 //
-// "Soft units" = everything on a board that isn't a standalone file: text notes,
-// link previews, lists/cards, and text-mode pages. These are rolled into a single
-// markdown file per board. Standalone file units (textfile/pdf/anything with an
-// R2 storagePath) are emitted as real files by the ZIP builder, not here.
-
-import { parseDocTabs } from './doctabs'
+// "Soft units" = everything on a board that isn't a standalone file: link
+// previews and lists/cards. These are rolled into a single markdown file per
+// board. Standalone file units (textfile/pdf/anything with an R2 storagePath)
+// are emitted as real files by the ZIP builder, not here.
 
 export type ExportCard = {
   title: string
@@ -31,7 +29,7 @@ export type ExportElement = {
 export type ExportBoardData = {
   id: string
   name: string
-  mode: 'classic' | 'trello' | 'text' | 'folder'
+  mode: 'classic' | 'trello' | 'folder'
   content: string | null
   elements: ExportElement[]
   lists: ExportList[]
@@ -76,30 +74,10 @@ export function renderBoardSoftUnits(board: ExportBoardData): string {
   const lines: string[] = [h(1, board.name || 'Untitled'), '']
   const start = lines.length
 
-  if (board.mode === 'text') {
-    const dt = parseDocTabs(board.content)
-    for (let i = 0; i < dt.tabs.length; i++) {
-      const tab = dt.tabs[i]
-      if (dt.tabs.length > 1) lines.push(h(2, tab.name || `Page ${i + 1}`), '')
-      if (tab.body.trim()) lines.push(tab.body.trim(), '')
-      if (i < dt.tabs.length - 1) lines.push('---', '')
-    }
-  }
-
   // Lists/cards exist on trello boards (and may linger on classic boards switched
   // from trello). Always render them when present.
   if (board.lists.length) {
     lines.push(...renderTrelloLists(board.lists, 2))
-  }
-
-  // Text notes (classic canvas).
-  const notes = board.elements.filter(e => e.type === 'text')
-  const noteBodies = notes
-    .map(e => String((e.data as { content?: string }).content ?? '').trim())
-    .filter(Boolean)
-  if (noteBodies.length) {
-    lines.push(h(2, 'Notes'), '')
-    lines.push(noteBodies.join('\n\n---\n\n'), '')
   }
 
   // Link previews.
@@ -115,7 +93,7 @@ export function renderBoardSoftUnits(board: ExportBoardData): string {
   // Canvas items that can't be represented as text/files (shapes, drawings,
   // connections, …) are omitted — surface the count so the export is honest.
   const otherCount = board.elements.filter(
-    e => e.type !== 'text' && e.type !== 'url_preview' && !isFileUnit(e),
+    e => e.type !== 'url_preview' && !isFileUnit(e),
   ).length
   if (otherCount) {
     lines.push(`_(${otherCount} canvas item${otherCount === 1 ? '' : 's'} — shapes, drawings, or other non-text units — are not included in this export.)_`, '')

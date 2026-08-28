@@ -480,7 +480,7 @@ export async function updateBoardReadme(boardId: string, readme: string) {
   return { boardId: data.id, boardName: data.name, updated: true as const, readme }
 }
 
-export async function createSubTab(parentBoardId: string, name: string, color: string, mode: 'classic' | 'trello' | 'text' | 'folder' | 'database' = 'classic') {
+export async function createSubTab(parentBoardId: string, name: string, color: string, mode: 'classic' | 'trello' | 'folder' | 'database' = 'classic') {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) throw new Error('Not authenticated')
@@ -854,7 +854,7 @@ export async function getPresignedReadUrl(key: string): Promise<{ ok: boolean; u
 
 export async function createElement(
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file',
+  type: 'shape' | 'image' | 'drawing' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number, height?: number
@@ -1306,7 +1306,7 @@ export async function ensureMirrorPortal(targetBoardId: string, backBoardId: str
 export async function upsertElement(
   id: string,
   boardId: string,
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file',
+  type: 'shape' | 'image' | 'drawing' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file',
   x: number, y: number,
   data: Record<string, unknown>,
   width?: number | null, height?: number | null

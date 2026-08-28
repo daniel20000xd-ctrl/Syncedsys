@@ -4,7 +4,7 @@ export type Board = {
   color: string
   user_id: string
   deadline: string | null
-  mode: 'classic' | 'trello' | 'text' | 'folder' | 'database'
+  mode: 'classic' | 'trello' | 'folder' | 'database'
   content: string | null
   parent_id: string | null
   tab_position: number
@@ -75,7 +75,7 @@ export type BoardEdge = {
 export type BoardElement = {
   id: string
   board_id: string
-  type: 'shape' | 'image' | 'drawing' | 'text' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file'
+  type: 'shape' | 'image' | 'drawing' | 'portal' | 'textfile' | 'folderlink' | 'claude' | 'pdf' | 'url_preview' | 'file'
   x: number
   y: number
   width: number | null
