@@ -6,13 +6,24 @@ auto-deploys to Vercel).
 
 > **2026-08-28 — frontend + MCP server intentionally deleted, mid-rewrite.** The backend
 > (`app/actions.ts`, `lib/*` business logic, `supabase/*.sql`, every non-MCP `app/api/*` route) is
-> untouched and fully functional. `components/`, all of `app/(app)/**`, `app/login`, `app/signup`,
-> the MCP server (`app/api/mcp/**`, `lib/mcp*.ts`, `lib/cors.ts`, `docs/MCP_REFERENCE.md`) are
-> gone. `app/layout.tsx` + `app/page.tsx` are a throwaway placeholder shell just to keep
-> `next build` green. The frontend is being rebuilt from scratch, mode by mode, directly on
-> `main` — with every UI feature routed through the backend deliberately (no ad-hoc wiring) this
-> time. Sections below describe the **surviving backend only**; anything about canvas/board
-> UI/Sidebar/Claude-on-canvas/MCP tools has been removed since that code no longer exists.
+> untouched and fully functional. `components/`, all of `app/(app)/**`, `app/signup`, the MCP
+> server (`app/api/mcp/**`, `lib/mcp*.ts`, `lib/cors.ts`, `docs/MCP_REFERENCE.md`) are gone. The
+> frontend is being rebuilt from scratch, mode by mode, directly on `main` — with every UI
+> feature routed through the backend deliberately (no ad-hoc wiring) this time. Sections below
+> describe the **surviving backend only**; anything about canvas/board UI/Sidebar/Claude-on-canvas
+> /MCP tools has been removed since that code no longer exists.
+>
+> **2026-09-01 — first two frontend pieces rebuilt: login + an admin-only scratch to-do page.**
+> `app/globals.css` (Tailwind import) and `app/layout.tsx` are real again, not placeholder.
+> `app/login/page.tsx` restores email/password + Google sign-in (from `lib/supabase/client.ts`,
+> unchanged); **no `/signup`** — deliberately not restored, existing accounts only. `app/page.tsx`
+> is a real auth gate: signed-out → `/login` (belt-and-suspenders; `proxy.ts` middleware already
+> does this); signed-in non-admin → a static "nothing here yet" placeholder; signed-in admin
+> (`isAdminEmail`, unchanged) → `components/TodoLists.tsx`, three renamable checklists. **This
+> to-do feature is deliberately NOT wired to the backend** — no table, no server action, pure
+> `localStorage` (`components/LogoutButton.tsx` is the only other new file, calls
+> `supabase.auth.signOut()` directly). Do not "fix" it onto Supabase without being asked; that was
+> an explicit requirement, not an oversight.
 > `HANDOFF.md` was already stale before this and remains so — ignore it.
 
 ## Stack & conventions
