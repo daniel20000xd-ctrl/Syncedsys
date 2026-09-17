@@ -1,6 +1,8 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { daemonEnv } from './env'
 import { loadDayEntries, renderDayEntries } from './daylog'
+import type { ThreadState } from './schemas'
+import { renderHits, type SearchHit } from './search'
 
 // A thread holds references, not a snapshot: referenced items are re-resolved fresh
 // every time the thread is loaded. Routing to threads is deterministic, never model-classified.
@@ -23,12 +25,19 @@ export type Thread = {
   last_activity_at: string
   closed_at: string | null
   close_reason: string | null
+  working_state: string | null
+  open_question: string | null
 }
+
+export type Finding = { id: string; query: string; why: string | null; results: SearchHit[]; created_at: string }
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const TOPIC_PLACEHOLDER_MAX = 80
 const MAX_THREAD_MESSAGES = 60
 const MAX_LOG_DATES = 3
+const MAX_REFERENCES = 30
+
+const union = (a: string[], b: string[]) => [...new Set([...a, ...b.filter(id => UUID.test(id))])].slice(-MAX_REFERENCES)
 
 export function placeholderTopic(content: string): string {
   const flat = content.replace(/\s+/g, ' ').trim()
@@ -44,6 +53,8 @@ export async function createThread(userId: string, t: {
   archiveIds?: string[]
   logDates?: string[]
   expectsReply?: boolean
+  workingState?: string | null
+  openQuestion?: string | null
 }): Promise<Thread> {
   const now = new Date().toISOString()
   const { data, error } = await createAdminClient().from('daemon_threads').insert({
@@ -56,6 +67,8 @@ export async function createThread(userId: string, t: {
     referenced_archive_ids: (t.archiveIds ?? []).filter(id => UUID.test(id)),
     referenced_log_dates: t.logDates ?? [],
     expects_reply: t.expectsReply ?? false,
+    working_state: t.workingState ?? null,
+    open_question: t.openQuestion ?? null,
     status: 'open',
     opened_at: now,
     last_activity_at: now,
@@ -84,16 +97,73 @@ export async function updateThreadAfterInput(threadId: string, u: {
   status: 'answered' | 'open'
   expectsReply: boolean
   topic?: string | null
+  state: ThreadState
 }): Promise<void> {
   const admin = createAdminClient()
+  const { data: current } = await admin.from('daemon_threads')
+    .select('referenced_active_ids, referenced_archive_ids').eq('id', threadId).maybeSingle()
   await admin.from('daemon_threads').update({
     status: u.status,
     expects_reply: u.expectsReply,
     last_activity_at: new Date().toISOString(),
+    working_state: u.state.working_state,
+    open_question: u.state.open_question,
+    referenced_active_ids: union(current?.referenced_active_ids ?? [], u.state.referenced_active_ids),
+    referenced_archive_ids: union(current?.referenced_archive_ids ?? [], u.state.referenced_archive_ids),
     ...(u.topic?.trim() ? { topic: u.topic.trim() } : {}),
   }).eq('id', threadId)
   // The user has spoken on this thread, so whatever it was waiting on has been reported.
   await clearAwaitingReport(threadId)
+}
+
+// A heartbeat pinging into an existing thread: the daemon spoke last, so the thread is open.
+export async function updateThreadFromHeartbeat(thread: Thread, state: ThreadState, expectsReply: boolean): Promise<void> {
+  await createAdminClient().from('daemon_threads').update({
+    status: 'open',
+    expects_reply: expectsReply,
+    last_activity_at: new Date().toISOString(),
+    closed_at: null,
+    close_reason: null,
+    working_state: state.working_state,
+    open_question: state.open_question,
+    referenced_active_ids: union(thread.referenced_active_ids, state.referenced_active_ids),
+    referenced_archive_ids: union(thread.referenced_archive_ids, state.referenced_archive_ids),
+  }).eq('id', thread.id)
+}
+
+// ── findings: model-requested searches, delivered on the next call in the thread ──
+
+export async function addFinding(userId: string, threadId: string, query: string, why: string, results: SearchHit[]): Promise<void> {
+  const { error } = await createAdminClient().from('daemon_thread_findings')
+    .insert({ user_id: userId, thread_id: threadId, query, why, results })
+  if (error) console.error('[daemon/threads] finding insert failed:', error.message)
+}
+
+export async function pendingFindings(threadIds: string[]): Promise<Map<string, Finding[]>> {
+  const out = new Map<string, Finding[]>()
+  if (!threadIds.length) return out
+  const { data, error } = await createAdminClient().from('daemon_thread_findings')
+    .select('id, thread_id, query, why, results, created_at')
+    .in('thread_id', threadIds).is('consumed_at', null)
+    .order('created_at', { ascending: true })
+  if (error) throw new Error(`findings read failed: ${error.message}`)
+  for (const f of (data ?? []) as (Finding & { thread_id: string })[]) out.set(f.thread_id, [...(out.get(f.thread_id) ?? []), f])
+  return out
+}
+
+// Marked only after the call that saw them succeeded, so a failed call never loses them.
+export async function consumeFindings(ids: string[], by: 'input' | 'heartbeat'): Promise<void> {
+  if (!ids.length) return
+  await createAdminClient().from('daemon_thread_findings')
+    .update({ consumed_at: new Date().toISOString(), consumed_by: by })
+    .in('id', ids).is('consumed_at', null)
+}
+
+export function renderFindings(findings: Finding[]): string {
+  return findings.map(f => {
+    const hits = f.results.length ? renderHits(f.results) : '(nothing cleared the relevance threshold)'
+    return `You searched for "${f.query}" (${f.created_at.slice(0, 16)}${f.why ? `, because: ${f.why}` : ''}):\n${hits}`
+  }).join('\n\n')
 }
 
 export async function clearAwaitingReport(threadId: string): Promise<void> {
@@ -155,15 +225,19 @@ export async function latestMessages(threadIds: string[]): Promise<Map<string, {
 export async function renderThreadSummaries(userId: string, limit = 30): Promise<string> {
   const threads = await listUnclosedThreads(userId, limit)
   if (!threads.length) return '(none)'
-  const last = await latestMessages(threads.map(t => t.id))
+  const [last, findings] = await Promise.all([latestMessages(threads.map(t => t.id)), pendingFindings(threads.map(t => t.id))])
+  const hours = (iso: string) => Math.round((Date.now() - Date.parse(iso)) / 360_000) / 10
   return threads.map(t => {
     const l = last.get(t.id)
-    return JSON.stringify({
+    const f = findings.get(t.id)
+    const stub = JSON.stringify({
       id: t.id, topic: t.topic, opened_by: t.opened_by, status: t.status, expects_reply: t.expects_reply,
-      question: t.question, opened_at: t.opened_at, last_activity_at: t.last_activity_at,
+      question: t.question, open_question: t.open_question,
+      age_hours: hours(t.opened_at), hours_since_activity: hours(t.last_activity_at),
       last_message_from: l ? (l.direction === 'in' ? 'user' : 'daemon') : null,
-      last_message_at: l?.created_at ?? null,
+      pending_findings: f?.length ?? 0,
     })
+    return f?.length ? `${stub}\n${renderFindings(f)}` : stub
   }).join('\n')
 }
 
@@ -174,9 +248,9 @@ export async function buildThreadContext(userId: string, threadId: string, today
   const thread = await getThread(userId, threadId)
   if (!thread) return '(thread not found)'
   const admin = createAdminClient()
-  const [messages, active, archive] = await Promise.all([
+  const [messages, active, archive, findings] = await Promise.all([
     admin.from('daemon_interaction_log')
-      .select('direction, call_type, content, created_at')
+      .select('direction, call_type, content, created_at, reasoning')
       .eq('thread_id', threadId)
       .order('created_at', { ascending: false })
       .limit(MAX_THREAD_MESSAGES),
@@ -186,6 +260,7 @@ export async function buildThreadContext(userId: string, threadId: string, today
     thread.referenced_archive_ids.length
       ? admin.from('daemon_archive').select('id, type, title, content, tags, outcome, why_archived, archived_at').in('id', thread.referenced_archive_ids)
       : Promise.resolve({ data: [] }),
+    pendingFindings([threadId]),
   ])
 
   const logDates = thread.referenced_log_dates.filter(d => d !== today).sort().slice(-MAX_LOG_DATES)
@@ -199,11 +274,12 @@ export async function buildThreadContext(userId: string, threadId: string, today
   const { data: archivedSince } = gone.length
     ? await admin.from('daemon_archive').select('id, original_id, title, outcome, why_archived, archived_at').in('original_id', gone)
     : { data: [] }
-  const { reasoning, ...rest } = thread
+  const { reasoning, working_state, open_question, ...rest } = thread
   const meta: Record<string, unknown> = { ...rest }
   delete meta.user_id
+  const threadFindings = findings.get(threadId) ?? []
   const pending = [...excludeInbound]
-  const shown = ((messages.data ?? []) as { direction: string; call_type: string; content: string; created_at: string }[])
+  const shown = ((messages.data ?? []) as { direction: string; call_type: string; content: string; created_at: string; reasoning: string | null }[])
     .filter(m => {
       const i = m.direction === 'in' ? pending.indexOf(m.content) : -1
       if (i === -1) return true
@@ -215,9 +291,12 @@ export async function buildThreadContext(userId: string, threadId: string, today
   return [
     `Thread: ${JSON.stringify(meta)}`,
     reasoning ? `Why it was opened (internal, never shown to the user): ${reasoning}` : '',
-    `Messages in this thread (oldest first):\n${shown
-      .map(m => `[${m.created_at}] ${m.direction === 'in' ? 'USER' : `DAEMON(${m.call_type})`}: ${m.content}`)
+    `Your working state on this thread (from your last turn):\n${working_state?.trim() || '(none yet)'}`,
+    `Your open question: ${open_question?.trim() || '(none)'}`,
+    `Messages in this thread (oldest first; your reasoning in [why: …] was never shown to the user):\n${shown
+      .map(m => `[${m.created_at}] ${m.direction === 'in' ? 'USER' : `DAEMON(${m.call_type})`}: ${m.content}${m.reasoning ? `\n  [why: ${m.reasoning}]` : ''}`)
       .join('\n') || '(none)'}`,
+    threadFindings.length ? `Results of searches you asked for on this thread (new since your last turn):\n${renderFindings(threadFindings)}` : '',
     `Referenced active items, current state:\n${active.data?.length ? JSON.stringify(active.data, null, 2) : '(none)'}`,
     gone.length ? `Referenced items no longer active: ${gone.join(', ')}` : '',
     archivedSince?.length ? `Of those, archived since:\n${JSON.stringify(archivedSince, null, 2)}` : '',

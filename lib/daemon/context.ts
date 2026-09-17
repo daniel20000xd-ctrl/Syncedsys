@@ -4,6 +4,7 @@ import { addDays, describeNow, localDate, reflectionDay, startOfLocalDay } from 
 import { getLatestNotes, getRecentNotes } from './notes'
 import { listProposals } from './proposals'
 import type { Metrics } from './metrics'
+import { recordRecall, REFLECTION_ARCHIVE_LIMIT, renderHits, searchMemoryMany, type SearchHit } from './search'
 import { assembleDayLog, ensureDaylogMigrated, loadDayEntries } from './daylog'
 import { buildThreadContext, renderThreadSummaries } from './threads'
 import { loadLinkStubs } from './links'
@@ -91,7 +92,7 @@ async function head(userId: string, day: string, thread?: { id: string; excludeI
 }
 
 // threadId is null only for dry runs.
-export async function buildInputTurns(userId: string, threadId: string | null, messages: string[]): Promise<Turn[]> {
+export async function buildInputTurns(userId: string, threadId: string | null, messages: string[], related: SearchHit[] = []): Promise<Turn[]> {
   const today = localDate()
   await ensureDaylogMigrated(userId)
   const admin = createAdminClient()
@@ -119,6 +120,10 @@ export async function buildInputTurns(userId: string, threadId: string | null, m
     section('DAY LOG (previous 3 days)', renderForContext(daylogs)),
     section('CALENDAR (today + 7 days)', renderForContext(calendar)),
     section('RECENT INTERACTIONS (other threads)', renderLog(history)),
+    // Only when something cleared the threshold — never padded with weak matches.
+    ...(related.length
+      ? [section('POSSIBLY RELATED, FROM BEFORE (automatic recall on this message; stubs with date and verbatim excerpt — link, never duplicate)', renderHits(related))]
+      : []),
     ...(proposals.length
       ? [section('PROPOSALS AWAITING OR ACCEPTED (verdicts only if the user gives one in this message)', proposals
         .map(p => JSON.stringify({ id: p.id, verdict: p.verdict, category: p.category, direction: p.direction, title: p.title }))
@@ -153,27 +158,21 @@ export async function buildHeartbeatTurns(userId: string): Promise<Turn[]> {
   return [{ role: 'user', text: context }]
 }
 
-const STOPWORDS = new Set(['that', 'this', 'with', 'have', 'from', 'what', 'when', 'will', 'just', 'your', 'about', 'there', 'they', 'would', 'could', 'should', 'been', 'were', 'into', 'then', 'than', 'them', 'also', 'some', 'like'])
-
-// Tag/keyword overlap retrieval. Seam for embedding-based retrieval later: swap this
-// function's body for a vector search over daemon_archive and keep the signature.
-async function matchArchive(userId: string, active: ActiveItem[], interactionText: string): Promise<ArchiveItem[]> {
-  const terms = new Set<string>()
-  for (const item of active) for (const t of item.tags) terms.add(t.trim().toLowerCase())
-  for (const w of interactionText.toLowerCase().match(/[a-z0-9åäöæøéèüß_-]{4,}/g) ?? []) {
-    if (!STOPWORDS.has(w)) terms.add(w)
-  }
-  const list = [...terms].filter(Boolean).slice(0, 300)
-  if (!list.length) return []
-  const { data, error } = await createAdminClient()
-    .from('daemon_archive')
-    .select('*')
-    .eq('user_id', userId)
-    .overlaps('tags', list)
-    .order('archived_at', { ascending: false })
-    .limit(30)
+// Reflection's archive pass: recall seeded from current active titles and the day's
+// entries, archive only. Replaces the v1–v4 tag-overlap match.
+async function recallArchive(userId: string, active: ActiveItem[], dayEntries: string[]): Promise<ArchiveItem[]> {
+  const seeds = [...active.map(a => a.title), dayEntries.join('\n')].filter(q => q.trim())
+  if (!seeds.length) return []
+  const { hits, signals } = await searchMemoryMany(seeds, { userId, kinds: ['archive'], limit: REFLECTION_ARCHIVE_LIMIT })
+  await recordRecall(userId, { mode: 'reflection', query: seeds.join(' | ').slice(0, 4000), signals, hits })
+  if (!hits.length) return []
+  const { data, error } = await createAdminClient().from('daemon_archive').select('*').in('id', hits.map(h => h.id))
   if (error) throw new Error(`daemon_archive read failed: ${error.message}`)
-  return (data ?? []) as ArchiveItem[]
+  const rows = new Map(((data ?? []) as ArchiveItem[]).map(r => [r.id, r]))
+  return hits.flatMap(h => {
+    const row = rows.get(h.id)
+    return row ? [{ ...row, recall: { score: h.score, why_matched: h.why_matched } } as ArchiveItem] : []
+  })
 }
 
 export async function buildReflectionTurns(userId: string): Promise<Turn[]> {
@@ -200,14 +199,14 @@ export async function buildReflectionTurns(userId: string): Promise<Turn[]> {
   ])
   if (log.error) throw new Error(`interaction log read failed: ${log.error.message}`)
   const logRows = (log.data ?? []) as LogRow[]
-  const archive = await matchArchive(userId, active, [...logRows, ...entries].map(r => r.content).join('\n'))
+  const archive = await recallArchive(userId, active, entries.map(e => e.content))
 
   const context = [
     ...headSections,
     header('reflection'),
     `Reflecting on ${day}. day_log_close and calendar_roll are for ${day}; tomorrow_plan is for ${addDays(day, 1)}. operating_notes replaces the current version in full.`,
     section('ACTIVE ITEMS', await renderWithLinks(userId, active)),
-    section('RELEVANT ARCHIVE (tag-matched)', await renderWithLinks(userId, archive)),
+    section('RELEVANT ARCHIVE (recalled by search; each carries its score)', await renderWithLinks(userId, archive)),
     section('UNCLOSED THREADS', threads),
     section('DAY LOG (previous 7 days)', renderForContext(daylogs)),
     section(`INTERACTIONS (${day})`, renderLog(logRows)),

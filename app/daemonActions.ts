@@ -27,6 +27,8 @@ import { metaJob, reflectionJob, schedulerTick } from '@/lib/daemon/jobs'
 import { debugAllowed, dryRun } from '@/lib/daemon/dryrun'
 import type { PromptKind } from '@/lib/daemon/prompts'
 import type { CallType } from '@/lib/daemon/gemini'
+import { DEFAULT_MIN_SCORE, PREFETCH_MIN_SCORE, SEARCH_KINDS, searchMemoryMany, type SearchKind } from '@/lib/daemon/search'
+import { vectorStatus } from '@/lib/daemon/embeddings'
 
 const PROMPT_KINDS: PromptKind[] = ['system', 'input', 'heartbeat', 'reflection', 'meta']
 const CALL_TYPES: CallType[] = ['input', 'heartbeat', 'reflection', 'meta']
@@ -323,6 +325,19 @@ export async function getMemory(filters: MemoryFilters) {
   return { active: activeRows, archive: archiveRows, stubs: stubsById, events: eventsByItem, tags: allTags }
 }
 
+// Runs searchMemory directly so retrieval quality can be checked by hand. Read-only: no
+// recall event is logged, so console searches don't skew the recall metrics.
+export async function searchMemoryConsole(query: string, opts: { kinds?: string[]; minScore?: number; limit?: number }) {
+  await requireAdmin()
+  const kinds = (opts.kinds ?? []).filter((k): k is SearchKind => (SEARCH_KINDS as readonly string[]).includes(k))
+  const { hits, signals } = await searchMemoryMany([query], {
+    kinds: kinds.length ? kinds : SEARCH_KINDS,
+    minScore: Math.max(0, Math.min(1, opts.minScore ?? 0)),
+    limit: Math.min(Math.max(opts.limit ?? 25, 1), 100),
+  })
+  return { hits, signals, vector: vectorStatus(), thresholds: { default: DEFAULT_MIN_SCORE, prefetch: PREFETCH_MIN_SCORE } }
+}
+
 // ── graph ────────────────────────────────────────────────────────────────────────
 
 export async function getGraph(limit: number) {
@@ -379,16 +394,18 @@ export async function getThreadDetail(threadId: string) {
     id: string; topic: string; status: string; opened_by: string; expects_reply: boolean; question: string | null; reasoning: string | null
     referenced_active_ids: string[]; referenced_archive_ids: string[]; referenced_log_dates: string[]
     opened_at: string; last_activity_at: string; closed_at: string | null; close_reason: string | null
+    working_state: string | null; open_question: string | null
   } | null
   if (!thread) return null
   const ids = [...thread.referenced_active_ids, ...thread.referenced_archive_ids]
-  const [messages, dayEntries, activeRefs, archiveRefs, archivedFromActive, pendingOut] = await Promise.all([
-    admin.from('daemon_interaction_log').select('id, direction, call_type, content, push_sent, created_at').eq('thread_id', threadId).order('created_at', { ascending: true }),
+  const [messages, dayEntries, activeRefs, archiveRefs, archivedFromActive, pendingOut, findings] = await Promise.all([
+    admin.from('daemon_interaction_log').select('id, direction, call_type, content, push_sent, created_at, reasoning, working_state').eq('thread_id', threadId).order('created_at', { ascending: true }),
     admin.from('daemon_day_entries').select('entry_date, call_type, content, created_at').eq('thread_id', threadId).order('created_at', { ascending: true }),
     ids.length ? admin.from('daemon_active').select('id, title, status').in('id', ids) : Promise.resolve({ data: [], error: null }),
     ids.length ? admin.from('daemon_archive').select('id, original_id, title, outcome').in('id', ids) : Promise.resolve({ data: [], error: null }),
     thread.referenced_active_ids.length ? admin.from('daemon_archive').select('id, original_id, title, outcome').in('original_id', thread.referenced_active_ids) : Promise.resolve({ data: [], error: null }),
     admin.from('daemon_pending_outbound').select('content, created_at, delivered_at').eq('thread_id', threadId),
+    admin.from('daemon_thread_findings').select('id, query, why, results, created_at, consumed_at, consumed_by').eq('thread_id', threadId).order('created_at', { ascending: true }),
   ])
   const resolved: Record<string, string> = {}
   for (const a of must(activeRefs, 'refs') as { id: string; title: string; status: string }[]) resolved[a.id] = `${a.title} (active, ${a.status})`
@@ -398,7 +415,14 @@ export async function getThreadDetail(threadId: string) {
   }
   return {
     thread,
-    messages: must(messages, 'messages') as { id: string; direction: string; call_type: string; content: string; push_sent: boolean; created_at: string }[],
+    messages: must(messages, 'messages') as {
+      id: string; direction: string; call_type: string; content: string; push_sent: boolean; created_at: string
+      reasoning: string | null; working_state: string | null
+    }[],
+    findings: must(findings, 'findings') as {
+      id: string; query: string; why: string | null; created_at: string; consumed_at: string | null; consumed_by: string | null
+      results: { kind: string; id: string; title: string; excerpt: string; created_at: string; score: number; why_matched: string }[]
+    }[],
     dayEntries: must(dayEntries, 'day entries') as { entry_date: string; call_type: string; content: string; created_at: string }[],
     pendingOutbound: must(pendingOut, 'pending outbound') as { content: string; created_at: string; delivered_at: string | null }[],
     resolved,

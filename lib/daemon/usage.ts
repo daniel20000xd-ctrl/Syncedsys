@@ -6,6 +6,7 @@ import { startOfLocalDay } from './time'
 // as of 2026-09. Thinking tokens bill as output. The 3.6–3.8 Flash promo rates end
 // 2026-12-31 (doubling to 1.50/7.50) — update this table then.
 const PRICING: { prefix: string; input: number; output: number }[] = [
+  { prefix: 'gemini-embedding', input: 0.20, output: 0 },
   { prefix: 'gemini-3.8-flash', input: 0.75, output: 3.75 },
   { prefix: 'gemini-3.7-flash', input: 0.75, output: 3.75 },
   { prefix: 'gemini-3.6-flash', input: 0.75, output: 3.75 },

@@ -245,3 +245,9 @@ export async function readMonth(userId: string, family: Family, month: string): 
   }
   return out
 }
+
+// Parsed contents of one stored file (by full key), for one-off tooling.
+export async function readFamilyFile(key: string): Promise<{ preamble: string; blocks: Block[] } | null> {
+  const text = await getText(key)
+  return text === null ? null : parseBlocks(text)
+}

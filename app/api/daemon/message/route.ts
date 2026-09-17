@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { isDeviceAuthorized } from '@/lib/daemon/auth'
 import { acquireLock, getDaemonUserId, getState, releaseLock } from '@/lib/daemon/state'
@@ -6,6 +6,7 @@ import { drainPendingInput, runInput } from '@/lib/daemon/calls'
 import { isOverBudget } from '@/lib/daemon/usage'
 import { sendBudgetAlert } from '@/lib/daemon/alert'
 import { localDate } from '@/lib/daemon/time'
+import { embedPending } from '@/lib/daemon/embeddings'
 import { createThread, getThread, markThreadReplied, placeholderTopic, UUID } from '@/lib/daemon/threads'
 
 export const runtime = 'nodejs'
@@ -71,7 +72,15 @@ export async function POST(req: NextRequest) {
     const lock = await acquireLock('input')
     if (!lock) return queued(BUSY)
     try {
-      reply = (await runInput(userId, { push: false, threadId }))?.reply ?? null
+      const result = await runInput(userId, { push: false, threadId })
+      reply = result?.reply ?? null
+      // Requested searches and embedding of the new rows happen after the reply is sent.
+      if (result) {
+        after(async () => {
+          await result.followUp()
+          await embedPending()
+        })
+      }
     } finally {
       await releaseLock(lock)
     }

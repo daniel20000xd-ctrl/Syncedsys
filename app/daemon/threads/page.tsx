@@ -58,7 +58,7 @@ async function List({ status }: { status?: string }) {
 async function Detail({ id }: { id: string }) {
   const data = await getThreadDetail(id)
   if (!data) return <Empty>Thread not found.</Empty>
-  const { thread, messages, dayEntries, resolved, pendingOutbound } = data
+  const { thread, messages, dayEntries, resolved, pendingOutbound, findings } = data
   const ref = (rid: string) => (
     <li key={rid} className="text-[12px]">
       <Link href={`/daemon/memory?item=${rid}`} className="text-sky-500 hover:underline">{resolved[rid] ?? '(not found)'}</Link>
@@ -83,6 +83,13 @@ async function Detail({ id }: { id: string }) {
                     {m.direction === 'out' && <span>{m.push_sent ? 'pushed' : 'not pushed'}</span>}
                   </div>
                   <p className="text-[13px] text-zinc-200 whitespace-pre-wrap">{m.content}</p>
+                  {m.reasoning && <p className="text-[12px] text-amber-100/70 mt-1 whitespace-pre-wrap"><span className="text-zinc-500">why (never shown on the phone):</span> {m.reasoning}</p>}
+                  {m.working_state && (
+                    <details className="mt-1">
+                      <summary className="text-[11px] text-zinc-500 cursor-pointer">working state at this turn</summary>
+                      <p className="text-[12px] text-zinc-400 whitespace-pre-wrap mt-1">{m.working_state}</p>
+                    </details>
+                  )}
                 </li>
               ))}
             </ol>
@@ -105,6 +112,38 @@ async function Detail({ id }: { id: string }) {
               <dt className="text-zinc-500">last activity</dt><dd className="font-mono">{fmtTime(thread.last_activity_at)}</dd>
               <dt className="text-zinc-500">closed</dt><dd className="font-mono">{thread.closed_at ? `${fmtTime(thread.closed_at)} — ${thread.close_reason ?? ''}` : '—'}</dd>
             </dl>
+          </Panel>
+          <Panel title="Working state (current)">
+            {thread.working_state ? <p className="text-[13px] text-zinc-200 whitespace-pre-wrap">{thread.working_state}</p> : <Empty>None yet.</Empty>}
+          </Panel>
+          <Panel title="Open question">
+            {thread.open_question ? <p className="text-[13px] text-sky-200">{thread.open_question}</p> : <Empty>Not waiting to find anything out.</Empty>}
+          </Panel>
+          <Panel title="Findings (searches it asked for)" right={`${findings.length}`}>
+            {findings.length ? (
+              <ul className="space-y-3">
+                {findings.map(f => (
+                  <li key={f.id} className="text-[12px]">
+                    <div className="text-zinc-200">&ldquo;{f.query}&rdquo;</div>
+                    {f.why && <div className="text-zinc-500">why: {f.why}</div>}
+                    <div className="text-[11px] font-mono text-zinc-500">
+                      {fmtTime(f.created_at)} · {f.consumed_at ? `delivered ${fmtTime(f.consumed_at)} via ${f.consumed_by}` : 'not yet delivered'}
+                    </div>
+                    {f.results.length ? (
+                      <ul className="mt-1 space-y-1 border-l border-zinc-800 pl-2">
+                        {f.results.map(h => (
+                          <li key={`${h.kind}${h.id}`}>
+                            <Badge>{h.kind}</Badge> <span className="font-mono text-zinc-500">{h.score}</span> {h.title}{' '}
+                            <span className="text-zinc-600">{h.created_at.slice(0, 10)}</span>
+                            <div className="text-zinc-500">&ldquo;{h.excerpt}&rdquo;</div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : <div className="text-zinc-600 italic">nothing cleared the threshold</div>}
+                  </li>
+                ))}
+              </ul>
+            ) : <Empty>None.</Empty>}
           </Panel>
           <Panel title="Question">{thread.question ? <p className="text-[13px] text-zinc-200">{thread.question}</p> : <Empty>None asked.</Empty>}</Panel>
           <Panel title="Reasoning (never shown on the phone)">

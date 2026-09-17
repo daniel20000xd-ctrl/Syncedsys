@@ -167,6 +167,23 @@ export default async function MetricsPage({ searchParams }: { searchParams: Prom
         </Panel>
       </div>
 
+      <Panel title={`Recall (last ${windowDays} days vs the ${windowDays} before)`}>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Stat label="prefetch hit rate" value={pct(cur.recall.prefetch_hit_rate)} sub={<>{cur.recall.prefetch_with_hits}/{cur.recall.prefetch_calls} input calls · {delta(cur.recall.prefetch_hit_rate, m.prior.recall.prefetch_hit_rate, true)}</>} />
+          <Stat label="searches requested by model" value={cur.recall.model_searches_requested} sub={`${cur.recall.model_searches_with_results} found something`} />
+          <Stat label="findings delivered / unconsumed" value={`${cur.recall.findings_delivered} / ${cur.recall.findings_unconsumed}`} sub={Object.entries(cur.recall.findings_delivered_by).map(([k, v]) => `${k} ${v}`).join(', ') || undefined} />
+          <Stat
+            label="recalled → then linked"
+            value={pct(cur.recall.recalled_then_linked_rate)}
+            sub={<>{cur.recall.recalled_then_linked}/{cur.recall.recalled_linkable_items} items · {delta(cur.recall.recalled_then_linked_rate, m.prior.recall.recalled_then_linked_rate)}</>}
+            tone={cur.recall.recalled_linkable_items >= 5 && (cur.recall.recalled_then_linked_rate ?? 0) < 0.1 ? 'warn' : undefined}
+          />
+        </div>
+        <p className="text-[11px] text-zinc-600 mt-2">
+          A high prefetch hit rate with a low link rate means recall is surfacing noise: raise PREFETCH_MIN_SCORE in lib/daemon/search.ts.
+        </p>
+      </Panel>
+
       <details>
         <summary className="text-xs text-zinc-500 cursor-pointer">raw metrics JSON (as sent to the meta call)</summary>
         <div className="mt-2"><Json value={m} /></div>

@@ -21,6 +21,17 @@ export type InputAction =
   | { op: 'calendar_write'; date: string; block: string }
   | ({ op: 'link' } & LinkSpec)
   | { op: 'verdict'; proposal_id: string; verdict: 'accepted' | 'rejected' | 'implemented'; reason: string; user_quote: string }
+  | { op: 'search'; query: string; why: string }
+
+// The thread scratchpad, same shape from input and heartbeat: what the daemon is working
+// out on this thread, what it still doesn't know, and why it said what it said.
+export type ThreadState = {
+  working_state: string
+  open_question: string | null
+  reasoning: string
+  referenced_active_ids: string[]
+  referenced_archive_ids: string[]
+}
 
 export type LinkSpec = { from_kind: 'active' | 'archive'; from_id: string; to_kind: 'active' | 'archive'; to_id: string; why: string }
 
@@ -31,6 +42,7 @@ export type InputResponse = {
   thread_status: 'answered' | 'still_open'
   expects_reply: boolean
   thread_topic: string | null
+  thread: ThreadState
   next_wake_time: string | null
 }
 
@@ -39,13 +51,9 @@ export type HeartbeatResponse = {
   message: string | null
   target_ids: string[]
   expects_reply: boolean
-  thread: {
-    topic: string
-    question: string | null
-    reasoning: string
-    referenced_active_ids: string[]
-    referenced_archive_ids: string[]
-  } | null
+  // Ping into an existing open thread instead of opening a new one.
+  thread_id: string | null
+  thread: (ThreadState & { topic: string | null; question: string | null }) | null
   day_entry: string | null
   next_wake_time: string
   reasoning: string
@@ -102,6 +110,14 @@ const linkSchema = obj({
   why: str(),
 })
 
+const threadStateProps = {
+  working_state: str('Your running notes on this thread, rewritten in full each turn: what we are figuring out, what you have learned, what you still need.'),
+  open_question: nullableStr('What you are currently waiting to find out, or null.'),
+  reasoning: str('Why you said or asked this. Logged, never shown to the user.'),
+  referenced_active_ids: { type: 'array', items: str() },
+  referenced_archive_ids: { type: 'array', items: str() },
+}
+
 const fieldsSchema = {
   type: 'object',
   description: 'Only the fields to change.',
@@ -123,7 +139,7 @@ export const INPUT_SCHEMA = obj({
   actions: {
     type: 'array',
     items: obj({
-      op: { type: 'string', enum: ['create', 'update', 'archive', 'calendar_write', 'link', 'verdict'] },
+      op: { type: 'string', enum: ['create', 'update', 'archive', 'calendar_write', 'link', 'verdict', 'search'] },
       id: nullableStr('update/archive: daemon_active id'),
       type: nullableStr('create: task | problem | note'),
       title: nullableStr(),
@@ -132,7 +148,8 @@ export const INPUT_SCHEMA = obj({
       deadline: nullableStr('create: ISO-8601 or null'),
       fields: { ...fieldsSchema, type: ['object', 'null'] },
       outcome: nullableStr('archive'),
-      why: nullableStr('archive'),
+      why: nullableStr('archive / search: why'),
+      query: nullableStr('search: what to look for in older memory; results arrive on the next call in this thread'),
       date: nullableStr('calendar_write: YYYY-MM-DD'),
       block: nullableStr('calendar_write: markdown for that day'),
       from_kind: nullableStr('link: active | archive'),
@@ -149,6 +166,7 @@ export const INPUT_SCHEMA = obj({
   thread_status: { type: 'string', enum: ['answered', 'still_open'] },
   expects_reply: { type: 'boolean' },
   thread_topic: nullableStr('Short topic for this thread, or null to keep the current one.'),
+  thread: obj(threadStateProps),
   next_wake_time: nullableStr('ISO-8601, or null to leave unchanged'),
 })
 
@@ -178,13 +196,12 @@ export const HEARTBEAT_SCHEMA = obj({
   message: nullableStr(),
   target_ids: { type: 'array', items: str('daemon_active id being nudged') },
   expects_reply: { type: 'boolean' },
+  thread_id: nullableStr('Ping into this existing open thread instead of opening a new one. Prefer this when the ping concerns something already under discussion.'),
   thread: {
     ...obj({
-      topic: str(),
+      topic: nullableStr('Required for a new thread; ignored when thread_id is set.'),
       question: nullableStr(),
-      reasoning: str('Why this ping — logged, never sent.'),
-      referenced_active_ids: { type: 'array', items: str() },
-      referenced_archive_ids: { type: 'array', items: str() },
+      ...threadStateProps,
     }),
     type: ['object', 'null'],
     description: 'Required when should_ping.',
@@ -227,6 +244,18 @@ const isoOrNull = (v: unknown, what: string) => need(v === null || v === undefin
 const strArr = (v: unknown, what: string) => need(Array.isArray(v) && v.every(x => typeof x === 'string'), `${what} must be string[]`, v as string[])
 const idArr = (v: unknown, what: string) => (v == null ? [] : strArr(v, what))
 const arr = (v: unknown, what: string) => need(Array.isArray(v), `${what} must be an array`, v as unknown[])
+
+function threadState(v: unknown, what: string): ThreadState {
+  need(isObj(v), `${what} must be an object`, v)
+  const t = v as Record<string, unknown>
+  return {
+    working_state: s(t.working_state, `${what}.working_state`),
+    open_question: sOrNull(t.open_question, `${what}.open_question`),
+    reasoning: sOrNull(t.reasoning, `${what}.reasoning`) ?? '',
+    referenced_active_ids: idArr(t.referenced_active_ids, `${what}.referenced_active_ids`),
+    referenced_archive_ids: idArr(t.referenced_archive_ids, `${what}.referenced_archive_ids`),
+  }
+}
 
 function link(v: unknown, what: string): LinkSpec {
   need(isObj(v), `${what} must be an object`, v)
@@ -290,6 +319,12 @@ export function validateInput(v: unknown): InputResponse {
           reason: sOrNull(x.reason, `${what}.reason`) ?? '',
           user_quote: sOrNull(x.user_quote, `${what}.user_quote`) ?? '',
         }
+      case 'search':
+        return {
+          op: 'search',
+          query: need(typeof x.query === 'string' && x.query.trim() !== '', `${what}.query required`, x.query as string),
+          why: sOrNull(x.why, `${what}.why`) ?? '',
+        }
       default:
         throw new Invalid(`${what}.op invalid`)
     }
@@ -301,6 +336,7 @@ export function validateInput(v: unknown): InputResponse {
     thread_status: need(r.thread_status === 'answered' || r.thread_status === 'still_open', 'thread_status invalid', r.thread_status as InputResponse['thread_status']),
     expects_reply: r.expects_reply === true,
     thread_topic: sOrNull(r.thread_topic, 'thread_topic'),
+    thread: threadState(r.thread, 'thread'),
     next_wake_time: isoOrNull(r.next_wake_time, 'next_wake_time'),
   }
 }
@@ -311,23 +347,23 @@ export function validateHeartbeat(v: unknown): HeartbeatResponse {
   const should_ping = need(typeof r.should_ping === 'boolean', 'should_ping must be boolean', r.should_ping as boolean)
   const message = sOrNull(r.message, 'message')
   need(!should_ping || !!message?.trim(), 'message required when should_ping', null)
+  const thread_id = sOrNull(r.thread_id, 'thread_id')
   let thread: HeartbeatResponse['thread'] = null
   if (isObj(r.thread)) {
-    const t = r.thread
     thread = {
-      topic: s(t.topic, 'thread.topic'),
-      question: sOrNull(t.question, 'thread.question'),
-      reasoning: sOrNull(t.reasoning, 'thread.reasoning') ?? '',
-      referenced_active_ids: idArr(t.referenced_active_ids, 'thread.referenced_active_ids'),
-      referenced_archive_ids: idArr(t.referenced_archive_ids, 'thread.referenced_archive_ids'),
+      ...threadState(r.thread, 'thread'),
+      topic: sOrNull(r.thread.topic, 'thread.topic'),
+      question: sOrNull(r.thread.question, 'thread.question'),
     }
   }
   need(!should_ping || thread !== null, 'thread required when should_ping', null)
+  need(!should_ping || !!thread_id || !!thread?.topic?.trim(), 'thread.topic required when opening a new thread', null)
   return {
     should_ping,
     message,
     target_ids: idArr(r.target_ids, 'target_ids'),
     expects_reply: r.expects_reply === true,
+    thread_id,
     thread,
     day_entry: sOrNull(r.day_entry, 'day_entry'),
     next_wake_time: need(isIso(r.next_wake_time), 'next_wake_time must be ISO-8601', r.next_wake_time as string),

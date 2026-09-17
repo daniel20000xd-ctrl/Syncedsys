@@ -21,8 +21,11 @@ export async function notify(
   userId: string,
   message: string,
   callType: OutboundCallType,
-  { push = true, threadId = null, deferOutsideWakingHours = false }:
-    { push?: boolean; threadId?: string | null; deferOutsideWakingHours?: boolean } = {},
+  { push = true, threadId = null, deferOutsideWakingHours = false, reasoning = null, workingState = null }: {
+    push?: boolean; threadId?: string | null; deferOutsideWakingHours?: boolean
+    // Stored on the message row for the console and later turns; never pushed.
+    reasoning?: string | null; workingState?: string | null
+  } = {},
 ): Promise<{ pushed: boolean; deferred: boolean }> {
   const admin = createAdminClient()
   if (deferOutsideWakingHours && !isWakingHours()) {
@@ -33,7 +36,10 @@ export async function notify(
   }
   const { data: row, error } = await admin
     .from('daemon_interaction_log')
-    .insert({ user_id: userId, direction: 'out', call_type: callType, content: message, push_sent: false, thread_id: threadId })
+    .insert({
+      user_id: userId, direction: 'out', call_type: callType, content: message, push_sent: false, thread_id: threadId,
+      ...(reasoning ? { reasoning } : {}), ...(workingState ? { working_state: workingState } : {}),
+    })
     .select('id')
     .single()
   if (error) throw new Error(`interaction log insert failed: ${error.message}`)

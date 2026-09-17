@@ -17,7 +17,14 @@ export type MetricRows = {
   notesTotal: number
   proposals: { category: string; direction: string; verdict: string; cycle_at: string }[]
   ticks: { outcome: string; created_at: string }[]
+  recalls: { mode: string; hits: { kind: string; id: string }[]; created_at: string }[]
+  findings: { created_at: string; consumed_at: string | null; consumed_by: string | null; results: unknown[] }[]
+  links: { from_id: string; to_id: string; created_at: string }[]
 }
+
+// A recalled archive/active item counts as "then linked" if a link touching it was created
+// within this long after the recall.
+const LINK_AFTER_RECALL_DAYS = 7
 
 export type MetricConfig = {
   now: Date
@@ -158,9 +165,40 @@ function windowMetrics(rows: MetricRows, from: number, to: number, cfg: MetricCo
     return prev ? lineDiffSize(prev.content, n.content) : null
   }).filter((d): d is number => d !== null)
 
+  const recalls = rows.recalls.filter(r => inRange(r.created_at, from, to))
+  const prefetches = recalls.filter(r => r.mode === 'prefetch')
+  const modelSearches = recalls.filter(r => r.mode === 'search')
+  const findings = rows.findings.filter(f => inRange(f.created_at, from, to))
+  const recalledItems = new Map<string, number>()
+  for (const r of recalls) {
+    for (const h of r.hits ?? []) {
+      if (h.kind !== 'archive' && h.kind !== 'active') continue
+      const t = ms(r.created_at)
+      if (!recalledItems.has(h.id) || t < recalledItems.get(h.id)!) recalledItems.set(h.id, t)
+    }
+  }
+  const linkedAfter = [...recalledItems].filter(([id, t]) => rows.links.some(l =>
+    (l.from_id === id || l.to_id === id) && ms(l.created_at) >= t && ms(l.created_at) <= t + LINK_AFTER_RECALL_DAYS * 86_400_000,
+  )).length
+
   return {
     from: new Date(from).toISOString(),
     to: new Date(to).toISOString(),
+    recall: {
+      prefetch_calls: prefetches.length,
+      prefetch_with_hits: prefetches.filter(r => r.hits?.length).length,
+      prefetch_hit_rate: rate(prefetches.filter(r => r.hits?.length).length, prefetches.length),
+      prefetch_hits_median: percentile(prefetches.map(r => r.hits?.length ?? 0), 0.5),
+      model_searches_requested: modelSearches.length,
+      model_searches_with_results: modelSearches.filter(r => r.hits?.length).length,
+      findings_created: findings.length,
+      findings_delivered: findings.filter(f => f.consumed_at).length,
+      findings_unconsumed: findings.filter(f => !f.consumed_at).length,
+      findings_delivered_by: countBy(findings.filter(f => f.consumed_at), f => f.consumed_by ?? 'unknown'),
+      recalled_linkable_items: recalledItems.size,
+      recalled_then_linked: linkedAfter,
+      recalled_then_linked_rate: rate(linkedAfter, recalledItems.size),
+    },
     pings: {
       sent: pings.length,
       replied: replyMinutes.length,
@@ -257,6 +295,7 @@ export function computeMetricsFromData(rows: MetricRows, cfg: MetricConfig) {
       notes_churn: 'Changed lines = lines added plus removed versus the previous version, ignoring order.',
       cost: 'Model calls only (dry runs from the console included, since they are real spend); warning rows are excluded. pct_of_daily_cap_avg = window total / (cap × days).',
       errors: 'Per call type: ledger rows, rows with an error, rows that were retry attempts. warnings = code-side warning rows (notes over cap, dropped model output, noisy cycles).',
+      recall: `prefetch = automatic recall on each input call (hit = anything cleared the threshold). model_searches = search ops the daemon requested. findings delivered = consumed by a later call in the thread. recalled_then_linked = recalled archive/active items that got a link within ${LINK_AFTER_RECALL_DAYS} days — recall that never leads to a link was probably noise. Items promoted/archived after recall change id and can be missed.`,
     },
   }
 }
@@ -272,7 +311,7 @@ export async function computeMetrics(userId: string, windowDays = 7): Promise<Me
     return res.data ?? []
   }
 
-  const [messages, threads, active, archive, usage, notes, notesBefore, notesCount, proposals, ticks] = await Promise.all([
+  const [messages, threads, active, archive, usage, notes, notesBefore, notesCount, proposals, ticks, recalls, findings, links] = await Promise.all([
     admin.from('daemon_interaction_log').select('direction, call_type, thread_id, created_at').eq('user_id', userId).gte('created_at', since).limit(20_000),
     admin.from('daemon_threads').select('id, opened_by, expects_reply, status, opened_at, closed_at, close_reason').eq('user_id', userId).or(`opened_at.gte."${since}",closed_at.gte."${since}"`).limit(5_000),
     admin.from('daemon_active').select('title, status, reschedule_count, last_touched').eq('user_id', userId),
@@ -283,6 +322,9 @@ export async function computeMetrics(userId: string, windowDays = 7): Promise<Me
     admin.from('daemon_operating_notes').select('id', { count: 'exact', head: true }).eq('user_id', userId),
     admin.from('daemon_proposals').select('category, direction, verdict, cycle_at').eq('user_id', userId),
     admin.from('daemon_tick_log').select('outcome, created_at').gte('created_at', since).limit(20_000),
+    admin.from('daemon_recall_events').select('mode, hits, created_at').eq('user_id', userId).gte('created_at', since).limit(20_000),
+    admin.from('daemon_thread_findings').select('created_at, consumed_at, consumed_by, results').eq('user_id', userId).gte('created_at', since).limit(5_000),
+    admin.from('daemon_links').select('from_id, to_id, created_at').eq('user_id', userId).gte('created_at', since).limit(20_000),
   ])
 
   return computeMetricsFromData({
@@ -295,6 +337,9 @@ export async function computeMetrics(userId: string, windowDays = 7): Promise<Me
     notesTotal: notesCount.count ?? 0,
     proposals: must(proposals, 'proposals'),
     ticks: must(ticks, 'tick log'),
+    recalls: must(recalls, 'recall events'),
+    findings: must(findings, 'thread findings'),
+    links: must(links, 'links'),
   }, {
     now,
     windowDays,

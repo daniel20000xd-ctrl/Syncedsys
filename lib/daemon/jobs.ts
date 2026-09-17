@@ -7,6 +7,7 @@ import { isOverBudget } from './usage'
 import { daemonEnv } from './env'
 import { closeStaleThreads } from './threads'
 import { drainPendingOutbound } from './notify'
+import { embedPending } from './embeddings'
 import { isWakingHours, localDate, reflectionDay } from './time'
 
 export type JobResult = { status: number; body: Record<string, unknown> }
@@ -37,7 +38,17 @@ async function failed(what: string, e: unknown): Promise<JobResult> {
 }
 
 // The cheap 5-minute tick. `force` (debug only) skips the quiet-hours and due checks.
+// Afterwards it sweeps any rows still missing embeddings (no-op unless vector search is on).
 export async function schedulerTick({ force = false } = {}): Promise<JobResult> {
+  const result = await tick(force)
+  if (result.body.skipped !== 'disabled' && result.body.skipped !== 'over_budget') {
+    const embedded = await embedPending()
+    if (embedded) result.body.embedded = embedded
+  }
+  return result
+}
+
+async function tick(force: boolean): Promise<JobResult> {
   try {
     const state = await getState()
     if (!state.enabled) return ok({ skipped: 'disabled' })
@@ -100,11 +111,14 @@ export async function reflectionJob({ force = false } = {}): Promise<JobResult> 
     const userId = await getDaemonUserId()
     const lock = await acquireLockWithRetry('reflection', 20_000)
     if (!lock) return { status: 409, body: { error: 'locked', retry: true } }
+    let body: Record<string, unknown>
     try {
-      return ok({ ran: 'reflection', ...(await runReflection(userId)) })
+      body = await runReflection(userId)
     } finally {
       await releaseLock(lock)
     }
+    // Outside the lock: embedding the night's new rows shouldn't hold up anything else.
+    return ok({ ran: 'reflection', ...body, embedded: await embedPending(100) })
   } catch (e) {
     return failed('reflection', e)
   }
@@ -125,11 +139,14 @@ export async function metaJob({ force = false } = {}): Promise<JobResult> {
     const userId = await getDaemonUserId()
     const lock = await acquireLockWithRetry('meta', 20_000)
     if (!lock) return { status: 409, body: { error: 'locked', retry: true } }
+    let body: Record<string, unknown>
     try {
-      return ok({ ran: 'meta', ...(await runMeta(userId)) })
+      body = await runMeta(userId)
     } finally {
       await releaseLock(lock)
     }
+    // Outside the lock: embedding the night's new rows shouldn't hold up anything else.
+    return ok({ ran: 'meta', ...body, embedded: await embedPending(100) })
   } catch (e) {
     return failed('meta', e)
   }

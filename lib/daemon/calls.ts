@@ -14,7 +14,21 @@ import { localDate, reflectionDay } from './time'
 import { appendDayEntry, ensureDaylogMigrated, flushDayLog } from './daylog'
 import { writeNotes } from './notes'
 import { createLink, repointLinks } from './links'
-import { closeStaleThreads, closeThread, createThread, placeholderTopic, updateThreadAfterInput, UUID } from './threads'
+import {
+  addFinding, closeStaleThreads, closeThread, consumeFindings, createThread, getThread, pendingFindings, placeholderTopic,
+  updateThreadAfterInput, updateThreadFromHeartbeat, UUID,
+} from './threads'
+import {
+  PREFETCH_KINDS, PREFETCH_LIMIT, PREFETCH_MIN_AGE_HOURS, PREFETCH_MIN_SCORE, MODEL_SEARCH_LIMIT,
+  recordRecall, searchMemory, searchMemoryMany, type SearchHit,
+} from './search'
+
+// Mirror of an R2 reflections append, so reflections are searchable. R2 stays the archive.
+async function recordReflectionEntry(userId: string, date: string, source: 'reflection' | 'meta', content: string): Promise<void> {
+  const { error } = await createAdminClient().from('daemon_reflection_entries')
+    .insert({ user_id: userId, entry_date: date, source, content })
+  if (error) console.error('[daemon] reflection entry insert failed:', error.message)
+}
 import { applyVerdict, supersedeStaleProposals, writeProposals } from './proposals'
 import { computeMetrics } from './metrics'
 import { resolvePrompt } from './prompts'
@@ -22,6 +36,7 @@ import { resolvePrompt } from './prompts'
 const MIN_WAKE_GAP_MS = 10 * 60 * 1000
 const PROVISIONAL_WAKE_MS = 30 * 60 * 1000
 const MAX_PENDING_PER_CALL = 20
+const MAX_SEARCHES_PER_CALL = 3
 
 // A wake time in the past (or seconds away) would fire on every tick; the budget cap
 // is the hard backstop, this is the soft one.
@@ -104,7 +119,7 @@ async function archiveActive(userId: string, activeById: Map<string, ActiveItem>
 export async function runInput(
   userId: string,
   opts: { push: boolean; threadId?: string },
-): Promise<{ reply: string; threadId: string; processedIds: string[] } | null> {
+): Promise<{ reply: string; threadId: string; processedIds: string[]; followUp: () => Promise<void> } | null> {
   const admin = createAdminClient()
   let threadId = opts.threadId
   if (!threadId) {
@@ -134,7 +149,24 @@ export async function runInput(
   if (error) throw new Error(`pending input read failed: ${error.message}`)
   if (!pending?.length) return null
 
-  const turns = await buildInputTurns(userId, threadId, pending.map(p => p.content))
+  const messages = pending.map(p => p.content)
+
+  // Mode A: silent recall on the incoming message. Nothing below the threshold is shown.
+  let related: SearchHit[] = []
+  try {
+    const query = messages.join('\n')
+    const res = await searchMemoryMany([query], {
+      userId, limit: PREFETCH_LIMIT, minScore: PREFETCH_MIN_SCORE, kinds: PREFETCH_KINDS,
+      minAgeHours: PREFETCH_MIN_AGE_HOURS, excludeThreadId: threadId,
+    })
+    related = res.hits
+    await recordRecall(userId, { mode: 'prefetch', threadId, query, signals: res.signals, hits: related })
+  } catch (e) {
+    console.error('[daemon] prefetch recall failed:', (e as Error).message)
+  }
+
+  const findingIds = ((await pendingFindings([threadId])).get(threadId) ?? []).map(f => f.id)
+  const turns = await buildInputTurns(userId, threadId, messages, related)
   const { data } = await generate({
     callType: 'input', userId, prompt: await resolvePrompt('input'), turns, schema: INPUT_SCHEMA, validate: validateInput,
   })
@@ -165,7 +197,10 @@ export async function runInput(
           await createLink(userId, action)
           break
         case 'verdict':
-          await applyVerdict(userId, action, pending.map(p => p.content))
+          await applyVerdict(userId, action, messages)
+          break
+        case 'search':
+          // Mode B: resolved after the reply, delivered on the next call in this thread.
           break
       }
     } catch (e) {
@@ -180,10 +215,28 @@ export async function runInput(
     status: data.thread_status === 'answered' ? 'answered' : 'open',
     expectsReply: data.expects_reply,
     topic: data.thread_topic,
+    state: data.thread,
   })
+  await consumeFindings(findingIds, 'input')
   if (data.next_wake_time) await updateState({ next_wake_time: clampWake(data.next_wake_time) })
-  await notify(userId, data.reply, 'input', { push: opts.push, threadId })
-  return { reply: data.reply, threadId, processedIds }
+  await notify(userId, data.reply, 'input', {
+    push: opts.push, threadId, reasoning: data.thread.reasoning, workingState: data.thread.working_state,
+  })
+
+  const searches = data.actions.filter((a): a is Extract<typeof a, { op: 'search' }> => a.op === 'search').slice(0, MAX_SEARCHES_PER_CALL)
+  const tid = threadId
+  const followUp = async () => {
+    for (const q of searches) {
+      try {
+        const hits = await searchMemory(q.query, { userId, limit: MODEL_SEARCH_LIMIT, excludeThreadId: tid })
+        await addFinding(userId, tid, q.query, q.why, hits)
+        await recordRecall(userId, { mode: 'search', threadId: tid, query: q.query, signals: hits.some(h => h.signals.vector !== null) ? 'fts+vector' : 'fts', hits })
+      } catch (e) {
+        console.error('[daemon] requested search failed:', (e as Error).message)
+      }
+    }
+  }
+  return { reply: data.reply, threadId, processedIds, followUp }
 }
 
 export async function hasPendingInput(userId: string): Promise<boolean> {
@@ -201,18 +254,21 @@ export async function drainPendingInput(userId: string): Promise<boolean> {
   if (!(await hasPendingInput(userId))) return false
   const lock = await acquireLock('input')
   if (!lock) return false
+  let result: Awaited<ReturnType<typeof runInput>> = null
   try {
-    return (await runInput(userId, { push: true })) !== null
+    result = await runInput(userId, { push: true })
   } finally {
     await releaseLock(lock)
   }
+  await result?.followUp()
+  return result !== null
 }
 
 // ── heartbeat ──────────────────────────────────────────────────────────────────
 
 // Caller must hold the lock. Read-only on item content: only last_nudged_at and the
 // awaiting-report stamp are written.
-export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; threadId: string | null; nextWake: string; reasoning: string }> {
+export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; threadId: string | null; joinedExistingThread: boolean; nextWake: string; reasoning: string }> {
   const now = new Date()
   // Provisional values first, so a crash or bad output can't cause indefinite silence
   // or a retry on every tick.
@@ -231,18 +287,33 @@ export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; t
   await updateState({ next_wake_time: nextWake })
 
   let threadId: string | null = null
+  let joined = false
   // The validator guarantees message and thread when should_ping.
   if (data.should_ping && data.message && data.thread) {
-    const thread = await createThread(userId, {
-      openedBy: 'ai',
-      topic: data.thread.topic,
-      question: data.thread.question,
-      reasoning: data.thread.reasoning,
-      activeIds: data.thread.referenced_active_ids,
-      archiveIds: data.thread.referenced_archive_ids,
-      logDates: [localDate()],
-      expectsReply: data.expects_reply,
-    })
+    // Ping into an existing, unclosed thread when asked to; otherwise open a new one.
+    const existing = data.thread_id ? await getThread(userId, data.thread_id) : null
+    let thread
+    if (existing && existing.status !== 'closed') {
+      await updateThreadFromHeartbeat(existing, data.thread, data.expects_reply)
+      const findings = (await pendingFindings([existing.id])).get(existing.id) ?? []
+      await consumeFindings(findings.map(f => f.id), 'heartbeat')
+      thread = existing
+      joined = true
+    } else {
+      if (data.thread_id) console.warn('[daemon] heartbeat thread_id not an open thread; opening a new one', data.thread_id)
+      thread = await createThread(userId, {
+        openedBy: 'ai',
+        topic: data.thread.topic?.trim() || placeholderTopic(data.message),
+        question: data.thread.question,
+        reasoning: data.thread.reasoning,
+        activeIds: data.thread.referenced_active_ids,
+        archiveIds: data.thread.referenced_archive_ids,
+        logDates: [localDate()],
+        expectsReply: data.expects_reply,
+        workingState: data.thread.working_state,
+        openQuestion: data.thread.open_question,
+      })
+    }
     threadId = thread.id
 
     const ids = data.target_ids.filter(id => UUID.test(id))
@@ -257,10 +328,12 @@ export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; t
         .eq('user_id', userId)
         .in('id', ids)
     }
-    await notify(userId, data.message, 'heartbeat', { threadId })
+    await notify(userId, data.message, 'heartbeat', {
+      threadId, reasoning: data.thread.reasoning || data.reasoning, workingState: data.thread.working_state,
+    })
   }
   if (data.day_entry) await appendDayEntry(userId, 'heartbeat', data.day_entry, threadId)
-  return { pinged: threadId !== null, threadId, nextWake, reasoning: data.reasoning }
+  return { pinged: threadId !== null, threadId, joinedExistingThread: joined, nextWake, reasoning: data.reasoning }
 }
 
 // ── reflection ─────────────────────────────────────────────────────────────────
@@ -327,6 +400,7 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
 
   const notesVersion = await writeNotes(userId, data.operating_notes)
   await appendDayBlock(userId, 'reflections', day, data.reflection_entry)
+  await recordReflectionEntry(userId, day, 'reflection', data.reflection_entry)
   await flushDayLog(userId, day, data.day_log_close)
   await writeDayBlock(userId, 'calendar', data.calendar_roll.date, data.calendar_roll.block)
   if (data.tomorrow_plan?.block) await writeDayBlock(userId, 'calendar', data.tomorrow_plan.date, data.tomorrow_plan.block)
@@ -367,7 +441,9 @@ export async function runMeta(userId: string): Promise<Record<string, unknown>> 
   })
 
   const proposalIds = await writeProposals(userId, cycleAt, data.proposals, metrics)
-  await appendDayBlock(userId, 'reflections', localDate(), `### Weekly review\n\n${data.assessment.trim()}\n\n${data.reflection_entry.trim()}`)
+  const weekly = `### Weekly review\n\n${data.assessment.trim()}\n\n${data.reflection_entry.trim()}`
+  await appendDayBlock(userId, 'reflections', localDate(), weekly)
+  await recordReflectionEntry(userId, localDate(), 'meta', weekly)
   await annotateUsage(usageId, `proposals: ${proposalIds.length}; directions: ${data.proposals.map(p => p.direction).join(',') || 'none'}`)
 
   const thread = await createThread(userId, { openedBy: 'ai', topic: 'weekly review', expectsReply: true, logDates: [localDate()] })

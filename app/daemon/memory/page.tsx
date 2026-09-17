@@ -1,9 +1,11 @@
 import Link from 'next/link'
 import { getMemory, type MemoryFilters } from '@/app/daemonActions'
 import { Badge, Empty, ErrorPanel, fmtAgo, fmtTime, PageTitle, Panel, type Tone } from '../_components/ui'
+import { MemorySearch } from '../_components/MemorySearch'
+import { SEARCH_KINDS } from '@/lib/daemon/search'
 
 type Data = Awaited<ReturnType<typeof getMemory>>
-type Search = MemoryFilters
+type Search = MemoryFilters & { search?: string; min?: string; kinds?: string | string[] }
 
 const statusTone = (s: string): Tone => (s === 'done' ? 'green' : s === 'blocked' ? 'red' : s === 'in_progress' ? 'blue' : 'zinc')
 const eventTone = (e: string): Tone => (e === 'archived' ? 'zinc' : e === 'promoted' ? 'amber' : 'green')
@@ -52,10 +54,25 @@ export default async function MemoryPage({ searchParams }: { searchParams: Promi
   const { active, archive } = data
   const lineageOf = (a: { id: string; original_id: string | null }) => a.original_id ?? a.id
   const input = 'bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs'
+  const searchKinds = params.kinds ? (Array.isArray(params.kinds) ? params.kinds : [params.kinds]) : []
 
   return (
     <div>
       <PageTitle sub="Read-only by design: change the daemon's memory by messaging it, never by editing rows.">Memory</PageTitle>
+
+      <form className="flex flex-wrap gap-2 mb-3 items-center" action="/daemon/memory">
+        <input name="search" defaultValue={params.search} placeholder="recall search (runs searchMemory)" className={`${input} w-80`} />
+        <label className="text-xs text-zinc-500 flex items-center gap-1">min score
+          <input name="min" type="number" step="0.05" min="0" max="1" defaultValue={params.min ?? '0'} className={`${input} w-20`} />
+        </label>
+        {SEARCH_KINDS.map(k => (
+          <label key={k} className="text-xs text-zinc-400 flex items-center gap-1">
+            <input type="checkbox" name="kinds" value={k} defaultChecked={searchKinds.includes(k)} /> {k}
+          </label>
+        ))}
+        <button className="px-2.5 py-1 rounded border border-sky-800 text-sky-300 text-xs">search</button>
+      </form>
+      {params.search?.trim() && <MemorySearch query={params.search.trim()} minScore={Number(params.min) || 0} kinds={searchKinds} />}
 
       <form className="flex flex-wrap gap-2 mb-4" action="/daemon/memory">
         <input name="q" defaultValue={params.q} placeholder="search title/content" className={`${input} w-56`} />
