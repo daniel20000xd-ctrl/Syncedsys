@@ -1,5 +1,4 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { SYSTEM_PROMPT } from './systemPrompt'
 import { readLatest, readRange, readCurrent, renderForContext } from './files'
 import { addDays, describeNow, localDate, reflectionDay, startOfLocalDay } from './time'
 import { getLatestNotes, getRecentNotes } from './notes'
@@ -41,8 +40,6 @@ export type ArchiveItem = {
 }
 
 type LogRow = { direction: string; call_type: string; content: string; created_at: string; thread_id?: string | null }
-
-export const system = () => SYSTEM_PROMPT
 
 export async function loadActive(userId: string): Promise<ActiveItem[]> {
   const { data, error } = await createAdminClient()
@@ -93,18 +90,20 @@ async function head(userId: string, day: string, thread?: { id: string; excludeI
   ]
 }
 
-export async function buildInputTurns(userId: string, threadId: string, messages: string[]): Promise<Turn[]> {
+// threadId is null only for dry runs.
+export async function buildInputTurns(userId: string, threadId: string | null, messages: string[]): Promise<Turn[]> {
   const today = localDate()
   await ensureDaylogMigrated(userId)
   const admin = createAdminClient()
   const [headSections, active, daylogs, calendar, log, proposals] = await Promise.all([
-    head(userId, today, { id: threadId, excludeInbound: messages }),
+    head(userId, today, threadId ? { id: threadId, excludeInbound: messages } : undefined),
     loadActive(userId),
     readRange(userId, 'daylog', addDays(today, -3), addDays(today, -1), today),
     readRange(userId, 'calendar', today, addDays(today, 7), today),
     admin.from('daemon_interaction_log')
       .select('direction, call_type, content, created_at, thread_id')
       .eq('user_id', userId)
+      .neq('call_type', 'system')
       .order('created_at', { ascending: false })
       .limit(40),
     listProposals(userId, { verdicts: ['open', 'accepted'] }),
@@ -193,6 +192,7 @@ export async function buildReflectionTurns(userId: string): Promise<Turn[]> {
     admin.from('daemon_interaction_log')
       .select('direction, call_type, content, created_at')
       .eq('user_id', userId)
+      .neq('call_type', 'system')
       .gte('created_at', dayStart.toISOString())
       .order('created_at', { ascending: true })
       .limit(500),

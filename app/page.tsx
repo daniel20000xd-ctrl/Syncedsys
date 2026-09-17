@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { isAdminEmail } from '@/lib/admin'
@@ -25,7 +26,10 @@ export default async function Home() {
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-xl font-semibold text-gray-800">To-do</h1>
-          <LogoutButton />
+          <div className="flex items-center gap-4">
+            <Link href="/daemon" className="text-sm text-gray-600 hover:text-gray-900 underline underline-offset-4">Daemon console</Link>
+            <LogoutButton />
+          </div>
         </div>
         <TodoLists />
       </div>

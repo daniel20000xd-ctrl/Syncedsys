@@ -204,3 +204,44 @@ export async function migrateLegacyDaylog(userId: string): Promise<number> {
   for (const key of keys) await moveFile(key, `${base(userId, 'daylog')}/${key.slice(legacy.length)}`)
   return keys.length
 }
+
+// ── read-only helpers for the admin console ─────────────────────────────────────
+
+export type FamilyFile = { key: string; relative: string; size: number; lastModified: string | null }
+
+export async function listFamilyFiles(userId: string, family: Family): Promise<FamilyFile[]> {
+  const prefix = `${base(userId, family)}/`
+  const r2 = getR2Client()
+  const files: FamilyFile[] = []
+  let token: string | undefined
+  do {
+    const res = await r2.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix, ContinuationToken: token }))
+    for (const o of res.Contents ?? []) {
+      if (!o.Key) continue
+      files.push({ key: o.Key, relative: o.Key.slice(prefix.length), size: o.Size ?? 0, lastModified: o.LastModified?.toISOString() ?? null })
+    }
+    token = res.IsTruncated ? res.NextContinuationToken : undefined
+  } while (token)
+  return files.sort((a, b) => a.relative.localeCompare(b.relative))
+}
+
+// Everything stored for one month, wherever rotation should have put it: current.md
+// (blocks of that month), archive/YYYY-MM.md, and archive/YYYY/YYYY-MM.md. Reporting
+// every location separately makes a misplaced or duplicated block visible.
+export async function readMonth(userId: string, family: Family, month: string): Promise<{ key: string; blocks: Block[]; preamble: string }[]> {
+  const year = month.slice(0, 4)
+  const keys = [
+    currentKey(userId, family),
+    `${base(userId, family)}/archive/${month}.md`,
+    `${base(userId, family)}/archive/${year}/${month}.md`,
+  ]
+  const out: { key: string; blocks: Block[]; preamble: string }[] = []
+  for (const key of keys) {
+    const text = await getText(key)
+    if (text === null) continue
+    const parsed = parseBlocks(text)
+    const blocks = parsed.blocks.filter(b => monthOf(b.date) === month)
+    if (blocks.length || (parsed.preamble && key !== currentKey(userId, family))) out.push({ key, blocks, preamble: parsed.preamble })
+  }
+  return out
+}

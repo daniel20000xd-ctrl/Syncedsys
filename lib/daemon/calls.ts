@@ -5,7 +5,7 @@ import {
   validateHeartbeat, validateInput, validateMeta, validateReflection,
   type ItemFields,
 } from './schemas'
-import { buildHeartbeatTurns, buildInputTurns, buildMetaTurns, buildReflectionTurns, loadActive, system, type ActiveItem, type ArchiveItem } from './context'
+import { buildHeartbeatTurns, buildInputTurns, buildMetaTurns, buildReflectionTurns, loadActive, type ActiveItem, type ArchiveItem } from './context'
 import { appendDayBlock, rotate, writeDayBlock } from './files'
 import { notify } from './notify'
 import { acquireLock, releaseLock, updateState } from './state'
@@ -17,6 +17,7 @@ import { createLink, repointLinks } from './links'
 import { closeStaleThreads, closeThread, createThread, placeholderTopic, updateThreadAfterInput, UUID } from './threads'
 import { applyVerdict, supersedeStaleProposals, writeProposals } from './proposals'
 import { computeMetrics } from './metrics'
+import { resolvePrompt } from './prompts'
 
 const MIN_WAKE_GAP_MS = 10 * 60 * 1000
 const PROVISIONAL_WAKE_MS = 30 * 60 * 1000
@@ -54,7 +55,18 @@ async function updateActive(activeById: Map<string, ActiveItem>, id: string, fie
   if (error) console.error('[daemon] update failed', id, error.message)
 }
 
-async function archiveActive(userId: string, activeById: Map<string, ActiveItem>, id: string, outcome: string, why: string): Promise<string | null> {
+// Journey of an item in and out of mind, for the admin console.
+async function recordMemoryEvent(userId: string, e: {
+  itemId: string; event: 'created' | 'archived' | 'promoted'; callType: string; archiveId?: string; why?: string; outcome?: string
+}): Promise<void> {
+  const { error } = await createAdminClient().from('daemon_memory_events').insert({
+    user_id: userId, item_id: e.itemId, event: e.event, call_type: e.callType,
+    archive_id: e.archiveId ?? null, why: e.why ?? null, outcome: e.outcome ?? null,
+  })
+  if (error) console.error('[daemon] memory event insert failed:', error.message)
+}
+
+async function archiveActive(userId: string, activeById: Map<string, ActiveItem>, id: string, outcome: string, why: string, callType: string): Promise<string | null> {
   const current = activeById.get(id)
   if (!current) {
     console.warn('[daemon] archive skipped, unknown active id', id)
@@ -79,6 +91,7 @@ async function archiveActive(userId: string, activeById: Map<string, ActiveItem>
   const { error: delErr } = await admin.from('daemon_active').delete().eq('id', id)
   if (delErr) console.error('[daemon] archive delete failed (row now in both tables)', id, delErr.message)
   await repointLinks('active', id, 'archive', data.id)
+  await recordMemoryEvent(userId, { itemId: id, event: 'archived', callType, archiveId: data.id, why, outcome })
   activeById.delete(id)
   return data.id as string
 }
@@ -123,7 +136,7 @@ export async function runInput(
 
   const turns = await buildInputTurns(userId, threadId, pending.map(p => p.content))
   const { data } = await generate({
-    callType: 'input', userId, system: system(), turns, schema: INPUT_SCHEMA, validate: validateInput,
+    callType: 'input', userId, prompt: await resolvePrompt('input'), turns, schema: INPUT_SCHEMA, validate: validateInput,
   })
 
   const activeById = new Map((await loadActive(userId)).map(a => [a.id, a]))
@@ -131,18 +144,19 @@ export async function runInput(
     try {
       switch (action.op) {
         case 'create': {
-          const { error: insErr } = await admin.from('daemon_active').insert({
+          const { data: created, error: insErr } = await admin.from('daemon_active').insert({
             user_id: userId, type: action.type, title: action.title, content: action.content,
             tags: normTags(action.tags), deadline: action.deadline,
-          })
+          }).select('id').single()
           if (insErr) console.error('[daemon] create failed', insErr.message)
+          else await recordMemoryEvent(userId, { itemId: created.id, event: 'created', callType: 'input' })
           break
         }
         case 'update':
           await updateActive(activeById, action.id, action.fields)
           break
         case 'archive':
-          await archiveActive(userId, activeById, action.id, action.outcome, action.why)
+          await archiveActive(userId, activeById, action.id, action.outcome, action.why, 'input')
           break
         case 'calendar_write':
           await writeDayBlock(userId, 'calendar', action.date, action.block)
@@ -209,7 +223,7 @@ export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; t
 
   const turns = await buildHeartbeatTurns(userId)
   const { data, usageId } = await generate({
-    callType: 'heartbeat', userId, system: system(), turns, schema: HEARTBEAT_SCHEMA, validate: validateHeartbeat,
+    callType: 'heartbeat', userId, prompt: await resolvePrompt('heartbeat'), turns, schema: HEARTBEAT_SCHEMA, validate: validateHeartbeat,
   })
   await annotateUsage(usageId, `reasoning: ${data.reasoning}`)
 
@@ -264,7 +278,7 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
 
   const turns = await buildReflectionTurns(userId)
   const { data } = await generate({
-    callType: 'reflection', userId, system: system(), turns, schema: REFLECTION_SCHEMA, validate: validateReflection,
+    callType: 'reflection', userId, prompt: await resolvePrompt('reflection'), turns, schema: REFLECTION_SCHEMA, validate: validateReflection,
   })
 
   const admin = createAdminClient()
@@ -292,6 +306,7 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
     }
     await admin.from('daemon_archive').delete().eq('id', a.id)
     await repointLinks('archive', a.id, 'active', res.data.id)
+    await recordMemoryEvent(userId, { itemId: res.data.id, event: 'promoted', callType: 'reflection', archiveId: a.id, why: p.why_now, outcome: a.outcome ?? undefined })
     promoted.push(a.id)
     console.log('[daemon] promoted', a.id, p.why_now)
   }
@@ -300,7 +315,7 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
   if (bumpErr) console.error('[daemon] archive depth bump failed', bumpErr.message)
 
   for (const u of data.updates) await updateActive(activeById, u.active_id, u.fields)
-  for (const d of data.demote) await archiveActive(userId, activeById, d.active_id, d.outcome, d.why)
+  for (const d of data.demote) await archiveActive(userId, activeById, d.active_id, d.outcome, d.why, 'reflection')
 
   let linked = 0
   for (const l of data.links) if (await createLink(userId, l)) linked++
@@ -348,7 +363,7 @@ export async function runMeta(userId: string): Promise<Record<string, unknown>> 
 
   const turns = await buildMetaTurns(userId, metrics)
   const { data, usageId } = await generate({
-    callType: 'meta', userId, system: system(), turns, schema: META_SCHEMA, validate: validateMeta,
+    callType: 'meta', userId, prompt: await resolvePrompt('meta'), turns, schema: META_SCHEMA, validate: validateMeta,
   })
 
   const proposalIds = await writeProposals(userId, cycleAt, data.proposals, metrics)

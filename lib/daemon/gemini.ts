@@ -2,6 +2,7 @@ import { daemonEnv } from './env'
 import { recordUsage, isOverBudget } from './usage'
 import { SchemaInvalidError } from './schemas'
 import { sendFailureAlert } from './alert'
+import type { ResolvedPrompt } from './prompts'
 
 export type CallType = 'input' | 'heartbeat' | 'reflection' | 'meta'
 export type Turn = { role: 'user' | 'model'; text: string }
@@ -17,8 +18,10 @@ const TOTAL_BUDGET_MS = 45_000
 type GenerateArgs<T> = {
   callType: CallType
   userId: string
-  system: string
+  prompt: ResolvedPrompt
   turns: Turn[]
+  // Dry runs are billed and capped like any call, but never alert.
+  dryRun?: boolean
   schema: object
   validate: (v: unknown) => T
 }
@@ -41,6 +44,10 @@ export async function generate<T>(args: GenerateArgs<T>): Promise<{ data: T; usa
 
   const started = Date.now()
   let lastError = 'unknown error'
+  const ledger = {
+    userId: args.userId, callType: args.callType, model,
+    systemPromptVersion: args.prompt.systemVersion, callPromptVersion: args.prompt.callVersion, dryRun: args.dryRun,
+  }
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const remaining = TOTAL_BUDGET_MS - (Date.now() - started)
@@ -53,7 +60,7 @@ export async function generate<T>(args: GenerateArgs<T>): Promise<{ data: T; usa
         headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
         signal: AbortSignal.timeout(remaining),
         body: JSON.stringify({
-          systemInstruction: { parts: [{ text: args.system }] },
+          systemInstruction: { parts: [{ text: args.prompt.text }] },
           contents: args.turns.map(t => ({ role: t.role, parts: [{ text: t.text }] })),
           generationConfig: {
             responseMimeType: 'application/json',
@@ -84,18 +91,18 @@ export async function generate<T>(args: GenerateArgs<T>): Promise<{ data: T; usa
         throw new Retryable('response was not valid JSON')
       }
       const data = args.validate(parsed)
-      const usageId = await recordUsage({ userId: args.userId, callType: args.callType, model, inputTokens, outputTokens, attempt })
+      const usageId = await recordUsage({ ...ledger, inputTokens, outputTokens, attempt })
       return { data, usageId }
     } catch (e) {
       const retryable = e instanceof Retryable || e instanceof SchemaInvalidError
         || (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError' || e.name === 'TypeError'))
       lastError = e instanceof SchemaInvalidError ? `schema invalid: ${e.message}` : (e as Error).message
-      await recordUsage({ userId: args.userId, callType: args.callType, model, inputTokens, outputTokens, attempt, error: lastError })
+      await recordUsage({ ...ledger, inputTokens, outputTokens, attempt, error: lastError })
       if (!retryable) break
       if (attempt < MAX_ATTEMPTS) await new Promise(r => setTimeout(r, 1000 * 2 ** (attempt - 1)))
     }
   }
 
-  await sendFailureAlert(`${args.callType} call failed`, lastError)
+  if (!args.dryRun) await sendFailureAlert(`${args.callType} call failed`, lastError)
   throw new GeminiError(lastError)
 }

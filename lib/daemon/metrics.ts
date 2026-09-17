@@ -11,7 +11,7 @@ export type MetricRows = {
   threads: { id: string; opened_by: string; expects_reply: boolean; status: string; opened_at: string; closed_at: string | null; close_reason: string | null }[]
   active: { title: string; status: string; reschedule_count: number; last_touched: string }[]
   archive: { archived_at: string }[]
-  usage: { call_type: string; model: string; cost_usd: number | string; error: string | null; attempt: number; created_at: string }[]
+  usage: { call_type: string; model: string; cost_usd: number | string; error: string | null; attempt: number; created_at: string; dry_run?: boolean }[]
   // Versions written in the window, plus the one before them (for the first diff).
   notes: { version: number; content: string; created_at: string }[]
   notesTotal: number
@@ -149,7 +149,7 @@ function windowMetrics(rows: MetricRows, from: number, to: number, cfg: MetricCo
     errorsByType[c.call_type] = e
   }
 
-  const heartbeatOk = calls.filter(c => c.call_type === 'heartbeat' && !c.error).length
+  const heartbeatOk = calls.filter(c => c.call_type === 'heartbeat' && !c.error && !c.dry_run).length
   const ticks = rows.ticks.filter(t => inRange(t.created_at, from, to))
 
   const notesInWindow = rows.notes.filter(n => inRange(n.created_at, from, to)).sort((a, b) => a.version - b.version)
@@ -232,6 +232,7 @@ export function computeMetricsFromData(rows: MetricRows, cfg: MetricConfig) {
       by_status: countBy(rows.active, a => a.status),
       with_any_reschedule: rows.active.filter(a => a.reschedule_count > 0).length,
       reschedule_count_median: percentile(rescheduleCounts, 0.5),
+      reschedule_histogram: countBy(rows.active, a => String(a.reschedule_count)),
       most_rescheduled: [...rows.active]
         .filter(a => a.reschedule_count > 0)
         .sort((a, b) => b.reschedule_count - a.reschedule_count)
@@ -254,7 +255,7 @@ export function computeMetricsFromData(rows: MetricRows, cfg: MetricConfig) {
       heartbeats: 'chose_not_to_ping = successful heartbeat calls minus pings. scheduler_ticks counts recorded tick outcomes (locked = skipped because another call held the lock); ticks before tick logging existed are absent.',
       longest_waking_silence: 'Longest stretch with no ping inside waking hours on any single day, in minutes, counting from wake time and to sleep time (or now).',
       notes_churn: 'Changed lines = lines added plus removed versus the previous version, ignoring order.',
-      cost: 'Model calls only; warning rows are excluded. pct_of_daily_cap_avg = window total / (cap × days).',
+      cost: 'Model calls only (dry runs from the console included, since they are real spend); warning rows are excluded. pct_of_daily_cap_avg = window total / (cap × days).',
       errors: 'Per call type: ledger rows, rows with an error, rows that were retry attempts. warnings = code-side warning rows (notes over cap, dropped model output, noisy cycles).',
     },
   }
@@ -276,7 +277,7 @@ export async function computeMetrics(userId: string, windowDays = 7): Promise<Me
     admin.from('daemon_threads').select('id, opened_by, expects_reply, status, opened_at, closed_at, close_reason').eq('user_id', userId).or(`opened_at.gte."${since}",closed_at.gte."${since}"`).limit(5_000),
     admin.from('daemon_active').select('title, status, reschedule_count, last_touched').eq('user_id', userId),
     admin.from('daemon_archive').select('archived_at').eq('user_id', userId).gte('archived_at', since),
-    admin.from('daemon_usage').select('call_type, model, cost_usd, error, attempt, created_at').gte('created_at', since).limit(20_000),
+    admin.from('daemon_usage').select('call_type, model, cost_usd, error, attempt, created_at, dry_run').gte('created_at', since).limit(20_000),
     admin.from('daemon_operating_notes').select('version, content, created_at').eq('user_id', userId).gte('created_at', since),
     admin.from('daemon_operating_notes').select('version, content, created_at').eq('user_id', userId).lt('created_at', since).order('version', { ascending: false }).limit(1),
     admin.from('daemon_operating_notes').select('id', { count: 'exact', head: true }).eq('user_id', userId),

@@ -34,6 +34,9 @@ export type UsageRow = {
   outputTokens: number
   error?: string | null
   attempt: number
+  systemPromptVersion?: number | null
+  callPromptVersion?: number | null
+  dryRun?: boolean
 }
 
 export async function recordUsage(row: UsageRow): Promise<string | null> {
@@ -48,6 +51,9 @@ export async function recordUsage(row: UsageRow): Promise<string | null> {
       cost_usd: costUsd(row.model, row.inputTokens, row.outputTokens),
       error: row.error ?? null,
       attempt: row.attempt,
+      system_prompt_version: row.systemPromptVersion ?? null,
+      call_prompt_version: row.callPromptVersion ?? null,
+      dry_run: row.dryRun ?? false,
     })
     .select('id')
     .single()
