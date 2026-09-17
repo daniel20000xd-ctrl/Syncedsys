@@ -34,7 +34,7 @@ jobs:
           attempts=1
           [ "$JOB" != "scheduler" ] && attempts=6
           for i in $(seq 1 "$attempts"); do
-            code=$(curl -sS -o body.json -w '%{http_code}' --max-time 70 -X POST \
+            code=$(curl -sSL -o body.json -w '%{http_code}' --max-time 70 -X POST \
               -H "Authorization: Bearer $CRON_SECRET" "$BASE_URL/api/daemon/$JOB" || echo 000)
             echo "attempt $i: HTTP $code $(cat body.json 2>/dev/null)"
             [ "$code" = "200" ] && exit 0
