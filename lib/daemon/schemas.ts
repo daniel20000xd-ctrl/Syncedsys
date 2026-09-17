@@ -20,6 +20,7 @@ export type InputAction =
   | { op: 'archive'; id: string; outcome: string; why: string }
   | { op: 'calendar_write'; date: string; block: string }
   | ({ op: 'link' } & LinkSpec)
+  | { op: 'verdict'; proposal_id: string; verdict: 'accepted' | 'rejected' | 'implemented'; reason: string; user_quote: string }
 
 export type LinkSpec = { from_kind: 'active' | 'archive'; from_id: string; to_kind: 'active' | 'archive'; to_id: string; why: string }
 
@@ -50,6 +51,22 @@ export type HeartbeatResponse = {
   reasoning: string
 }
 
+export type MetaProposal = {
+  category: 'prompt' | 'code' | 'scope' | 'schedule' | 'memory' | 'stop'
+  direction: 'expand' | 'narrow' | 'neutral'
+  title: string
+  body: string
+  evidence_paths: string[]
+  supersedes: string | null
+}
+
+export type MetaResponse = {
+  assessment: string
+  proposals: MetaProposal[]
+  reflection_entry: string
+  message: string
+}
+
 export type ReflectionResponse = {
   promote: { archive_id: string; why_now: string }[]
   demote: { active_id: string; outcome: string; why: string }[]
@@ -73,6 +90,9 @@ const obj = (properties: Record<string, unknown>, required = Object.keys(propert
   ({ type: 'object', properties, required, additionalProperties: false })
 
 const KINDS = ['active', 'archive']
+const CATEGORIES = ['prompt', 'code', 'scope', 'schedule', 'memory', 'stop']
+const DIRECTIONS = ['expand', 'narrow', 'neutral']
+const VERDICTS = ['accepted', 'rejected', 'implemented']
 
 const linkSchema = obj({
   from_kind: { type: 'string', enum: KINDS },
@@ -103,7 +123,7 @@ export const INPUT_SCHEMA = obj({
   actions: {
     type: 'array',
     items: obj({
-      op: { type: 'string', enum: ['create', 'update', 'archive', 'calendar_write', 'link'] },
+      op: { type: 'string', enum: ['create', 'update', 'archive', 'calendar_write', 'link', 'verdict'] },
       id: nullableStr('update/archive: daemon_active id'),
       type: nullableStr('create: task | problem | note'),
       title: nullableStr(),
@@ -119,6 +139,10 @@ export const INPUT_SCHEMA = obj({
       from_id: nullableStr('link'),
       to_kind: nullableStr('link: active | archive'),
       to_id: nullableStr('link'),
+      proposal_id: nullableStr('verdict'),
+      verdict: nullableStr('verdict: accepted | rejected | implemented — only when the user states it in this message'),
+      reason: nullableStr('verdict'),
+      user_quote: nullableStr("verdict: the user's words giving the verdict, copied exactly from their message"),
     }, ['op']),
   },
   day_entry: str("One or two lines for today's day log."),
@@ -126,6 +150,27 @@ export const INPUT_SCHEMA = obj({
   expects_reply: { type: 'boolean' },
   thread_topic: nullableStr('Short topic for this thread, or null to keep the current one.'),
   next_wake_time: nullableStr('ISO-8601, or null to leave unchanged'),
+})
+
+export const META_SCHEMA = obj({
+  assessment: str('Markdown: how the week reads, grounded in the metrics.'),
+  proposals: {
+    type: 'array',
+    items: obj({
+      category: { type: 'string', enum: CATEGORIES },
+      direction: { type: 'string', enum: DIRECTIONS },
+      title: str('One line.'),
+      body: str('Markdown: the argument, citing specific metric values.'),
+      evidence_paths: {
+        type: 'array',
+        items: str('Dotted path into the metrics JSON, e.g. current.pings.reply_rate'),
+        description: 'The metric values cited. Code copies the actual values at these paths.',
+      },
+      supersedes: nullableStr('id of an earlier proposal this replaces, or null'),
+    }),
+  },
+  reflection_entry: str('Markdown: appended to the reflections archive.'),
+  message: str('Short message for the user: the proposals in brief.'),
 })
 
 export const HEARTBEAT_SCHEMA = obj({
@@ -237,6 +282,14 @@ export function validateInput(v: unknown): InputResponse {
         }
       case 'link':
         return { op: 'link', ...link(x, what) }
+      case 'verdict':
+        return {
+          op: 'verdict',
+          proposal_id: s(x.proposal_id, `${what}.proposal_id`),
+          verdict: need(VERDICTS.includes(x.verdict as string), `${what}.verdict invalid`, x.verdict as 'accepted' | 'rejected' | 'implemented'),
+          reason: sOrNull(x.reason, `${what}.reason`) ?? '',
+          user_quote: sOrNull(x.user_quote, `${what}.user_quote`) ?? '',
+        }
       default:
         throw new Invalid(`${what}.op invalid`)
     }
@@ -279,6 +332,29 @@ export function validateHeartbeat(v: unknown): HeartbeatResponse {
     day_entry: sOrNull(r.day_entry, 'day_entry'),
     next_wake_time: need(isIso(r.next_wake_time), 'next_wake_time must be ISO-8601', r.next_wake_time as string),
     reasoning: typeof r.reasoning === 'string' ? r.reasoning : '',
+  }
+}
+
+export function validateMeta(v: unknown): MetaResponse {
+  need(isObj(v), 'response must be an object', v)
+  const r = v as Record<string, unknown>
+  return {
+    assessment: s(r.assessment, 'assessment'),
+    proposals: arr(r.proposals, 'proposals').map((p, i) => {
+      const what = `proposals[${i}]`
+      need(isObj(p), `${what} must be an object`, p)
+      const x = p as Record<string, unknown>
+      return {
+        category: need(CATEGORIES.includes(x.category as string), `${what}.category invalid`, x.category as MetaProposal['category']),
+        direction: need(DIRECTIONS.includes(x.direction as string), `${what}.direction invalid`, x.direction as MetaProposal['direction']),
+        title: need(typeof x.title === 'string' && x.title.trim() !== '', `${what}.title required`, x.title as string),
+        body: s(x.body, `${what}.body`),
+        evidence_paths: idArr(x.evidence_paths, `${what}.evidence_paths`),
+        supersedes: sOrNull(x.supersedes, `${what}.supersedes`),
+      }
+    }),
+    reflection_entry: s(r.reflection_entry, 'reflection_entry'),
+    message: need(typeof r.message === 'string' && r.message.trim() !== '', 'message required', r.message as string),
   }
 }
 

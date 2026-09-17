@@ -1,7 +1,7 @@
 import { createAdminClient, listAllAuthUsers } from '@/lib/supabase/admin'
 import { daemonEnv } from './env'
 
-export type Holder = 'input' | 'heartbeat' | 'reflection'
+export type Holder = 'input' | 'heartbeat' | 'reflection' | 'meta'
 
 export type DaemonState = {
   id: number
@@ -16,6 +16,7 @@ export type DaemonState = {
   budget_alert_day: string | null
   last_failure_alert_at: string | null
   daylog_migrated_at: string | null
+  last_meta_at: string | null
   enabled: boolean
   shadow_mode: boolean
   updated_at: string

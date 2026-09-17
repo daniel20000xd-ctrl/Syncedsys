@@ -2,7 +2,9 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { SYSTEM_PROMPT } from './systemPrompt'
 import { readLatest, readRange, readCurrent, renderForContext } from './files'
 import { addDays, describeNow, localDate, reflectionDay, startOfLocalDay } from './time'
-import { getLatestNotes } from './notes'
+import { getLatestNotes, getRecentNotes } from './notes'
+import { listProposals } from './proposals'
+import type { Metrics } from './metrics'
 import { assembleDayLog, ensureDaylogMigrated, loadDayEntries } from './daylog'
 import { buildThreadContext, renderThreadSummaries } from './threads'
 import { loadLinkStubs } from './links'
@@ -95,7 +97,7 @@ export async function buildInputTurns(userId: string, threadId: string, messages
   const today = localDate()
   await ensureDaylogMigrated(userId)
   const admin = createAdminClient()
-  const [headSections, active, daylogs, calendar, log] = await Promise.all([
+  const [headSections, active, daylogs, calendar, log, proposals] = await Promise.all([
     head(userId, today, { id: threadId, excludeInbound: messages }),
     loadActive(userId),
     readRange(userId, 'daylog', addDays(today, -3), addDays(today, -1), today),
@@ -105,6 +107,7 @@ export async function buildInputTurns(userId: string, threadId: string, messages
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
       .limit(40),
+    listProposals(userId, { verdicts: ['open', 'accepted'] }),
   ])
   if (log.error) throw new Error(`interaction log read failed: ${log.error.message}`)
   // This thread's messages are already in THREAD.
@@ -117,6 +120,11 @@ export async function buildInputTurns(userId: string, threadId: string, messages
     section('DAY LOG (previous 3 days)', renderForContext(daylogs)),
     section('CALENDAR (today + 7 days)', renderForContext(calendar)),
     section('RECENT INTERACTIONS (other threads)', renderLog(history)),
+    ...(proposals.length
+      ? [section('PROPOSALS AWAITING OR ACCEPTED (verdicts only if the user gives one in this message)', proposals
+        .map(p => JSON.stringify({ id: p.id, verdict: p.verdict, category: p.category, direction: p.direction, title: p.title }))
+        .join('\n'))]
+      : []),
     messages.length > 1
       ? `The user sent ${messages.length} messages on this thread, in order, as the following turns.`
       : "The user's message on this thread follows.",
@@ -204,6 +212,56 @@ export async function buildReflectionTurns(userId: string): Promise<Turn[]> {
     section('DAY LOG (previous 7 days)', renderForContext(daylogs)),
     section(`INTERACTIONS (${day})`, renderLog(logRows)),
     section('CALENDAR (current month)', calendar),
+  ].join('\n\n')
+  return [{ role: 'user', text: context }]
+}
+
+// Weekly meta call. Different horizon, different shape: no day log as the frame, and
+// the only call that sees the self-description.
+export async function loadSelfDescription(userId: string): Promise<{ version: number; content: string } | null> {
+  const { data, error } = await createAdminClient()
+    .from('daemon_self_description')
+    .select('version, content')
+    .or(`user_id.eq.${userId},user_id.is.null`)
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw new Error(`self-description read failed: ${error.message}`)
+  return data
+}
+
+const lastBlocks = <T>(xs: T[], n: number) => xs.slice(Math.max(0, xs.length - n))
+
+export async function buildMetaTurns(userId: string, metrics: Metrics): Promise<Turn[]> {
+  const today = localDate()
+  await ensureDaylogMigrated(userId)
+  const [selfDescription, notes, proposals, reflections, daylogs, active] = await Promise.all([
+    loadSelfDescription(userId),
+    getRecentNotes(userId, 4),
+    listProposals(userId),
+    readRange(userId, 'reflections', addDays(today, -60), today, today),
+    readRange(userId, 'daylog', addDays(today, -30), today, today),
+    loadActive(userId),
+  ])
+
+  const context = [
+    section('SELF-DESCRIPTION', selfDescription ? `(v${selfDescription.version})\n${selfDescription.content}` : '(missing)'),
+    section('OPERATING NOTES (last 4 versions, newest first)', notes.length
+      ? notes.map(n => `### v${n.version} (${n.created_at})\n${n.content}`).join('\n\n')
+      : '(none yet)'),
+    header('meta'),
+    section(`METRICS (last ${metrics.window_days} days vs the ${metrics.window_days} before)`, JSON.stringify(metrics, null, 2)),
+    section('ALL PROPOSALS (oldest first, with verdicts)', proposals.length
+      ? JSON.stringify(proposals.map(p => ({
+        id: p.id, created_at: p.created_at, category: p.category, direction: p.direction, title: p.title, body: p.body,
+        evidence: p.evidence, supersedes: p.supersedes, verdict: p.verdict, verdict_reason: p.verdict_reason, verdict_at: p.verdict_at,
+      })), null, 2)
+      : '(none yet)'),
+    section('REFLECTION ENTRIES (last 7)', renderForContext(lastBlocks(reflections, 7))),
+    section('DAY LOGS (last 7 closed days)', renderForContext(lastBlocks(daylogs, 7))),
+    section('ACTIVE ITEMS (titles and status only)', active.length
+      ? active.map(a => `- [${a.status}] ${a.title}`).join('\n')
+      : '(none)'),
   ].join('\n\n')
   return [{ role: 'user', text: context }]
 }

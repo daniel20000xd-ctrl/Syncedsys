@@ -11,6 +11,8 @@ export const daemonEnv = {
   lockTimeoutSeconds: () => int('DAEMON_LOCK_TIMEOUT_SECONDS', 120),
   threadStaleDays: () => int('DAEMON_THREAD_STALE_DAYS', 3),
   notesMaxChars: () => int('DAEMON_NOTES_MAX_CHARS', 6000),
+  proposalStaleDays: () => int('DAEMON_PROPOSAL_STALE_DAYS', 21),
+  maxProposalsPerCycle: () => int('DAEMON_MAX_PROPOSALS_PER_CYCLE', 5),
   model: () => process.env.DAEMON_GEMINI_MODEL?.trim() || '',
   // Unset or unparseable → null; usage.ts treats that as over budget (fail closed).
   dailyCostCapUsd: (): number | null => {

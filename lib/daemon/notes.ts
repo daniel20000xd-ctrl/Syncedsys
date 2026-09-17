@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { daemonEnv } from './env'
+import { recordWarning } from './usage'
 
 export type OperatingNotes = { version: number; content: string; created_at: string }
 
@@ -17,6 +18,18 @@ export async function getLatestNotes(userId: string): Promise<OperatingNotes | n
   return data as OperatingNotes | null
 }
 
+// Newest first.
+export async function getRecentNotes(userId: string, count: number): Promise<OperatingNotes[]> {
+  const { data, error } = await createAdminClient()
+    .from('daemon_operating_notes')
+    .select('version, content, created_at')
+    .eq('user_id', userId)
+    .order('version', { ascending: false })
+    .limit(count)
+  if (error) throw new Error(`operating notes read failed: ${error.message}`)
+  return (data ?? []) as OperatingNotes[]
+}
+
 export async function writeNotes(userId: string, content: string): Promise<number> {
   const admin = createAdminClient()
   const latest = await getLatestNotes(userId)
@@ -28,10 +41,7 @@ export async function writeNotes(userId: string, content: string): Promise<numbe
   // makes the drift visible in the usage ledger.
   const max = daemonEnv.notesMaxChars()
   if (content.length > max) {
-    await admin.from('daemon_usage').insert({
-      user_id: userId, call_type: 'reflection', model: 'n/a', cost_usd: 0,
-      error: `operating_notes v${version} is ${content.length} chars (cap ${max})`,
-    })
+    await recordWarning(userId, 'reflection', `operating_notes v${version} is ${content.length} chars (cap ${max})`)
   }
   return version
 }

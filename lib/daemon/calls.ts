@@ -1,11 +1,11 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { generate } from './gemini'
 import {
-  HEARTBEAT_SCHEMA, INPUT_SCHEMA, REFLECTION_SCHEMA,
-  validateHeartbeat, validateInput, validateReflection,
+  HEARTBEAT_SCHEMA, INPUT_SCHEMA, META_SCHEMA, REFLECTION_SCHEMA,
+  validateHeartbeat, validateInput, validateMeta, validateReflection,
   type ItemFields,
 } from './schemas'
-import { buildHeartbeatTurns, buildInputTurns, buildReflectionTurns, loadActive, system, type ActiveItem, type ArchiveItem } from './context'
+import { buildHeartbeatTurns, buildInputTurns, buildMetaTurns, buildReflectionTurns, loadActive, system, type ActiveItem, type ArchiveItem } from './context'
 import { appendDayBlock, rotate, writeDayBlock } from './files'
 import { notify } from './notify'
 import { acquireLock, releaseLock, updateState } from './state'
@@ -15,6 +15,8 @@ import { appendDayEntry, ensureDaylogMigrated, flushDayLog } from './daylog'
 import { writeNotes } from './notes'
 import { createLink, repointLinks } from './links'
 import { closeStaleThreads, closeThread, createThread, placeholderTopic, updateThreadAfterInput, UUID } from './threads'
+import { applyVerdict, supersedeStaleProposals, writeProposals } from './proposals'
+import { computeMetrics } from './metrics'
 
 const MIN_WAKE_GAP_MS = 10 * 60 * 1000
 const PROVISIONAL_WAKE_MS = 30 * 60 * 1000
@@ -147,6 +149,9 @@ export async function runInput(
           break
         case 'link':
           await createLink(userId, action)
+          break
+        case 'verdict':
+          await applyVerdict(userId, action, pending.map(p => p.content))
           break
       }
     } catch (e) {
@@ -327,5 +332,39 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
     threads_closed: closed,
     threads_closed_stale: staleClosed,
     operating_notes_version: notesVersion,
+  }
+}
+
+// ── meta ───────────────────────────────────────────────────────────────────────
+
+// Weekly. Caller must hold the lock. Output is stored as inert data only: proposals,
+// a reflection entry, and one message (held until waking hours). Nothing in the
+// response is applied to prompts, env, bounds, state flags, the self-description or
+// verdicts.
+export async function runMeta(userId: string): Promise<Record<string, unknown>> {
+  const cycleAt = new Date().toISOString()
+  const superseded = await supersedeStaleProposals(userId)
+  const metrics = await computeMetrics(userId, 7)
+
+  const turns = await buildMetaTurns(userId, metrics)
+  const { data, usageId } = await generate({
+    callType: 'meta', userId, system: system(), turns, schema: META_SCHEMA, validate: validateMeta,
+  })
+
+  const proposalIds = await writeProposals(userId, cycleAt, data.proposals, metrics)
+  await appendDayBlock(userId, 'reflections', localDate(), `### Weekly review\n\n${data.assessment.trim()}\n\n${data.reflection_entry.trim()}`)
+  await annotateUsage(usageId, `proposals: ${proposalIds.length}; directions: ${data.proposals.map(p => p.direction).join(',') || 'none'}`)
+
+  const thread = await createThread(userId, { openedBy: 'ai', topic: 'weekly review', expectsReply: true, logDates: [localDate()] })
+  const { deferred } = await notify(userId, data.message, 'meta', { threadId: thread.id, deferOutsideWakingHours: true })
+
+  await updateState({ last_meta_at: new Date().toISOString() })
+  return {
+    cycle_at: cycleAt,
+    proposals: proposalIds.length,
+    directions: data.proposals.map(p => p.direction),
+    stale_superseded: superseded,
+    thread_id: thread.id,
+    message_deferred: deferred,
   }
 }

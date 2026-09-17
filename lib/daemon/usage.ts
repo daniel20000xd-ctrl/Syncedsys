@@ -58,6 +58,15 @@ export async function recordUsage(row: UsageRow): Promise<string | null> {
   return data.id as string
 }
 
+// A zero-cost ledger row whose `error` carries a warning (model 'n/a'), so drift and
+// dropped model output are visible next to real call failures.
+export async function recordWarning(userId: string, callType: string, message: string): Promise<void> {
+  const { error } = await createAdminClient().from('daemon_usage').insert({
+    user_id: userId, call_type: callType, model: 'n/a', cost_usd: 0, error: message,
+  })
+  if (error) console.error('[daemon] warning insert failed:', error.message, message)
+}
+
 export async function annotateUsage(id: string | null, note: string): Promise<void> {
   if (!id) return
   await createAdminClient().from('daemon_usage').update({ note }).eq('id', id)

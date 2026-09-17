@@ -3,7 +3,7 @@ import { recordUsage, isOverBudget } from './usage'
 import { SchemaInvalidError } from './schemas'
 import { sendFailureAlert } from './alert'
 
-export type CallType = 'input' | 'heartbeat' | 'reflection'
+export type CallType = 'input' | 'heartbeat' | 'reflection' | 'meta'
 export type Turn = { role: 'user' | 'model'; text: string }
 
 export class GeminiError extends Error {}
