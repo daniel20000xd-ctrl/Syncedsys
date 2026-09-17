@@ -14,11 +14,16 @@ export function truncateForPush(message: string): string {
 
 // Logs the outbound message, then pushes it unless shadow mode is on (or `push` is
 // false, e.g. a reply already returned synchronously to the app).
-export async function notify(userId: string, message: string, callType: OutboundCallType, push = true): Promise<{ pushed: boolean }> {
+export async function notify(
+  userId: string,
+  message: string,
+  callType: OutboundCallType,
+  { push = true, threadId = null }: { push?: boolean; threadId?: string | null } = {},
+): Promise<{ pushed: boolean }> {
   const admin = createAdminClient()
   const { data: row, error } = await admin
     .from('daemon_interaction_log')
-    .insert({ user_id: userId, direction: 'out', call_type: callType, content: message, push_sent: false })
+    .insert({ user_id: userId, direction: 'out', call_type: callType, content: message, push_sent: false, thread_id: threadId })
     .select('id')
     .single()
   if (error) throw new Error(`interaction log insert failed: ${error.message}`)
@@ -32,6 +37,7 @@ export async function notify(userId: string, message: string, callType: Outbound
     delivered = await pushToAll(userId, {
       aps: { alert: { title: TITLE, body: truncateForPush(message) }, sound: 'default' },
       kind: 'daemon_message',
+      thread_id: threadId,
     })
   } catch (e) {
     console.error('[daemon/notify] push failed:', (e as Error).message)

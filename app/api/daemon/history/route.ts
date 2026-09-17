@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { isDeviceAuthorized } from '@/lib/daemon/auth'
 import { getDaemonUserId } from '@/lib/daemon/state'
+import { UUID } from '@/lib/daemon/threads'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -12,15 +13,18 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams
   const since = params.get('since')
   if (since && Number.isNaN(Date.parse(since))) return NextResponse.json({ error: 'since must be ISO-8601' }, { status: 400 })
+  const threadId = params.get('thread_id')
+  if (threadId && !UUID.test(threadId)) return NextResponse.json({ error: 'thread_id must be a uuid' }, { status: 400 })
   const limit = Math.min(Math.max(Number.parseInt(params.get('limit') ?? '50', 10) || 50, 1), 200)
 
   try {
     const userId = await getDaemonUserId()
-    const base = createAdminClient()
+    let base = createAdminClient()
       .from('daemon_interaction_log')
-      .select('id, direction, content, created_at')
+      .select('id, thread_id, direction, content, created_at')
       .eq('user_id', userId)
       .neq('call_type', 'system')
+    if (threadId) base = base.eq('thread_id', threadId)
 
     // With `since`: the next page forward from that point. Without: the latest page.
     const { data, error } = since

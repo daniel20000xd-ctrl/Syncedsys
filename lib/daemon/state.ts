@@ -15,6 +15,7 @@ export type DaemonState = {
   last_reflection_day: string | null
   budget_alert_day: string | null
   last_failure_alert_at: string | null
+  daylog_migrated_at: string | null
   enabled: boolean
   shadow_mode: boolean
   updated_at: string

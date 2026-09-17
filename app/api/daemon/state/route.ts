@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { isDeviceAuthorized } from '@/lib/daemon/auth'
 import { getDaemonUserId, getState } from '@/lib/daemon/state'
 import { loadActive } from '@/lib/daemon/context'
-import { readLatest, readRange, renderBlocks } from '@/lib/daemon/files'
+import { readRange, renderBlocks } from '@/lib/daemon/files'
+import { assembleDayLog } from '@/lib/daemon/daylog'
+import { getLatestNotes } from '@/lib/daemon/notes'
 import { addDays, localDate } from '@/lib/daemon/time'
 
 export const runtime = 'nodejs'
@@ -14,19 +17,26 @@ export async function GET(req: NextRequest) {
   try {
     const userId = await getDaemonUserId()
     const today = localDate()
-    const [state, active, latest, calendar] = await Promise.all([
+    const [state, active, todaysLog, calendar, notes, openThreads] = await Promise.all([
       getState(),
       loadActive(userId),
-      readLatest(userId, 'reflection'),
+      assembleDayLog(userId, today),
       readRange(userId, 'calendar', today, addDays(today, 7), today),
+      getLatestNotes(userId),
+      createAdminClient().from('daemon_threads')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId).eq('status', 'open'),
     ])
+    if (openThreads.error) throw new Error(openThreads.error.message)
     return NextResponse.json({
       active: active.map(a => ({
         id: a.id, type: a.type, title: a.title, content: a.content, status: a.status,
         deadline: a.deadline, tags: a.tags, last_nudged_at: a.last_nudged_at,
       })),
-      todays_log: latest ? renderBlocks('', [latest]) : '',
+      todays_log: todaysLog,
       calendar: renderBlocks('', calendar),
+      operating_notes: notes?.content ?? '',
+      open_threads: openThreads.count ?? 0,
       shadow_mode: state.shadow_mode,
       next_wake_time: state.next_wake_time,
     }, { headers: { 'Cache-Control': 'no-store' } })

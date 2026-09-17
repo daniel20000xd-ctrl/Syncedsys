@@ -4,6 +4,7 @@ import { sendBudgetAlert, sendFailureAlert } from './alert'
 import { acquireLock, acquireLockWithRetry, getDaemonUserId, getState, releaseLock } from './state'
 import { isOverBudget } from './usage'
 import { daemonEnv } from './env'
+import { closeStaleThreads } from './threads'
 import { isWakingHours, localDate, reflectionDay } from './time'
 
 export type JobResult = { status: number; body: Record<string, unknown> }
@@ -32,10 +33,11 @@ export async function schedulerTick({ force = false } = {}): Promise<JobResult> 
     const state = await getState()
     if (!state.enabled) return ok({ skipped: 'disabled' })
     if (!force && !isWakingHours()) return ok({ skipped: 'quiet_hours' })
+    const userId = await getDaemonUserId()
+    await closeStaleThreads(userId)
     const stop = await budgetStop()
     if (stop) return stop
 
-    const userId = await getDaemonUserId()
     // Queued user messages go ahead of anything else.
     if (await drainPendingInput(userId)) return ok({ ran: 'input_drain' })
 

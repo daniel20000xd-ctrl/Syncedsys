@@ -10,12 +10,15 @@ import { appendDayBlock, rotate, writeDayBlock } from './files'
 import { notify } from './notify'
 import { acquireLock, releaseLock, updateState } from './state'
 import { annotateUsage } from './usage'
-import { reflectionDay } from './time'
+import { localDate, reflectionDay } from './time'
+import { appendDayEntry, ensureDaylogMigrated, flushDayLog } from './daylog'
+import { writeNotes } from './notes'
+import { createLink, repointLinks } from './links'
+import { closeStaleThreads, closeThread, createThread, placeholderTopic, updateThreadAfterInput, UUID } from './threads'
 
 const MIN_WAKE_GAP_MS = 10 * 60 * 1000
 const PROVISIONAL_WAKE_MS = 30 * 60 * 1000
 const MAX_PENDING_PER_CALL = 20
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // A wake time in the past (or seconds away) would fire on every tick; the budget cap
 // is the hard backstop, this is the soft one.
@@ -73,27 +76,50 @@ async function archiveActive(userId: string, activeById: Map<string, ActiveItem>
   }
   const { error: delErr } = await admin.from('daemon_active').delete().eq('id', id)
   if (delErr) console.error('[daemon] archive delete failed (row now in both tables)', id, delErr.message)
+  await repointLinks('active', id, 'archive', data.id)
   activeById.delete(id)
   return data.id as string
 }
 
 // ── input ──────────────────────────────────────────────────────────────────────
 
-// Answers every unprocessed pending message in one call. Caller must hold the lock.
-// Returns null if the queue was empty.
-export async function runInput(userId: string, opts: { push: boolean }): Promise<{ reply: string; processedIds: string[] } | null> {
+// Answers the unprocessed pending messages of one thread in a single call — the given
+// thread, or else the thread of the oldest pending message. Caller must hold the lock.
+// Returns null if there was nothing to answer.
+export async function runInput(
+  userId: string,
+  opts: { push: boolean; threadId?: string },
+): Promise<{ reply: string; threadId: string; processedIds: string[] } | null> {
   const admin = createAdminClient()
+  let threadId = opts.threadId
+  if (!threadId) {
+    const { data: oldest, error } = await admin.from('daemon_pending_input')
+      .select('thread_id, content').eq('user_id', userId).is('processed_at', null)
+      .order('received_at', { ascending: true }).limit(1).maybeSingle()
+    if (error) throw new Error(`pending input read failed: ${error.message}`)
+    if (!oldest) return null
+    threadId = oldest.thread_id as string | null ?? undefined
+    if (!threadId) {
+      // Queued before threads existed: give them one.
+      const thread = await createThread(userId, { openedBy: 'me', topic: placeholderTopic(oldest.content) })
+      await admin.from('daemon_pending_input').update({ thread_id: thread.id })
+        .eq('user_id', userId).is('processed_at', null).is('thread_id', null)
+      threadId = thread.id
+    }
+  }
+
   const { data: pending, error } = await admin
     .from('daemon_pending_input')
     .select('id, content')
     .eq('user_id', userId)
+    .eq('thread_id', threadId)
     .is('processed_at', null)
     .order('received_at', { ascending: true })
     .limit(MAX_PENDING_PER_CALL)
   if (error) throw new Error(`pending input read failed: ${error.message}`)
   if (!pending?.length) return null
 
-  const turns = await buildInputTurns(userId, pending.map(p => p.content))
+  const turns = await buildInputTurns(userId, threadId, pending.map(p => p.content))
   const { data } = await generate({
     callType: 'input', userId, system: system(), turns, schema: INPUT_SCHEMA, validate: validateInput,
   })
@@ -119,6 +145,9 @@ export async function runInput(userId: string, opts: { push: boolean }): Promise
         case 'calendar_write':
           await writeDayBlock(userId, 'calendar', action.date, action.block)
           break
+        case 'link':
+          await createLink(userId, action)
+          break
       }
     } catch (e) {
       console.error('[daemon] action failed', action.op, (e as Error).message)
@@ -127,9 +156,15 @@ export async function runInput(userId: string, opts: { push: boolean }): Promise
 
   const processedIds = pending.map(p => p.id)
   await admin.from('daemon_pending_input').update({ processed_at: new Date().toISOString() }).in('id', processedIds)
+  await appendDayEntry(userId, 'input', data.day_entry, threadId)
+  await updateThreadAfterInput(threadId, {
+    status: data.thread_status === 'answered' ? 'answered' : 'open',
+    expectsReply: data.expects_reply,
+    topic: data.thread_topic,
+  })
   if (data.next_wake_time) await updateState({ next_wake_time: clampWake(data.next_wake_time) })
-  await notify(userId, data.reply, 'input', opts.push)
-  return { reply: data.reply, processedIds }
+  await notify(userId, data.reply, 'input', { push: opts.push, threadId })
+  return { reply: data.reply, threadId, processedIds }
 }
 
 export async function hasPendingInput(userId: string): Promise<boolean> {
@@ -141,8 +176,8 @@ export async function hasPendingInput(userId: string): Promise<boolean> {
   return (count ?? 0) > 0
 }
 
-// Takes the lock and answers queued messages, pushing the reply (the user already got
-// a 202). Returns whether anything was processed.
+// Takes the lock and answers the oldest queued thread, pushing the reply (the user
+// already got a 202). Returns whether anything was processed.
 export async function drainPendingInput(userId: string): Promise<boolean> {
   if (!(await hasPendingInput(userId))) return false
   const lock = await acquireLock('input')
@@ -156,8 +191,9 @@ export async function drainPendingInput(userId: string): Promise<boolean> {
 
 // ── heartbeat ──────────────────────────────────────────────────────────────────
 
-// Caller must hold the lock. Read-only on item content: only last_nudged_at is written.
-export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; nextWake: string; reasoning: string }> {
+// Caller must hold the lock. Read-only on item content: only last_nudged_at and the
+// awaiting-report stamp are written.
+export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; threadId: string | null; nextWake: string; reasoning: string }> {
   const now = new Date()
   // Provisional values first, so a crash or bad output can't cause indefinite silence
   // or a retry on every tick.
@@ -175,19 +211,37 @@ export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; n
   const nextWake = clampWake(data.next_wake_time)
   await updateState({ next_wake_time: nextWake })
 
-  const pinged = data.should_ping && !!data.message
-  if (pinged) {
+  let threadId: string | null = null
+  // The validator guarantees message and thread when should_ping.
+  if (data.should_ping && data.message && data.thread) {
+    const thread = await createThread(userId, {
+      openedBy: 'ai',
+      topic: data.thread.topic,
+      question: data.thread.question,
+      reasoning: data.thread.reasoning,
+      activeIds: data.thread.referenced_active_ids,
+      archiveIds: data.thread.referenced_archive_ids,
+      logDates: [localDate()],
+      expectsReply: data.expects_reply,
+    })
+    threadId = thread.id
+
     const ids = data.target_ids.filter(id => UUID.test(id))
     if (ids.length) {
+      const stamp = new Date().toISOString()
       await createAdminClient()
         .from('daemon_active')
-        .update({ last_nudged_at: new Date().toISOString() })
+        .update({
+          last_nudged_at: stamp,
+          ...(data.expects_reply ? { awaiting_report_thread_id: thread.id, awaiting_report_since: stamp } : {}),
+        })
         .eq('user_id', userId)
         .in('id', ids)
     }
-    await notify(userId, data.message!, 'heartbeat')
+    await notify(userId, data.message, 'heartbeat', { threadId })
   }
-  return { pinged, nextWake, reasoning: data.reasoning }
+  if (data.day_entry) await appendDayEntry(userId, 'heartbeat', data.day_entry, threadId)
+  return { pinged: threadId !== null, threadId, nextWake, reasoning: data.reasoning }
 }
 
 // ── reflection ─────────────────────────────────────────────────────────────────
@@ -195,10 +249,13 @@ export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; n
 // Caller must hold the lock.
 export async function runReflection(userId: string): Promise<Record<string, unknown>> {
   const day = reflectionDay()
-  const [calRot, refRot] = await Promise.all([
+  await ensureDaylogMigrated(userId)
+  const [calRot, dayRot, refRot] = await Promise.all([
     rotate(userId, 'calendar', day),
-    rotate(userId, 'reflection', day),
+    rotate(userId, 'daylog', day),
+    rotate(userId, 'reflections', day),
   ])
+  const staleClosed = await closeStaleThreads(userId)
 
   const turns = await buildReflectionTurns(userId)
   const { data } = await generate({
@@ -222,13 +279,14 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
       type: ['task', 'problem', 'note'].includes(a.type) ? a.type : 'note',
       title: a.title, content: a.content, tags: a.tags, created_at: a.created_at,
     }
-    let { error } = await admin.from('daemon_active').insert({ ...base, ...(a.original_id ? { id: a.original_id } : {}) })
-    if (error && a.original_id) ({ error } = await admin.from('daemon_active').insert(base))
-    if (error) {
-      console.error('[daemon] promote insert failed', a.id, error.message)
+    let res = await admin.from('daemon_active').insert({ ...base, ...(a.original_id ? { id: a.original_id } : {}) }).select('id').single()
+    if (res.error && a.original_id) res = await admin.from('daemon_active').insert(base).select('id').single()
+    if (res.error) {
+      console.error('[daemon] promote insert failed', a.id, res.error.message)
       continue
     }
     await admin.from('daemon_archive').delete().eq('id', a.id)
+    await repointLinks('archive', a.id, 'active', res.data.id)
     promoted.push(a.id)
     console.log('[daemon] promoted', a.id, p.why_now)
   }
@@ -239,9 +297,19 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
   for (const u of data.updates) await updateActive(activeById, u.active_id, u.fields)
   for (const d of data.demote) await archiveActive(userId, activeById, d.active_id, d.outcome, d.why)
 
-  await appendDayBlock(userId, 'reflection', day, data.todays_log)
+  let linked = 0
+  for (const l of data.links) if (await createLink(userId, l)) linked++
+
+  let closed = 0
+  for (const h of data.thread_housekeeping) {
+    if (h.action === 'close' && await closeThread(userId, h.thread_id, h.why || 'closed at reflection')) closed++
+  }
+
+  const notesVersion = await writeNotes(userId, data.operating_notes)
+  await appendDayBlock(userId, 'reflections', day, data.reflection_entry)
+  await flushDayLog(userId, day, data.day_log_close)
   await writeDayBlock(userId, 'calendar', data.calendar_roll.date, data.calendar_roll.block)
-  if (data.tomorrow_plan.block) await writeDayBlock(userId, 'calendar', data.tomorrow_plan.date, data.tomorrow_plan.block)
+  if (data.tomorrow_plan?.block) await writeDayBlock(userId, 'calendar', data.tomorrow_plan.date, data.tomorrow_plan.block)
 
   await updateState({
     next_wake_time: clampWake(data.next_wake_time),
@@ -251,9 +319,13 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
 
   return {
     day,
-    rotation: { calendar: calRot, reflection: refRot },
+    rotation: { calendar: calRot, daylog: dayRot, reflections: refRot },
     promoted: promoted.length,
     demoted: data.demote.length,
     updated: data.updates.length,
+    linked,
+    threads_closed: closed,
+    threads_closed_stale: staleClosed,
+    operating_notes_version: notesVersion,
   }
 }

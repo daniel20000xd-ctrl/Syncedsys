@@ -4,7 +4,7 @@ import {
 import { getR2Client, R2_BUCKET } from '@/lib/r2'
 import { monthOf } from './time'
 
-// Two markdown families in R2, each a sequence of dated blocks:
+// Markdown families in R2 (calendar, daylog, reflections), each a sequence of dated blocks:
 //
 //   ## 2026-09-17
 //   <markdown>
@@ -13,7 +13,7 @@ import { monthOf } from './time'
 // current year; archive/YYYY/YYYY-MM.md holds closed years. Content is never
 // summarised or truncated — rotation only moves blocks between files verbatim.
 
-export type Family = 'calendar' | 'reflection'
+export type Family = 'calendar' | 'daylog' | 'reflections'
 export type Block = { date: string; body: string }
 
 const HEADING = /^## (\d{4}-\d{2}-\d{2})[ \t]*$/m
@@ -119,10 +119,25 @@ export async function appendDayBlock(userId: string, family: Family, date: strin
   await putText(key, renderBlocks(preamble, blocks))
 }
 
+async function listKeys(prefix: string, delimiter?: string): Promise<string[]> {
+  const r2 = getR2Client()
+  const keys: string[] = []
+  let token: string | undefined
+  do {
+    const res = await r2.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix, Delimiter: delimiter, ContinuationToken: token }))
+    for (const o of res.Contents ?? []) if (o.Key) keys.push(o.Key)
+    token = res.IsTruncated ? res.NextContinuationToken : undefined
+  } while (token)
+  return keys
+}
+
 async function appendBlocksTo(key: string, blocks: Block[]): Promise<void> {
   const existing = await getText(key)
   const parsed = parseBlocks(existing ?? '')
-  const merged = [...parsed.blocks, ...blocks].sort((a, b) => a.date.localeCompare(b.date))
+  // Skipping exact duplicates keeps a rotation or migration re-run after a crash idempotent.
+  const seen = new Set(parsed.blocks.map(b => `${b.date}|${b.body}`))
+  const fresh = blocks.filter(b => !seen.has(`${b.date}|${b.body}`))
+  const merged = [...parsed.blocks, ...fresh].sort((a, b) => a.date.localeCompare(b.date))
   await putText(key, renderBlocks(parsed.preamble, merged))
 }
 
@@ -152,34 +167,40 @@ export async function rotate(userId: string, family: Family, today: string): Pro
   }
 
   const prefix = `${base(userId, family)}/archive/`
-  const r2 = getR2Client()
-  let token: string | undefined
-  const flat: string[] = []
-  do {
-    const res = await r2.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix, Delimiter: '/', ContinuationToken: token }))
-    for (const o of res.Contents ?? []) if (o.Key) flat.push(o.Key)
-    token = res.IsTruncated ? res.NextContinuationToken : undefined
-  } while (token)
+  const flat = await listKeys(prefix, '/')
 
   for (const k of flat) {
     const match = k.slice(prefix.length).match(/^(\d{4})-(\d{2})\.md$/)
     if (!match || match[1] >= currentYear) continue
-    const text = (await getText(k)) ?? ''
-    const dest = `${prefix}${match[1]}/${match[1]}-${match[2]}.md`
-    const destText = await getText(dest)
-    if (destText === null) {
-      await putText(dest, text)
-    } else {
-      const src = parseBlocks(text)
-      await appendBlocksTo(dest, src.blocks)
-      if (src.preamble) {
-        const merged = parseBlocks((await getText(dest)) ?? '')
-        await putText(dest, renderBlocks([merged.preamble, src.preamble].filter(Boolean).join('\n\n'), merged.blocks))
-      }
-    }
-    await deleteKey(k)
+    await moveFile(k, `${prefix}${match[1]}/${match[1]}-${match[2]}.md`)
     movedFiles++
   }
 
   return { movedBlocks, movedFiles }
+}
+
+// Copy (merging block-wise into an existing destination), then delete the source.
+async function moveFile(from: string, to: string): Promise<void> {
+  const text = (await getText(from)) ?? ''
+  const destText = await getText(to)
+  if (destText === null) {
+    await putText(to, text)
+  } else {
+    const src = parseBlocks(text)
+    await appendBlocksTo(to, src.blocks)
+    if (src.preamble && !destText.includes(src.preamble)) {
+      const merged = parseBlocks((await getText(to)) ?? '')
+      await putText(to, renderBlocks([merged.preamble, src.preamble].filter(Boolean).join('\n\n'), merged.blocks))
+    }
+  }
+  await deleteKey(from)
+}
+
+// v1 wrote the day log under daemon/reflection/; v2 renames that family to daylog/
+// (reflections/ is the new introspection archive).
+export async function migrateLegacyDaylog(userId: string): Promise<number> {
+  const legacy = `${userId}/daemon/reflection/`
+  const keys = await listKeys(legacy)
+  for (const key of keys) await moveFile(key, `${base(userId, 'daylog')}/${key.slice(legacy.length)}`)
+  return keys.length
 }
