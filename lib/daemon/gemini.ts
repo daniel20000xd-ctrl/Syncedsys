@@ -1,4 +1,3 @@
-import { daemonEnv } from './env'
 import { recordUsage, isOverBudget } from './usage'
 import { SchemaInvalidError } from './schemas'
 import { sendFailureAlert } from './alert'
@@ -19,6 +18,10 @@ type GenerateArgs<T> = {
   callType: CallType
   userId: string
   prompt: ResolvedPrompt
+  // Resolved by the caller via lib/daemon/models.ts (getModelFor). generate() never
+  // reads env or the model-routing table itself — it just uses what it's given.
+  model: string
+  maxOutputTokens?: number | null
   turns: Turn[]
   // Dry runs are billed and capped like any call, but never alert.
   dryRun?: boolean
@@ -37,8 +40,8 @@ class Retryable extends Error {}
 
 export async function generate<T>(args: GenerateArgs<T>): Promise<{ data: T; usageId: string | null }> {
   const apiKey = process.env.GEMINI_API_KEY
-  const model = daemonEnv.model()
-  if (!apiKey || !model) throw new GeminiError('GEMINI_API_KEY and DAEMON_GEMINI_MODEL must be set')
+  const model = args.model
+  if (!apiKey || !model) throw new GeminiError('GEMINI_API_KEY and a resolved model must be set')
   // Last-line backstop; routes also check before calling.
   if (await isOverBudget()) throw new OverBudgetError('daily cost cap reached')
 
@@ -65,6 +68,7 @@ export async function generate<T>(args: GenerateArgs<T>): Promise<{ data: T; usa
           generationConfig: {
             responseMimeType: 'application/json',
             responseJsonSchema: args.schema,
+            ...(args.maxOutputTokens ? { maxOutputTokens: args.maxOutputTokens } : {}),
           },
         }),
       })

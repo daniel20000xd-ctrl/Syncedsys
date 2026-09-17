@@ -45,6 +45,13 @@ export default async function DaemonOverview() {
                 <span className="font-mono">{usd(cost.todayUsd)} / {cost.capUsd === null ? 'NO CAP SET (all calls blocked)' : usd(cost.capUsd, 2)}</span>
               </div>
               <Bar value={cost.todayUsd} max={cost.capUsd ?? 1} tone={capPct !== null && capPct >= 80 ? 'bg-red-500' : 'bg-emerald-500'} label={capPct === null ? '—' : `${capPct.toFixed(1)}%`} />
+              {cost.unknownCostCalls > 0 && (
+                <p className="text-[11px] text-red-400 font-mono mt-1.5">
+                  ⚠ {cost.unknownCostCalls} call{cost.unknownCostCalls === 1 ? '' : 's'} today priced at unknown cost (no row in daemon_model_prices) —
+                  the total above is a floor, not the real spend, and the cap is treating today as over budget until this is fixed. See{' '}
+                  <Link href="/daemon/models" className="underline">Models</Link>.
+                </p>
+              )}
             </div>
           </Panel>
 

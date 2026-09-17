@@ -2,28 +2,55 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { daemonEnv } from './env'
 import { startOfLocalDay } from './time'
 
-// USD per 1M tokens (standard paid tier, prompts ≤200k), from ai.google.dev pricing
-// as of 2026-09. Thinking tokens bill as output. The 3.6–3.8 Flash promo rates end
-// 2026-12-31 (doubling to 1.50/7.50) — update this table then.
-const PRICING: { prefix: string; input: number; output: number }[] = [
-  { prefix: 'gemini-embedding', input: 0.20, output: 0 },
-  { prefix: 'gemini-3.8-flash', input: 0.75, output: 3.75 },
-  { prefix: 'gemini-3.7-flash', input: 0.75, output: 3.75 },
-  { prefix: 'gemini-3.6-flash', input: 0.75, output: 3.75 },
-  { prefix: 'gemini-3.5-flash-lite', input: 0.30, output: 2.50 },
-  { prefix: 'gemini-3.5-flash', input: 1.50, output: 9.00 },
-  { prefix: 'gemini-3.1-flash-lite', input: 0.25, output: 1.50 },
-  { prefix: 'gemini-3.1-pro', input: 2.00, output: 12.00 },
-  { prefix: 'gemini-2.5-flash-lite', input: 0.10, output: 0.40 },
-  { prefix: 'gemini-2.5-flash', input: 0.30, output: 2.50 },
-  { prefix: 'gemini-2.5-pro', input: 1.25, output: 10.00 },
-]
-// Unknown model → price it like Pro so the cost cap errs toward stopping early.
-const FALLBACK = { input: 2.00, output: 12.00 }
+// Prices are read from daemon_model_prices (maintained by hand in the console — see
+// app/daemonActions.ts, the only writer). A model with no row there prices as unknown,
+// never a guessed rate and never a silent zero: a silent zero would quietly disable the
+// daily cost cap.
 
-export function costUsd(model: string, inputTokens: number, outputTokens: number): number {
-  const m = model.replace(/^models\//, '')
-  const p = PRICING.find(x => m.startsWith(x.prefix)) ?? FALLBACK
+type PriceRow = { input: number; output: number; cachedInput: number | null }
+
+// Invalidated immediately by invalidatePriceCache() (called from the console save
+// action) in whichever server instance handled the save, plus a short TTL as a backstop
+// for other instances — same caveat as the model-routing cache in models.ts.
+let priceCache: Map<string, PriceRow> | null = null
+let priceCacheAt = 0
+const PRICE_CACHE_TTL_MS = 30_000
+
+export function invalidatePriceCache(): void {
+  priceCache = null
+}
+
+async function loadPrices(): Promise<Map<string, PriceRow>> {
+  const { data, error } = await createAdminClient()
+    .from('daemon_model_prices')
+    .select('model, input_per_mtok, output_per_mtok, cached_input_per_mtok')
+  if (error) throw new Error(`price table read failed: ${error.message}`)
+  const map = new Map<string, PriceRow>()
+  for (const r of data ?? []) {
+    map.set(r.model, {
+      input: Number(r.input_per_mtok),
+      output: Number(r.output_per_mtok),
+      cachedInput: r.cached_input_per_mtok === null ? null : Number(r.cached_input_per_mtok),
+    })
+  }
+  return map
+}
+
+async function priceFor(model: string): Promise<PriceRow | null> {
+  if (!priceCache || Date.now() - priceCacheAt > PRICE_CACHE_TTL_MS) {
+    priceCache = await loadPrices()
+    priceCacheAt = Date.now()
+  }
+  return priceCache.get(model) ?? null
+}
+
+// 'n/a' is the model warning/backstop rows use (recordWarning below) — those are never
+// real spend, and are priced at 0 without a lookup. Any other unpriced model returns
+// null: "unknown", not "free".
+export async function costUsd(model: string, inputTokens: number, outputTokens: number): Promise<number | null> {
+  if (model === 'n/a') return 0
+  const p = await priceFor(model)
+  if (!p) return null
   return (inputTokens * p.input + outputTokens * p.output) / 1_000_000
 }
 
@@ -41,7 +68,14 @@ export type UsageRow = {
 }
 
 export async function recordUsage(row: UsageRow): Promise<string | null> {
-  const { data, error } = await createAdminClient()
+  const cost = await costUsd(row.model, row.inputTokens, row.outputTokens)
+  const priceMissing = cost === null
+  if (priceMissing) console.error(`[daemon] no price row for model '${row.model}'; cost_usd recorded as null`)
+  const error = row.error
+    ? (priceMissing ? `${row.error}; no price row for model '${row.model}'` : row.error)
+    : (priceMissing ? `no price row for model '${row.model}'` : null)
+
+  const { data, error: dbError } = await createAdminClient()
     .from('daemon_usage')
     .insert({
       user_id: row.userId,
@@ -49,8 +83,8 @@ export async function recordUsage(row: UsageRow): Promise<string | null> {
       model: row.model,
       input_tokens: row.inputTokens,
       output_tokens: row.outputTokens,
-      cost_usd: costUsd(row.model, row.inputTokens, row.outputTokens),
-      error: row.error ?? null,
+      cost_usd: cost,
+      error,
       attempt: row.attempt,
       system_prompt_version: row.systemPromptVersion ?? null,
       call_prompt_version: row.callPromptVersion ?? null,
@@ -58,8 +92,8 @@ export async function recordUsage(row: UsageRow): Promise<string | null> {
     })
     .select('id')
     .single()
-  if (error) {
-    console.error('[daemon] usage insert failed:', error.message)
+  if (dbError) {
+    console.error('[daemon] usage insert failed:', dbError.message)
     return null
   }
   return data.id as string
@@ -79,21 +113,35 @@ export async function annotateUsage(id: string | null, note: string): Promise<vo
   await createAdminClient().from('daemon_usage').update({ note }).eq('id', id)
 }
 
-export async function todaysSpendUsd(): Promise<number> {
+// unknownCount: real (non-warning) calls today whose cost couldn't be priced. Their
+// dollar cost is not zero, it's unknown — kept separate from totalUsd rather than folded
+// into it as 0, so isOverBudget() below can treat "unknown" as its own case.
+export async function todaysSpendUsd(): Promise<{ totalUsd: number; unknownCount: number }> {
   const { data, error } = await createAdminClient()
     .from('daemon_usage')
-    .select('cost_usd')
+    .select('cost_usd, model')
     .gte('created_at', startOfLocalDay().toISOString())
   if (error) throw new Error(`usage read failed: ${error.message}`)
-  return (data ?? []).reduce((sum, r) => sum + Number(r.cost_usd ?? 0), 0)
+  let totalUsd = 0
+  let unknownCount = 0
+  for (const r of data ?? []) {
+    if (r.cost_usd === null) unknownCount++
+    else totalUsd += Number(r.cost_usd)
+  }
+  return { totalUsd, unknownCount }
 }
 
-// Fails closed: no cap configured, or the ledger can't be read, counts as over budget.
+// Fails closed: no cap configured, the ledger can't be read, or today has any call with
+// unknown cost, all count as over budget — an unpriced call is unknown spend, not zero
+// spend, and under-counting a safety bound is worse than pausing early. The console
+// overview surfaces unknown-cost rows prominently so this doesn't look like a silent hang.
 export async function isOverBudget(): Promise<boolean> {
   const cap = daemonEnv.dailyCostCapUsd()
   if (cap === null) return true
   try {
-    return (await todaysSpendUsd()) >= cap
+    const { totalUsd, unknownCount } = await todaysSpendUsd()
+    if (unknownCount > 0) return true
+    return totalUsd >= cap
   } catch (e) {
     console.error('[daemon]', e)
     return true

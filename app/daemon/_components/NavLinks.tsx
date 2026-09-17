@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation'
 const LINKS = [
   ['/daemon', 'overview'],
   ['/daemon/prompts', 'prompts'],
+  ['/daemon/models', 'models'],
   ['/daemon/notes', 'notes'],
   ['/daemon/memory', 'memory'],
   ['/daemon/threads', 'threads'],

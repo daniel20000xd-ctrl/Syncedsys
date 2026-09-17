@@ -34,7 +34,10 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
               <div key={d} className="grid grid-cols-[90px_1fr_150px] gap-2 items-center text-[12px] font-mono">
                 <span className="text-zinc-400">{d}</span>
                 <Bar value={t.cost} max={data.capUsd ?? Math.max(...days.map(x => x[1].cost), 0.0001)} tone={data.capUsd && t.cost >= data.capUsd ? 'bg-red-500' : 'bg-amber-500'} label={usd(t.cost)} />
-                <span className="text-zinc-500">{t.calls} calls{t.errors ? <span className="text-red-400"> · {t.errors} err</span> : ''}</span>
+                <span className="text-zinc-500">
+                  {t.calls} calls{t.errors ? <span className="text-red-400"> · {t.errors} err</span> : ''}
+                  {t.unknownCost ? <span className="text-red-400"> · {t.unknownCost} unpriced</span> : ''}
+                </span>
               </div>
             ))}
           </div>
@@ -58,7 +61,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
                     <td className="pr-3 text-zinc-400 whitespace-nowrap">{r.system_prompt_version ?? '—'}/{r.call_prompt_version ?? '—'}</td>
                     <td className="pr-3 text-right">{r.input_tokens}</td>
                     <td className="pr-3 text-right">{r.output_tokens}</td>
-                    <td className="pr-3 text-right">{usd(r.cost_usd, 5)}</td>
+                    <td className="pr-3 text-right">{r.cost_usd === null ? <span className="text-red-400">unknown</span> : usd(r.cost_usd, 5)}</td>
                     <td className={`pr-3 text-right ${r.attempt > 1 ? 'text-amber-300' : ''}`}>{r.attempt}</td>
                     <td className="text-zinc-400 max-w-xl break-words">
                       {r.error && <span className={r.model === 'n/a' ? 'text-amber-300' : 'text-red-400'}>{r.error}</span>}

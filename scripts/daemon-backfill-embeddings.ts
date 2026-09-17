@@ -8,7 +8,7 @@
 // (call_type 'embedding') and stops at the daily cost cap like everything else.
 
 import { createAdminClient } from '@/lib/supabase/admin'
-import { embeddingConfig, embedPending, vectorStatus } from '@/lib/daemon/embeddings'
+import { embedPending, vectorStatus } from '@/lib/daemon/embeddings'
 
 const BATCH = 100
 
@@ -23,10 +23,12 @@ async function countPending(): Promise<Record<string, number>> {
 async function main() {
   const maxArg = process.argv.indexOf('--max')
   const max = maxArg > -1 ? Number(process.argv[maxArg + 1]) : Infinity
-  if (!embeddingConfig()) {
-    console.error('Vector search is not configured:', vectorStatus())
+  const status = await vectorStatus()
+  if (!status.configured) {
+    console.error('Vector search is not configured:', status)
     process.exit(1)
   }
+  console.log('embedding model:', status.model)
 
   const before = await countPending()
   const total = Object.values(before).reduce((s, n) => s + n, 0)

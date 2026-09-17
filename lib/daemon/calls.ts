@@ -22,6 +22,10 @@ import {
   PREFETCH_KINDS, PREFETCH_LIMIT, PREFETCH_MIN_AGE_HOURS, PREFETCH_MIN_SCORE, MODEL_SEARCH_LIMIT,
   recordRecall, searchMemory, searchMemoryMany, type SearchHit,
 } from './search'
+import { applyVerdict, supersedeStaleProposals, writeProposals } from './proposals'
+import { computeMetrics } from './metrics'
+import { resolvePrompt } from './prompts'
+import { getModelFor } from './models'
 
 // Mirror of an R2 reflections append, so reflections are searchable. R2 stays the archive.
 async function recordReflectionEntry(userId: string, date: string, source: 'reflection' | 'meta', content: string): Promise<void> {
@@ -29,9 +33,6 @@ async function recordReflectionEntry(userId: string, date: string, source: 'refl
     .insert({ user_id: userId, entry_date: date, source, content })
   if (error) console.error('[daemon] reflection entry insert failed:', error.message)
 }
-import { applyVerdict, supersedeStaleProposals, writeProposals } from './proposals'
-import { computeMetrics } from './metrics'
-import { resolvePrompt } from './prompts'
 
 const MIN_WAKE_GAP_MS = 10 * 60 * 1000
 const PROVISIONAL_WAKE_MS = 30 * 60 * 1000
@@ -167,8 +168,10 @@ export async function runInput(
 
   const findingIds = ((await pendingFindings([threadId])).get(threadId) ?? []).map(f => f.id)
   const turns = await buildInputTurns(userId, threadId, messages, related)
+  const [prompt, modelCfg] = await Promise.all([resolvePrompt('input'), getModelFor('input', userId)])
   const { data } = await generate({
-    callType: 'input', userId, prompt: await resolvePrompt('input'), turns, schema: INPUT_SCHEMA, validate: validateInput,
+    callType: 'input', userId, prompt, turns, model: modelCfg.model, maxOutputTokens: modelCfg.maxOutputTokens,
+    schema: INPUT_SCHEMA, validate: validateInput,
   })
 
   const activeById = new Map((await loadActive(userId)).map(a => [a.id, a]))
@@ -278,8 +281,10 @@ export async function runHeartbeat(userId: string): Promise<{ pinged: boolean; t
   })
 
   const turns = await buildHeartbeatTurns(userId)
+  const [prompt, modelCfg] = await Promise.all([resolvePrompt('heartbeat'), getModelFor('heartbeat', userId)])
   const { data, usageId } = await generate({
-    callType: 'heartbeat', userId, prompt: await resolvePrompt('heartbeat'), turns, schema: HEARTBEAT_SCHEMA, validate: validateHeartbeat,
+    callType: 'heartbeat', userId, prompt, turns, model: modelCfg.model, maxOutputTokens: modelCfg.maxOutputTokens,
+    schema: HEARTBEAT_SCHEMA, validate: validateHeartbeat,
   })
   await annotateUsage(usageId, `reasoning: ${data.reasoning}`)
 
@@ -350,8 +355,10 @@ export async function runReflection(userId: string): Promise<Record<string, unkn
   const staleClosed = await closeStaleThreads(userId)
 
   const turns = await buildReflectionTurns(userId)
+  const [prompt, modelCfg] = await Promise.all([resolvePrompt('reflection'), getModelFor('reflection', userId)])
   const { data } = await generate({
-    callType: 'reflection', userId, prompt: await resolvePrompt('reflection'), turns, schema: REFLECTION_SCHEMA, validate: validateReflection,
+    callType: 'reflection', userId, prompt, turns, model: modelCfg.model, maxOutputTokens: modelCfg.maxOutputTokens,
+    schema: REFLECTION_SCHEMA, validate: validateReflection,
   })
 
   const admin = createAdminClient()
@@ -436,8 +443,10 @@ export async function runMeta(userId: string): Promise<Record<string, unknown>> 
   const metrics = await computeMetrics(userId, 7)
 
   const turns = await buildMetaTurns(userId, metrics)
+  const [prompt, modelCfg] = await Promise.all([resolvePrompt('meta'), getModelFor('meta', userId)])
   const { data, usageId } = await generate({
-    callType: 'meta', userId, prompt: await resolvePrompt('meta'), turns, schema: META_SCHEMA, validate: validateMeta,
+    callType: 'meta', userId, prompt, turns, model: modelCfg.model, maxOutputTokens: modelCfg.maxOutputTokens,
+    schema: META_SCHEMA, validate: validateMeta,
   })
 
   const proposalIds = await writeProposals(userId, cycleAt, data.proposals, metrics)

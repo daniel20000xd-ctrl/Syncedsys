@@ -3,9 +3,11 @@
 // Daemon admin console: every read and the narrow write set behind /daemon.
 //
 // Deliberately NOT in app/actions.ts (the repo's usual home for server actions): the
-// daemon is an isolated subsystem, and this file is the only place prompts and the
-// self-description are written. Nothing in lib/daemon/ or app/api/daemon/ may import
-// this file — the daemon's runtime has no path to its own prompts.
+// daemon is an isolated subsystem, and this file is the only place prompts, the
+// self-description, model routing (daemon_model_config) and model prices
+// (daemon_model_prices) are written. Nothing in lib/daemon/ or app/api/daemon/ may
+// import this file — the daemon's runtime has no path to its own prompts, and no path
+// to picking its own model or setting its own prices.
 //
 // Every export is a public server action, so every export re-checks isAdminEmail
 // server-side. Memory surfaces are read-only here by design: the operator changes the
@@ -22,13 +24,14 @@ import { loadDayEntries } from '@/lib/daemon/daylog'
 import { loadLinkStubs, type LinkStub } from '@/lib/daemon/links'
 import { computeMetrics } from '@/lib/daemon/metrics'
 import { listFamilyFiles, readMonth, type Family } from '@/lib/daemon/files'
-import { todaysSpendUsd } from '@/lib/daemon/usage'
+import { invalidatePriceCache, todaysSpendUsd } from '@/lib/daemon/usage'
 import { metaJob, reflectionJob, schedulerTick } from '@/lib/daemon/jobs'
 import { debugAllowed, dryRun } from '@/lib/daemon/dryrun'
 import type { PromptKind } from '@/lib/daemon/prompts'
 import type { CallType } from '@/lib/daemon/gemini'
 import { DEFAULT_MIN_SCORE, PREFETCH_MIN_SCORE, SEARCH_KINDS, searchMemoryMany, type SearchKind } from '@/lib/daemon/search'
 import { vectorStatus } from '@/lib/daemon/embeddings'
+import { invalidateModelCache, peekModelFor, type ModelKind } from '@/lib/daemon/models'
 
 const PROMPT_KINDS: PromptKind[] = ['system', 'input', 'heartbeat', 'reflection', 'meta']
 const CALL_TYPES: CallType[] = ['input', 'heartbeat', 'reflection', 'meta']
@@ -90,7 +93,7 @@ export async function getOverview() {
       timeoutSeconds: daemonEnv.lockTimeoutSeconds(),
       stale: state.is_processing && lockAgeSeconds !== null && lockAgeSeconds > daemonEnv.lockTimeoutSeconds(),
     },
-    cost: { todayUsd: spend, capUsd: daemonEnv.dailyCostCapUsd() },
+    cost: { todayUsd: spend.totalUsd, unknownCostCalls: spend.unknownCount, capUsd: daemonEnv.dailyCostCapUsd() },
     today,
     dayEntries: entries,
     openThreads: must(threads, 'threads'),
@@ -335,7 +338,7 @@ export async function searchMemoryConsole(query: string, opts: { kinds?: string[
     minScore: Math.max(0, Math.min(1, opts.minScore ?? 0)),
     limit: Math.min(Math.max(opts.limit ?? 25, 1), 100),
   })
-  return { hits, signals, vector: vectorStatus(), thresholds: { default: DEFAULT_MIN_SCORE, prefetch: PREFETCH_MIN_SCORE } }
+  return { hits, signals, vector: await vectorStatus(), thresholds: { default: DEFAULT_MIN_SCORE, prefetch: PREFETCH_MIN_SCORE } }
 }
 
 // ── graph ────────────────────────────────────────────────────────────────────────
@@ -540,13 +543,118 @@ export async function getUsage(filters: { callType?: string; from?: string; to?:
     error: string | null; attempt: number; note: string | null; created_at: string
     system_prompt_version: number | null; call_prompt_version: number | null; dry_run: boolean
   }[]
-  const daily: Record<string, { cost: number; calls: number; errors: number }> = {}
+  const daily: Record<string, { cost: number; calls: number; errors: number; unknownCost: number }> = {}
   for (const r of rows) {
     const d = localDate(new Date(r.created_at))
-    const t = (daily[d] ??= { cost: 0, calls: 0, errors: 0 })
-    t.cost += Number(r.cost_usd ?? 0)
+    const t = (daily[d] ??= { cost: 0, calls: 0, errors: 0, unknownCost: 0 })
+    if (r.cost_usd === null) t.unknownCost++
+    else t.cost += Number(r.cost_usd)
     if (r.model !== 'n/a') t.calls++
     if (r.error) t.errors++
   }
   return { rows, daily, capUsd: daemonEnv.dailyCostCapUsd(), truncated: rows.length === 1000 }
+}
+
+// ── model routing & prices ──────────────────────────────────────────────────────
+
+const MODEL_KINDS: ModelKind[] = ['input', 'heartbeat', 'reflection', 'meta', 'embedding']
+
+export async function getModelRouting() {
+  await requireAdmin()
+  const admin = createAdminClient()
+  const rows = must(await admin.from('daemon_model_config').select('call_type, model, max_output_tokens, note, updated_at'), 'model config') as
+    { call_type: ModelKind; model: string; max_output_tokens: number | null; note: string | null; updated_at: string }[]
+  const byKind = new Map(rows.map(r => [r.call_type, r]))
+  const resolved = await Promise.all(MODEL_KINDS.map(async kind => ({ kind, ...(await peekModelFor(kind)) })))
+  return MODEL_KINDS.map(kind => {
+    const row = byKind.get(kind) ?? null
+    const res = resolved.find(r => r.kind === kind)!
+    return {
+      call_type: kind,
+      db_model: row?.model ?? null,
+      max_output_tokens: row?.max_output_tokens ?? null,
+      note: row?.note ?? null,
+      updated_at: row?.updated_at ?? null,
+      resolved_model: res.model || null,
+      source: res.source as 'db' | 'env' | 'none',
+    }
+  })
+}
+
+// One row per call type; there is no daemon_output_path from a model response to this
+// table — see the file header for the isolation this preserves.
+export async function saveModelConfig(callType: ModelKind, model: string, maxOutputTokens: number | null, note: string): Promise<void> {
+  const email = await requireAdmin()
+  if (!MODEL_KINDS.includes(callType)) throw new Error('invalid call type')
+  if (!model.trim()) throw new Error('model must not be empty')
+  if (maxOutputTokens !== null && (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= 0)) throw new Error('max_output_tokens must be a positive number or empty')
+  const userId = await getDaemonUserId()
+  const { error } = await createAdminClient().from('daemon_model_config').upsert({
+    call_type: callType, model: model.trim(), max_output_tokens: maxOutputTokens, note: note.trim() || null, updated_at: new Date().toISOString(),
+  }, { onConflict: 'call_type' })
+  if (error) throw new Error(error.message)
+  invalidateModelCache()
+  await logOperatorAction(userId, `set ${callType} model to '${model.trim()}' by ${email}${note.trim() ? `: ${note.trim()}` : ''}`)
+  revalidatePath('/daemon/models')
+}
+
+export async function getModelPrices() {
+  await requireAdmin()
+  const admin = createAdminClient()
+  const [prices, usageModels] = await Promise.all([
+    admin.from('daemon_model_prices').select('*').order('model', { ascending: true }),
+    admin.from('daemon_usage').select('model').neq('model', 'n/a').limit(20_000),
+  ])
+  const rows = must(prices, 'prices') as {
+    model: string; input_per_mtok: number; output_per_mtok: number; cached_input_per_mtok: number | null
+    effective_from: string | null; note: string | null; updated_at: string
+  }[]
+  const priced = new Set(rows.map(r => r.model))
+  const unpriced = [...new Set((must(usageModels, 'usage models') as { model: string }[]).map(m => m.model))].filter(m => !priced.has(m)).sort()
+  return { prices: rows, unpricedModelsInUse: unpriced }
+}
+
+// This is the one place a typed number affects a safety bound: isOverBudget() prices
+// every call from this table. The console must warn on save before calling this.
+export async function saveModelPrice(input: {
+  model: string; inputPerMtok: number; outputPerMtok: number; cachedInputPerMtok: number | null; effectiveFrom: string | null; note: string
+}): Promise<void> {
+  const email = await requireAdmin()
+  const model = input.model.trim()
+  if (!model) throw new Error('model must not be empty')
+  if (!Number.isFinite(input.inputPerMtok) || input.inputPerMtok < 0) throw new Error('input price must be a non-negative number')
+  if (!Number.isFinite(input.outputPerMtok) || input.outputPerMtok < 0) throw new Error('output price must be a non-negative number')
+  if (input.effectiveFrom && !/^\d{4}-\d{2}-\d{2}$/.test(input.effectiveFrom)) throw new Error('effective_from must be YYYY-MM-DD')
+  const userId = await getDaemonUserId()
+  const { error } = await createAdminClient().from('daemon_model_prices').upsert({
+    model, input_per_mtok: input.inputPerMtok, output_per_mtok: input.outputPerMtok,
+    cached_input_per_mtok: input.cachedInputPerMtok, effective_from: input.effectiveFrom, note: input.note.trim() || null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'model' })
+  if (error) throw new Error(error.message)
+  invalidatePriceCache()
+  await logOperatorAction(userId, `set price for '${model}' to ${input.inputPerMtok}/${input.outputPerMtok} per Mtok by ${email} (affects the cost cap)${input.note.trim() ? `: ${input.note.trim()}` : ''}`)
+  revalidatePath('/daemon/models')
+}
+
+export async function getModelUsageSummary(days: number) {
+  await requireAdmin()
+  const since = startOfLocalDay(new Date(Date.now() - (Math.min(Math.max(days, 1), 90) - 1) * 86_400_000)).toISOString()
+  const rows = must(await createAdminClient().from('daemon_usage')
+    .select('model, call_type, input_tokens, output_tokens, cost_usd, dry_run')
+    .gte('created_at', since).neq('model', 'n/a').limit(20_000), 'usage') as
+    { model: string; call_type: string; input_tokens: number; output_tokens: number; cost_usd: number | string | null; dry_run: boolean }[]
+  const key = (r: { model: string; call_type: string }) => `${r.model}::${r.call_type}`
+  const groups = new Map<string, { model: string; call_type: string; calls: number; dry_runs: number; input_tokens: number; output_tokens: number; cost_usd: number; unknown_cost_calls: number }>()
+  for (const r of rows) {
+    const g = groups.get(key(r)) ?? { model: r.model, call_type: r.call_type, calls: 0, dry_runs: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0, unknown_cost_calls: 0 }
+    g.calls++
+    if (r.dry_run) g.dry_runs++
+    g.input_tokens += r.input_tokens
+    g.output_tokens += r.output_tokens
+    if (r.cost_usd === null) g.unknown_cost_calls++
+    else g.cost_usd += Number(r.cost_usd)
+    groups.set(key(r), g)
+  }
+  return [...groups.values()].sort((a, b) => b.cost_usd - a.cost_usd || a.model.localeCompare(b.model))
 }

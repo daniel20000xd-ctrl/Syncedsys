@@ -242,8 +242,9 @@ export async function searchMemoryMany(queries: string[], opts: SearchOptions = 
   const userId = opts.userId ?? await getDaemonUserId()
   const pool = Math.max((opts.limit ?? DEFAULT_LIMIT) * 5, 20)
 
+  const embedCfg = await embeddingConfig(userId)
   let embeddings: number[][] | null = null
-  if (embeddingConfig()) {
+  if (embedCfg) {
     try {
       embeddings = await embedTexts(qs, 'query', userId)
     } catch (e) {
@@ -259,7 +260,7 @@ export async function searchMemoryMany(queries: string[], opts: SearchOptions = 
     if (embeddings) await fillSimilarity([fts], embeddings[i])
     return [...fts, ...vec]
   }))
-  const vectorActive = !!embeddings && !!embeddingConfig()
+  const vectorActive = !!embeddings
   return { hits: rank(lists, opts, vectorActive), signals: vectorActive ? 'fts+vector' : 'fts' }
 }
 

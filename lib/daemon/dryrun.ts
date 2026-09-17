@@ -7,6 +7,7 @@ import {
   validateHeartbeat, validateInput, validateMeta, validateReflection,
 } from './schemas'
 import { getDaemonUserId, getState } from './state'
+import { getModelFor } from './models'
 
 // Manual triggers and dry runs are dev-only unless explicitly enabled in production.
 export function debugAllowed(): boolean {
@@ -23,7 +24,11 @@ export async function dryRun(opts: {
   callType: CallType
   override?: PromptOverride
   message?: string
-}): Promise<{ prompt: { system_version: number | null; call_version: number | null; overridden: string | null }; response: unknown }> {
+}): Promise<{
+  prompt: { system_version: number | null; call_version: number | null; overridden: string | null }
+  model: string
+  response: unknown
+}> {
   if (!(await getState()).enabled) throw new Error('daemon is disabled; dry runs are blocked by the kill switch')
   const userId = await getDaemonUserId()
 
@@ -54,10 +59,14 @@ export async function dryRun(opts: {
       break
   }
 
-  const prompt = await resolvePrompt(opts.callType, opts.override)
-  const { data } = await generate({ callType: opts.callType, userId, prompt, turns, schema, validate, dryRun: true })
+  const [prompt, modelCfg] = await Promise.all([resolvePrompt(opts.callType, opts.override), getModelFor(opts.callType, userId)])
+  const { data } = await generate({
+    callType: opts.callType, userId, prompt, turns, schema, validate, dryRun: true,
+    model: modelCfg.model, maxOutputTokens: modelCfg.maxOutputTokens,
+  })
   return {
     prompt: { system_version: prompt.systemVersion, call_version: prompt.callVersion, overridden: opts.override?.kind ?? null },
+    model: modelCfg.model,
     response: data,
   }
 }
