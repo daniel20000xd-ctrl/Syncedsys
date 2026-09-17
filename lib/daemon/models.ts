@@ -27,9 +27,17 @@ export function invalidateModelCache(): void {
   cache = null
 }
 
+// 'relation does not exist' (daemon_v6.sql not applied yet) is treated as "no rows" —
+// every call type falls back to env with a warning — rather than crashing the call.
+const isMissingTable = (err: { code?: string; message?: string }) =>
+  /does not exist|could not find|PGRST205/i.test(`${err.code} ${err.message}`)
+
 async function loadAll(): Promise<Map<ModelKind, ModelConfig>> {
   const { data, error } = await createAdminClient().from('daemon_model_config').select('call_type, model, max_output_tokens')
-  if (error) throw new Error(`model config read failed: ${error.message}`)
+  if (error) {
+    if (isMissingTable(error)) return new Map()
+    throw new Error(`model config read failed: ${error.message}`)
+  }
   const map = new Map<ModelKind, ModelConfig>()
   for (const r of (data ?? []) as Row[]) map.set(r.call_type, { model: r.model, maxOutputTokens: r.max_output_tokens })
   return map

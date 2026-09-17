@@ -20,11 +20,19 @@ export function invalidatePriceCache(): void {
   priceCache = null
 }
 
+// 'relation does not exist' (daemon_v6.sql not applied yet) is treated as "no prices
+// known" — every model records cost_usd = null (see costUsd) — rather than crashing.
+const isMissingTable = (err: { code?: string; message?: string }) =>
+  /does not exist|could not find|PGRST205/i.test(`${err.code} ${err.message}`)
+
 async function loadPrices(): Promise<Map<string, PriceRow>> {
   const { data, error } = await createAdminClient()
     .from('daemon_model_prices')
     .select('model, input_per_mtok, output_per_mtok, cached_input_per_mtok')
-  if (error) throw new Error(`price table read failed: ${error.message}`)
+  if (error) {
+    if (isMissingTable(error)) return new Map()
+    throw new Error(`price table read failed: ${error.message}`)
+  }
   const map = new Map<string, PriceRow>()
   for (const r of data ?? []) {
     map.set(r.model, {
