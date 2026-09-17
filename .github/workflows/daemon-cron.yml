@@ -1,0 +1,41 @@
+# External trigger for the daemon. Vercel Hobby only allows 2 daily crons (both used),
+# so the 5-minute scheduler tick and the nightly reflection are driven from here.
+# Repo secrets: CRON_SECRET (same value as on Vercel), DAEMON_BASE_URL (https://syncedsys.com).
+# GitHub may delay scheduled runs by several minutes under load; the scheduler is
+# designed to tolerate missed/late ticks.
+name: daemon-cron
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+    # Reflection, UTC. The second run is a backstop; the route is idempotent per night.
+    - cron: '30 3 * * *'
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: scheduler or reflection
+        default: scheduler
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Call daemon endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          BASE_URL: ${{ secrets.DAEMON_BASE_URL }}
+          JOB: ${{ github.event_name == 'workflow_dispatch' && inputs.job || (github.event.schedule == '*/5 * * * *' && 'scheduler' || 'reflection') }}
+        run: |
+          attempts=1
+          [ "$JOB" = "reflection" ] && attempts=6
+          for i in $(seq 1 "$attempts"); do
+            code=$(curl -sS -o body.json -w '%{http_code}' --max-time 70 -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" "$BASE_URL/api/daemon/$JOB" || echo 000)
+            echo "attempt $i: HTTP $code $(cat body.json 2>/dev/null)"
+            [ "$code" = "200" ] && exit 0
+            [ "$code" = "401" ] && exit 1
+            [ "$i" -lt "$attempts" ] && sleep 30
+          done
+          exit 1
